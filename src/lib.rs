@@ -192,6 +192,7 @@ impl InferenceEngine {
             "Sub" => binary::exec_sub(node, values),
             "Mul" => binary::exec_mul(node, values),
             "Relu" => activation::exec_relu(node, values),
+            "LeakyRelu" => activation::exec_leaky_relu(node, values),
             "BatchNormalization" => activation::exec_batch_normalization(node, values),
             "Clip" => activation::exec_clip(node, values),
             "MaxPool" => pool::exec_maxpool(node, values),
@@ -292,11 +293,14 @@ mod tests {
 
     use super::*;
 
-    const FIXTURES_DIR: &str = env!("FIXTURES_DIR");
+    fn fixture(name: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures")
+            .join(name)
+    }
 
     /// Run a model fixture against its bundled test data set.
-    fn run_fixture(fixture_dir: &str, model_file: &str, test_set: usize) {
-        let base = Path::new(FIXTURES_DIR).join(fixture_dir);
+    fn run_fixture(base: &Path, model_file: &str, test_set: usize) {
         let model_bytes = fs::read(base.join(model_file)).expect("read model");
         let engine = InferenceEngine::from_bytes(&model_bytes).expect("load model");
 
@@ -342,8 +346,7 @@ mod tests {
 
     /// Run a quantized model fixture. Compares softmax probabilities since
     /// dequant-compute-requant in float32 accumulates small rounding errors.
-    fn run_quantized_fixture(fixture_dir: &str, model_file: &str, test_set: usize) {
-        let base = Path::new(FIXTURES_DIR).join(fixture_dir);
+    fn run_quantized_fixture(base: &Path, model_file: &str, test_set: usize) {
         let model_bytes = fs::read(base.join(model_file)).expect("read model");
         let engine = InferenceEngine::from_bytes(&model_bytes).expect("load model");
 
@@ -403,69 +406,76 @@ mod tests {
 
     // --- MNIST models ---
 
-    // mnist-1 (opset 1): weights as Constant nodes, legacy broadcast
     #[test]
     fn test_mnist1_set_0() {
-        run_fixture("mnist-1", "model.onnx", 0);
+        run_fixture(&fixture("mnist-1"), "model.onnx", 0);
     }
 
     #[test]
     fn test_mnist1_set_1() {
-        run_fixture("mnist-1", "model.onnx", 1);
+        run_fixture(&fixture("mnist-1"), "model.onnx", 1);
     }
 
     #[test]
     fn test_mnist1_set_2() {
-        run_fixture("mnist-1", "model.onnx", 2);
+        run_fixture(&fixture("mnist-1"), "model.onnx", 2);
     }
 
-    // mnist-7 (opset 7)
     #[test]
     fn test_mnist7_set_0() {
-        run_fixture("mnist-7", "model.onnx", 0);
+        run_fixture(&fixture("mnist-7"), "model.onnx", 0);
     }
 
-    // mnist-8 (opset 8)
     #[test]
     fn test_mnist8_set_0() {
-        run_fixture("mnist-8", "model.onnx", 0);
+        run_fixture(&fixture("mnist-8"), "model.onnx", 0);
     }
 
-    // mnist-12 (opset 12): weights as initializers, standard broadcast
     #[test]
     fn test_mnist12_set_0() {
-        run_fixture("mnist-12", "mnist-12.onnx", 0);
+        run_fixture(&fixture("mnist-12"), "mnist-12.onnx", 0);
     }
 
-    // mnist-12-int8 (opset 12): quantized MNIST
     #[test]
     fn test_mnist12_int8_set_0() {
-        run_quantized_fixture("mnist-12-int8", "mnist-12-int8.onnx", 0);
+        run_quantized_fixture(&fixture("mnist-12-int8"), "mnist-12-int8.onnx", 0);
     }
 
     // --- MobileNetV2 models ---
 
-    // mobilenetv2-7 (opset 10)
     #[test]
     fn test_mobilenetv2_7_set_0() {
-        run_fixture("mobilenetv2-7", "mobilenetv2-7.onnx", 0);
+        run_fixture(&fixture("mobilenetv2-7"), "mobilenetv2-7.onnx", 0);
     }
 
-    // mobilenetv2-12 (opset 12): depthwise conv, clip, gemm, shape/gather/unsqueeze/concat
     #[test]
     fn test_mobilenetv2_12_set_0() {
-        run_fixture("mobilenetv2-12", "mobilenetv2-12.onnx", 0);
+        run_fixture(&fixture("mobilenetv2-12"), "mobilenetv2-12.onnx", 0);
     }
 
-    // mobilenetv2-12-int8: quantized with QLinear* fused ops
     #[test]
     fn test_mobilenetv2_12_int8_set_0() {
-        run_quantized_fixture("mobilenetv2-12-int8", "mobilenetv2-12-int8.onnx", 0);
+        run_quantized_fixture(
+            &fixture("mobilenetv2-12-int8"),
+            "mobilenetv2-12-int8.onnx",
+            0,
+        );
     }
 
-    // mobilenetv2-12-qdq: quantized with DequantizeLinear/QuantizeLinear around standard ops
     #[test]
     fn test_mobilenetv2_12_qdq_set_0() {
-        run_quantized_fixture("mobilenetv2-12-qdq", "mobilenetv2-12-qdq.onnx", 0);
+        run_quantized_fixture(&fixture("mobilenetv2-12-qdq"), "mobilenetv2-12-qdq.onnx", 0);
+    }
+
+    // --- Tiny YOLOv2 models ---
+
+    #[test]
+    fn test_tinyyolov2_7_set_0() {
+        run_fixture(&fixture("tinyyolov2-7"), "model.onnx", 0);
+    }
+
+    #[test]
+    fn test_tinyyolov2_8_set_0() {
+        run_fixture(&fixture("tinyyolov2-8"), "model.onnx", 0);
     }
 }

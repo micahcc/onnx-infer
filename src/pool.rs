@@ -4,6 +4,7 @@ use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
 use crate::get_attr_ints;
+use crate::get_attr_string;
 use crate::get_tensor;
 use crate::onnx::NodeProto;
 
@@ -13,7 +14,8 @@ pub fn exec_maxpool(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
     let kernel_shape = get_attr_ints(node, "kernel_shape")
         .ok_or_else(|| InferenceError::InvalidModel("MaxPool missing kernel_shape".into()))?;
     let strides = get_attr_ints(node, "strides").unwrap_or_else(|| vec![1, 1]);
-    let pads = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+    let mut pads = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+    let auto_pad = get_attr_string(node, "auto_pad").unwrap_or_default();
 
     let n = input.dims[0];
     let c = input.dims[1];
@@ -24,6 +26,29 @@ pub fn exec_maxpool(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
     let kw = kernel_shape[1] as usize;
     let sh = strides[0] as usize;
     let sw = strides[1] as usize;
+
+    if auto_pad == "SAME_UPPER" || auto_pad == "SAME_LOWER" {
+        let oh = h_in.div_ceil(sh);
+        let ow = w_in.div_ceil(sw);
+        let pad_h = ((oh - 1) * sh + kh).saturating_sub(h_in);
+        let pad_w = ((ow - 1) * sw + kw).saturating_sub(w_in);
+        if auto_pad == "SAME_UPPER" {
+            pads = vec![
+                (pad_h / 2) as i64,
+                (pad_w / 2) as i64,
+                (pad_h - pad_h / 2) as i64,
+                (pad_w - pad_w / 2) as i64,
+            ];
+        } else {
+            pads = vec![
+                (pad_h - pad_h / 2) as i64,
+                (pad_w - pad_w / 2) as i64,
+                (pad_h / 2) as i64,
+                (pad_w / 2) as i64,
+            ];
+        }
+    }
+
     let ph_begin = pads[0] as usize;
     let pw_begin = pads[1] as usize;
 

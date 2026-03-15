@@ -14,6 +14,18 @@ pub fn exec_relu(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resu
     Ok(())
 }
 
+pub fn exec_leaky_relu(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+    let alpha = get_attr_float(node, "alpha").unwrap_or(0.01);
+    let data: Vec<f32> = input
+        .data
+        .iter()
+        .map(|&v| if v >= 0.0 { v } else { alpha * v })
+        .collect();
+    values.insert(node.output[0].clone(), Tensor::new(input.dims, data));
+    Ok(())
+}
+
 pub fn exec_clip(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
     let input = get_tensor(values, &node.input[0])?;
 
