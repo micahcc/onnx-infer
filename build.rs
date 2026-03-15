@@ -37,7 +37,8 @@ fn fetch_fixture(url: &str, name: &str, fixtures_dir: &PathBuf) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let file_descriptors = protox::compile(["proto/onnx.proto"], ["proto/"]).expect("protox compile");
+    let file_descriptors =
+        protox::compile(["proto/onnx.proto"], ["proto/"]).expect("protox compile");
     prost_build::Config::new()
         .compile_fds(file_descriptors)
         .expect("prost codegen");
@@ -59,6 +60,11 @@ fn main() -> Result<()> {
     fetch_fixture(
         &format!("{ONNX_MODELS}/mobilenet/model/mobilenetv2-12.tar.gz"),
         "mobilenetv2-12",
+        &fixtures_dir,
+    )?;
+    fetch_fixture(
+        &format!("{ONNX_MODELS}/mobilenet/model/mobilenetv2-12-int8.tar.gz"),
+        "mobilenetv2-12-int8",
         &fixtures_dir,
     )?;
 
