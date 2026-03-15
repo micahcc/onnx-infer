@@ -85,7 +85,7 @@ impl Layer for Gemm {
             }
         }
 
-        output.dims = vec![m, n];
+        output.set_dims(&[m, n]);
         Ok(())
     }
 }

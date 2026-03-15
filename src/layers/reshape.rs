@@ -38,22 +38,23 @@ impl Layer for Reshape {
         };
 
         let total = input.numel();
-        let mut dims: Vec<usize> = Vec::new();
+        let mut dims = [0usize; 8];
+        let dim_count = new_shape.len();
         let mut infer_idx: Option<usize> = None;
 
         for (i, &s) in new_shape.iter().enumerate() {
             if s == -1 {
                 infer_idx = Some(i);
-                dims.push(0);
+                dims[i] = 0;
             } else if s == 0 {
-                dims.push(input.dims[i]);
+                dims[i] = input.dims[i];
             } else {
-                dims.push(s as usize);
+                dims[i] = s as usize;
             }
         }
 
         if let Some(idx) = infer_idx {
-            let known: usize = dims
+            let known: usize = dims[..dim_count]
                 .iter()
                 .enumerate()
                 .filter(|&(i, _)| i != idx)
@@ -63,7 +64,7 @@ impl Layer for Reshape {
         }
 
         output.copy_from(input);
-        output.dims = dims;
+        output.set_dims(&dims[..dim_count]);
         Ok(())
     }
 }

@@ -21,31 +21,31 @@ impl Layer for Resize {
         let input = get_tensor(values, &self.inputs[0])?;
         let rank = input.dims.len();
 
-        let out_dims: Vec<usize> = if self.inputs.len() > 3 && !self.inputs[3].is_empty() {
+        let mut out_dims = [0usize; 8];
+        if self.inputs.len() > 3 && !self.inputs[3].is_empty() {
             let sizes = get_tensor(values, &self.inputs[3])?;
-            sizes.ints().iter().map(|&v| v as usize).collect()
+            for (i, &v) in sizes.ints().iter().enumerate() {
+                out_dims[i] = v as usize;
+            }
         } else if self.inputs.len() > 2 && !self.inputs[2].is_empty() {
             let scales = get_tensor(values, &self.inputs[2])?;
             let scales_f = scales.floats();
-            input
-                .dims
-                .iter()
-                .zip(scales_f.iter())
-                .map(|(&d, &s)| (d as f32 * s) as usize)
-                .collect()
+            for (i, (&d, &s)) in input.dims.iter().zip(scales_f.iter()).enumerate() {
+                out_dims[i] = (d as f32 * s) as usize;
+            }
         } else {
             return Err(InferenceError::InvalidModel(
                 "Resize: no scales or sizes".into(),
             ));
-        };
+        }
 
-        let numel: usize = out_dims.iter().product();
+        let numel: usize = out_dims[..rank].iter().product();
 
-        let mut out_strides = vec![1usize; rank];
+        let mut out_strides = [1usize; 8];
         for i in (0..rank - 1).rev() {
             out_strides[i] = out_strides[i + 1] * out_dims[i + 1];
         }
-        let mut in_strides = vec![1usize; rank];
+        let mut in_strides = [1usize; 8];
         for i in (0..rank - 1).rev() {
             in_strides[i] = in_strides[i + 1] * input.dims[i + 1];
         }
@@ -68,7 +68,7 @@ impl Layer for Resize {
             buf[out_flat] = input_f[in_flat];
         }
 
-        output.dims = out_dims;
+        output.set_dims(&out_dims[..rank]);
         Ok(())
     }
 }

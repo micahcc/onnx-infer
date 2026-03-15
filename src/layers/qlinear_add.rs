@@ -3,17 +3,23 @@ use std::collections::HashMap;
 use crate::Result;
 use crate::Tensor;
 use crate::broadcast_index;
-use crate::broadcast_shape;
+use crate::broadcast_shape_into;
 use crate::get_tensor;
 use crate::layers::Layer;
 
 pub struct QLinearAdd {
     pub inputs: Vec<String>,
+    x_scratch: Vec<f32>,
+    y_scratch: Vec<f32>,
 }
 
 impl QLinearAdd {
     pub fn new(inputs: Vec<String>) -> Self {
-        Self { inputs }
+        Self {
+            inputs,
+            x_scratch: Vec::new(),
+            y_scratch: Vec::new(),
+        }
     }
 }
 
@@ -28,19 +34,25 @@ impl Layer for QLinearAdd {
         let z_scale = get_tensor(values, &self.inputs[6])?.floats()[0];
         let z_zp = get_tensor(values, &self.inputs[7])?.floats()[0];
 
-        let x_float_data = crate::layers::dequantize(x_quant.floats(), x_scale, x_zp);
-        let y_float_data = crate::layers::dequantize(y_quant.floats(), y_scale, y_zp);
+        let x_numel = x_quant.numel();
+        let y_numel = y_quant.numel();
+        self.x_scratch.resize(x_numel, 0.0);
+        self.y_scratch.resize(y_numel, 0.0);
+        crate::layers::dequantize_into(x_quant.floats(), x_scale, x_zp, &mut self.x_scratch);
+        crate::layers::dequantize_into(y_quant.floats(), y_scale, y_zp, &mut self.y_scratch);
 
-        let out_shape = broadcast_shape(&x_quant.dims, &y_quant.dims);
-        let numel: usize = out_shape.iter().product();
-        let ndim = out_shape.len();
-        let mut index = vec![0usize; ndim];
-        let mut z_float = vec![0.0f32; numel];
+        let ndim = x_quant.dims.len().max(y_quant.dims.len());
+        let mut out_shape = [0usize; 8];
+        broadcast_shape_into(&x_quant.dims, &y_quant.dims, &mut out_shape[..ndim]);
+        let numel: usize = out_shape[..ndim].iter().product();
+        let mut index = [0usize; 8];
 
-        for val in &mut z_float {
-            let ai = broadcast_index(&index, &x_quant.dims, &out_shape);
-            let bi = broadcast_index(&index, &y_quant.dims, &out_shape);
-            *val = x_float_data[ai] + y_float_data[bi];
+        // Add into output buffer directly, then quantize in-place
+        let buf = output.as_mut_f32(numel);
+        for val in buf.iter_mut() {
+            let ai = broadcast_index(&index[..ndim], &x_quant.dims, &out_shape[..ndim]);
+            let bi = broadcast_index(&index[..ndim], &y_quant.dims, &out_shape[..ndim]);
+            *val = self.x_scratch[ai] + self.y_scratch[bi];
             for d in (0..ndim).rev() {
                 index[d] += 1;
                 if index[d] < out_shape[d] {
@@ -50,9 +62,12 @@ impl Layer for QLinearAdd {
             }
         }
 
-        let z_quant = crate::layers::quantize_u8(&z_float, z_scale, z_zp);
-        output.dims = out_shape;
-        output.data_replace_f32(z_quant);
+        // Quantize in-place
+        for val in buf.iter_mut() {
+            *val = (*val / z_scale + z_zp).round().clamp(0.0, 255.0);
+        }
+
+        output.set_dims(&out_shape[..ndim]);
         Ok(())
     }
 }

@@ -5,17 +5,14 @@ use prost::Message;
 use crate::Result;
 use crate::InferenceError;
 use crate::Tensor;
+use crate::layers::Plan;
 use crate::layers::PlanNode;
-use crate::layers::build_plan;
 use crate::onnx::ModelProto;
 
 pub struct InferenceEngine {
-    plan: Vec<PlanNode>,
-    initializers: HashMap<String, Tensor>,
-    output_names: Vec<String>,
+    plan: Plan,
+    values: HashMap<String, Tensor>,
     input_sizes: HashMap<String, Vec<usize>>,
-    shape_map: HashMap<String, Vec<usize>>,
-    tensor_pool: HashMap<String, Tensor>,
 }
 
 impl InferenceEngine {
@@ -26,22 +23,29 @@ impl InferenceEngine {
             .as_ref()
             .ok_or_else(|| InferenceError::InvalidModel("Model has no graph".into()))?;
 
-        let (plan, initializers, output_names, shape_map, tensor_pool) =
-            build_plan(graph, &input_sizes)?;
+        let mut plan = Plan::build(graph, &input_sizes)?;
+
+        let mut values = HashMap::new();
+        for (k, v) in std::mem::take(&mut plan.initializers) {
+            values.insert(k, v);
+        }
+        for (k, v) in std::mem::take(&mut plan.tensor_pool) {
+            values.insert(k, v);
+        }
 
         Ok(Self {
             plan,
-            initializers,
-            output_names,
+            values,
             input_sizes,
-            shape_map,
-            tensor_pool,
         })
     }
 
     pub fn run(&mut self, inputs: HashMap<String, Tensor>) -> Result<HashMap<String, Tensor>> {
-        let output_names = self.output_names.clone();
-        self.run_with_outputs(inputs, &output_names)
+        // Take ownership temporarily to avoid borrow conflict
+        let output_names = std::mem::take(&mut self.plan.output_names);
+        let result = self.run_with_outputs(inputs, &output_names);
+        self.plan.output_names = output_names;
+        result
     }
 
     pub fn run_with_outputs(
@@ -51,35 +55,28 @@ impl InferenceEngine {
     ) -> Result<HashMap<String, Tensor>> {
         let _span = tracing::trace_span!("inference").entered();
 
-        let mut values: HashMap<String, Tensor> = inputs;
-
-        // Load initializers
-        for (k, v) in &self.initializers {
-            values.insert(k.clone(), v.clone());
-        }
-
-        // Insert pre-allocated tensors for outputs that don't already exist
-        for (k, v) in &self.tensor_pool {
-            if !values.contains_key(k) {
-                values.insert(k.clone(), v.clone());
-            }
+        for (k, v) in inputs {
+            self.values.insert(k, v);
         }
 
         // Execute plan
-        for node in &mut self.plan {
+        for node in &mut self.plan.nodes {
             match node {
                 PlanNode::Single { output, layer } => {
                     if output.is_empty() {
                         continue;
                     }
                     let _span = tracing::trace_span!("op").entered();
-                    let mut out = values.remove(output.as_str()).unwrap_or_default();
-                    let result = layer.execute(&values, &mut out);
-                    values.insert(output.clone(), out);
+                    let (key, mut out) = self
+                        .values
+                        .remove_entry(output.as_str())
+                        .unwrap_or_else(|| (output.clone(), Tensor::default()));
+                    let result = layer.execute(&self.values, &mut out);
+                    self.values.insert(key, out);
                     result?;
                 }
                 PlanNode::Loop(loop_layer) => {
-                    loop_layer.execute(&mut values)?;
+                    loop_layer.execute(&mut self.values)?;
                 }
             }
         }
@@ -87,7 +84,7 @@ impl InferenceEngine {
         // Collect requested outputs
         let mut outputs = HashMap::new();
         for name in output_names {
-            if let Some(tensor) = values.get(name) {
+            if let Some(tensor) = self.values.get(name) {
                 outputs.insert(name.clone(), tensor.clone());
             }
         }
@@ -100,6 +97,6 @@ impl InferenceEngine {
     }
 
     pub fn shape_map(&self) -> &HashMap<String, Vec<usize>> {
-        &self.shape_map
+        &self.plan.shape_map
     }
 }

@@ -32,37 +32,32 @@ impl Layer for Squeeze {
             &self.axes_attr
         };
 
-        let rank = input.dims.len() as i64;
-        let axes_set: std::collections::HashSet<usize> = if axes.is_empty() {
-            input
-                .dims
-                .iter()
-                .enumerate()
-                .filter(|(_, d)| **d == 1)
-                .map(|(i, _)| i)
-                .collect()
+        let rank = input.dims.len();
+        let mut squeeze_mask = [false; 8];
+        if axes.is_empty() {
+            for (i, &d) in input.dims.iter().enumerate() {
+                if d == 1 {
+                    squeeze_mask[i] = true;
+                }
+            }
         } else {
-            axes.iter()
-                .map(|&a| {
-                    if a < 0 {
-                        (rank + a) as usize
-                    } else {
-                        a as usize
-                    }
-                })
-                .collect()
-        };
+            for &a in axes {
+                let idx = if a < 0 { (rank as i64 + a) as usize } else { a as usize };
+                squeeze_mask[idx] = true;
+            }
+        }
 
-        let out_dims: Vec<usize> = input
-            .dims
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !axes_set.contains(i))
-            .map(|(_, &d)| d)
-            .collect();
+        let mut out_dims = [0usize; 8];
+        let mut out_rank = 0;
+        for (i, &d) in input.dims.iter().enumerate() {
+            if !squeeze_mask[i] {
+                out_dims[out_rank] = d;
+                out_rank += 1;
+            }
+        }
 
         output.copy_from(input);
-        output.dims = out_dims;
+        output.set_dims(&out_dims[..out_rank]);
         Ok(())
     }
 }

@@ -9,11 +9,21 @@ use crate::layers::matmul::MatMul;
 pub struct QLinearMatMul {
     pub inputs: Vec<String>,
     pub inner: MatMul,
+    tmp_values: HashMap<String, Tensor>,
+    mm_output: Tensor,
 }
 
 impl QLinearMatMul {
     pub fn new(inputs: Vec<String>, inner: MatMul) -> Self {
-        Self { inputs, inner }
+        let mut tmp_values = HashMap::new();
+        tmp_values.insert(inner.inputs[0].clone(), Tensor::default());
+        tmp_values.insert(inner.inputs[1].clone(), Tensor::default());
+        Self {
+            inputs,
+            inner,
+            tmp_values,
+            mm_output: Tensor::default(),
+        }
     }
 }
 
@@ -28,41 +38,37 @@ impl Layer for QLinearMatMul {
         let y_scale = get_tensor(values, &self.inputs[6])?.floats()[0];
         let y_zp = get_tensor(values, &self.inputs[7])?.floats()[0];
 
-        let a_float = Tensor::new(
-            a_quant.dims.clone(),
-            crate::layers::dequantize(a_quant.floats(), a_scale, a_zp),
-        );
+        // Dequantize A into scratch
+        let a_tensor = self.tmp_values.get_mut(&self.inner.inputs[0]).unwrap();
+        a_tensor.set_dims(&a_quant.dims);
+        let a_buf = a_tensor.as_mut_f32(a_quant.numel());
+        crate::layers::dequantize_into(a_quant.floats(), a_scale, a_zp, a_buf);
 
+        // Dequantize B into scratch
         let b_scale_f = b_scale_t.floats();
         let b_quant_f = b_quant.floats();
-        let b_float = if b_scale_f.len() > 1 {
+        let b_tensor = self.tmp_values.get_mut(&self.inner.inputs[1]).unwrap();
+        b_tensor.set_dims(&b_quant.dims);
+        let b_buf = b_tensor.as_mut_f32(b_quant.numel());
+        if b_scale_f.len() > 1 {
             let n = *b_quant.dims.last().unwrap();
             let k = b_quant.numel() / n;
-            let mut data = vec![0.0f32; b_quant.numel()];
             for row in 0..k {
                 for col in 0..n {
                     let idx = row * n + col;
-                    data[idx] = (b_quant_f[idx] - b_zp_t.f32_at(col)) * b_scale_f[col];
+                    b_buf[idx] = (b_quant_f[idx] - b_zp_t.f32_at(col)) * b_scale_f[col];
                 }
             }
-            Tensor::new(b_quant.dims.clone(), data)
         } else {
-            Tensor::new(
-                b_quant.dims.clone(),
-                crate::layers::dequantize(b_quant_f, b_scale_f[0], b_zp_t.f32_at(0)),
-            )
-        };
+            crate::layers::dequantize_into(b_quant_f, b_scale_f[0], b_zp_t.f32_at(0), b_buf);
+        }
 
-        let mut tmp_values: HashMap<String, Tensor> = HashMap::new();
-        tmp_values.insert(self.inner.inputs[0].clone(), a_float);
-        tmp_values.insert(self.inner.inputs[1].clone(), b_float);
+        self.inner.execute(&self.tmp_values, &mut self.mm_output)?;
 
-        let mut mm_output = Tensor::default();
-        self.inner.execute(&tmp_values, &mut mm_output)?;
-
-        let y_quant = crate::layers::quantize_u8(mm_output.floats(), y_scale, y_zp);
-        output.dims = mm_output.dims;
-        output.data_replace_f32(y_quant);
+        let numel = self.mm_output.numel();
+        output.set_dims(&self.mm_output.dims);
+        let out_buf = output.as_mut_f32(numel);
+        crate::layers::quantize_u8_into(self.mm_output.floats(), y_scale, y_zp, out_buf);
         Ok(())
     }
 }

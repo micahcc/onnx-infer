@@ -33,29 +33,33 @@ impl Layer for Slice {
         };
 
         let rank = input.dims.len();
-        let mut starts = vec![0i64; rank];
-        let mut ends: Vec<i64> = input.dims.iter().map(|&d| d as i64).collect();
-        let mut steps = vec![1i64; rank];
+        let mut starts = [0i64; 8];
+        let mut ends = [0i64; 8];
+        let mut steps = [1i64; 8];
+        for ax in 0..rank {
+            ends[ax] = input.dims[ax] as i64;
+        }
 
         let starts_ints = starts_t.ints();
         let ends_ints = ends_t.ints();
 
-        let axes: Vec<usize> = if let Some(ref at) = axes_t {
-            at.ints()
-                .iter()
-                .map(|&a| {
-                    if a < 0 {
-                        (rank as i64 + a) as usize
-                    } else {
-                        a as usize
-                    }
-                })
-                .collect()
+        let mut axes_buf = [0usize; 8];
+        let axes_len;
+        if let Some(ref at) = axes_t {
+            let at_ints = at.ints();
+            axes_len = at_ints.len();
+            for (i, &a) in at_ints.iter().enumerate() {
+                axes_buf[i] = if a < 0 { (rank as i64 + a) as usize } else { a as usize };
+            }
         } else {
-            (0..starts_ints.len()).collect()
-        };
+            axes_len = starts_ints.len();
+            for i in 0..axes_len {
+                axes_buf[i] = i;
+            }
+        }
 
-        for (i, &ax) in axes.iter().enumerate() {
+        for i in 0..axes_len {
+            let ax = axes_buf[i];
             starts[ax] = starts_ints[i];
             ends[ax] = ends_ints[i];
             if let Some(ref st) = steps_t {
@@ -88,7 +92,7 @@ impl Layer for Slice {
             }
         }
 
-        let mut out_dims = vec![0usize; rank];
+        let mut out_dims = [0usize; 8];
         for ax in 0..rank {
             if steps[ax] > 0 {
                 if ends[ax] <= starts[ax] {
@@ -103,13 +107,13 @@ impl Layer for Slice {
             }
         }
 
-        let numel: usize = out_dims.iter().product();
+        let numel: usize = out_dims[..rank].iter().product();
 
-        let mut in_strides = vec![1usize; rank];
+        let mut in_strides = [1usize; 8];
         for i in (0..rank - 1).rev() {
             in_strides[i] = in_strides[i + 1] * input.dims[i + 1];
         }
-        let mut out_strides = vec![1usize; rank];
+        let mut out_strides = [1usize; 8];
         for i in (0..rank - 1).rev() {
             out_strides[i] = out_strides[i + 1] * out_dims[i + 1];
         }
@@ -146,7 +150,7 @@ impl Layer for Slice {
                 }
             }
         }
-        output.dims = out_dims;
+        output.set_dims(&out_dims[..rank]);
         Ok(())
     }
 }

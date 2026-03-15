@@ -23,7 +23,7 @@ impl Layer for Shape {
         for (o, &d) in buf.iter_mut().zip(input.dims.iter()) {
             *o = d as i64;
         }
-        output.dims = vec![rank];
+        output.set_dims(&[rank]);
         Ok(())
     }
 }

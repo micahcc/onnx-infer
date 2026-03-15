@@ -9,11 +9,24 @@ use crate::layers::conv::Conv;
 pub struct QLinearConv {
     pub inputs: Vec<String>,
     pub inner: Conv,
+    tmp_values: HashMap<String, Tensor>,
+    conv_output: Tensor,
 }
 
 impl QLinearConv {
     pub fn new(inputs: Vec<String>, inner: Conv) -> Self {
-        Self { inputs, inner }
+        let mut tmp_values = HashMap::new();
+        tmp_values.insert(inner.inputs[0].clone(), Tensor::default());
+        tmp_values.insert(inner.inputs[1].clone(), Tensor::default());
+        if inner.inputs.len() > 2 {
+            tmp_values.insert(inner.inputs[2].clone(), Tensor::default());
+        }
+        Self {
+            inputs,
+            inner,
+            tmp_values,
+            conv_output: Tensor::default(),
+        }
     }
 }
 
@@ -33,62 +46,48 @@ impl Layer for QLinearConv {
             None
         };
 
-        let x_float = Tensor::new(
-            x_quant.dims.clone(),
-            crate::layers::dequantize(x_quant.floats(), x_scale, x_zp),
-        );
+        // Dequantize X into scratch
+        let x_tensor = self.tmp_values.get_mut(&self.inner.inputs[0]).unwrap();
+        x_tensor.set_dims(&x_quant.dims);
+        let x_buf = x_tensor.as_mut_f32(x_quant.numel());
+        crate::layers::dequantize_into(x_quant.floats(), x_scale, x_zp, x_buf);
 
+        // Dequantize W into scratch (per-channel)
         let c_out = w_quant.dims[0];
         let w_scale_f = w_scale_t.floats();
         let per_channel = w_scale_f.len() > 1;
         let elems_per_oc = w_quant.numel() / c_out;
         let w_quant_f = w_quant.floats();
-        let mut w_float_data = vec![0.0f32; w_quant.numel()];
+        let w_tensor = self.tmp_values.get_mut(&self.inner.inputs[1]).unwrap();
+        w_tensor.set_dims(&w_quant.dims);
+        let w_buf = w_tensor.as_mut_f32(w_quant.numel());
         for oc in 0..c_out {
-            let scale = if per_channel {
-                w_scale_f[oc]
-            } else {
-                w_scale_f[0]
-            };
-            let zp = if per_channel {
-                w_zp_t.f32_at(oc)
-            } else {
-                w_zp_t.f32_at(0)
-            };
+            let scale = if per_channel { w_scale_f[oc] } else { w_scale_f[0] };
+            let zp = if per_channel { w_zp_t.f32_at(oc) } else { w_zp_t.f32_at(0) };
             let base = oc * elems_per_oc;
             for i in 0..elems_per_oc {
-                w_float_data[base + i] = (w_quant_f[base + i] - zp) * scale;
+                w_buf[base + i] = (w_quant_f[base + i] - zp) * scale;
             }
         }
-        let w_float = Tensor::new(w_quant.dims.clone(), w_float_data);
 
-        let mut tmp_values: HashMap<String, Tensor> = HashMap::new();
-        tmp_values.insert(self.inner.inputs[0].clone(), x_float);
-        tmp_values.insert(self.inner.inputs[1].clone(), w_float);
+        // Dequantize bias into scratch if present
         if let Some(b) = bias {
-            let bias_float: Vec<f32> = (0..b.numel())
-                .map(|oc| {
-                    let val = b.f32_at(oc);
-                    let ws = if per_channel {
-                        w_scale_f[oc]
-                    } else {
-                        w_scale_f[0]
-                    };
-                    val * x_scale * ws
-                })
-                .collect();
-            tmp_values.insert(
-                self.inner.inputs[2].clone(),
-                Tensor::new(b.dims.clone(), bias_float),
-            );
+            let b_tensor = self.tmp_values.get_mut(&self.inner.inputs[2]).unwrap();
+            b_tensor.set_dims(&b.dims);
+            let b_buf = b_tensor.as_mut_f32(b.numel());
+            for oc in 0..b.numel() {
+                let val = b.f32_at(oc);
+                let ws = if per_channel { w_scale_f[oc] } else { w_scale_f[0] };
+                b_buf[oc] = val * x_scale * ws;
+            }
         }
 
-        let mut conv_output = Tensor::default();
-        self.inner.execute(&tmp_values, &mut conv_output)?;
+        self.inner.execute(&self.tmp_values, &mut self.conv_output)?;
 
-        let y_quant = crate::layers::quantize_u8(conv_output.floats(), y_scale, y_zp);
-        output.dims = conv_output.dims;
-        output.data_replace_f32(y_quant);
+        let numel = self.conv_output.numel();
+        output.set_dims(&self.conv_output.dims);
+        let out_buf = output.as_mut_f32(numel);
+        crate::layers::quantize_u8_into(self.conv_output.floats(), y_scale, y_zp, out_buf);
         Ok(())
     }
 }

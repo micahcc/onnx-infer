@@ -24,9 +24,10 @@ impl Layer for QuantizeLinear {
         } else {
             0.0
         };
-        let data = crate::layers::quantize_u8(input.floats(), scale.floats()[0], zero_point);
-        output.dims.clone_from(&input.dims);
-        output.data_replace_f32(data);
+        let numel = input.numel();
+        let buf = output.as_mut_f32(numel);
+        crate::layers::quantize_u8_into(input.floats(), scale.floats()[0], zero_point, buf);
+        output.set_dims(&input.dims);
         Ok(())
     }
 }

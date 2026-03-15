@@ -3,10 +3,10 @@ pub mod onnx {
 }
 
 pub mod dtype;
-pub mod engine;
+pub mod inference_engine;
 pub mod inference_error;
 pub mod layers;
-pub mod tensor;
+pub mod tensor_data;
 pub mod utils;
 
 pub use dtype::DType;
@@ -16,12 +16,14 @@ pub use dtype::ONNX_INT8;
 pub use dtype::ONNX_INT32;
 pub use dtype::ONNX_INT64;
 pub use dtype::ONNX_UINT8;
-pub use engine::InferenceEngine;
+pub use inference_engine::InferenceEngine;
 pub use inference_error::InferenceError;
 pub use inference_error::Result;
-pub use tensor::Tensor;
+pub use tensor_data::Tensor;
+pub use tensor_data::TensorData;
 pub use utils::broadcast_index;
 pub use utils::broadcast_shape;
+pub use utils::broadcast_shape_into;
 pub use utils::get_attr_float;
 pub use utils::get_attr_int;
 pub use utils::get_attr_ints;

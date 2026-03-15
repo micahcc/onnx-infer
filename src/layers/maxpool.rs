@@ -51,34 +51,22 @@ impl Layer for MaxPool {
         let sh = self.strides[0] as usize;
         let sw = self.strides[1] as usize;
 
-        let mut pads = self.pads.clone();
-        if self.auto_pad == "SAME_UPPER" || self.auto_pad == "SAME_LOWER" {
+        let (p0, p1, p2, p3) = if self.auto_pad == "SAME_UPPER" || self.auto_pad == "SAME_LOWER" {
             let oh = h_in.div_ceil(sh);
             let ow = w_in.div_ceil(sw);
             let pad_h = ((oh - 1) * sh + kh).saturating_sub(h_in);
             let pad_w = ((ow - 1) * sw + kw).saturating_sub(w_in);
             if self.auto_pad == "SAME_UPPER" {
-                pads = vec![
-                    (pad_h / 2) as i64,
-                    (pad_w / 2) as i64,
-                    (pad_h - pad_h / 2) as i64,
-                    (pad_w - pad_w / 2) as i64,
-                ];
+                (pad_h / 2, pad_w / 2, pad_h - pad_h / 2, pad_w - pad_w / 2)
             } else {
-                pads = vec![
-                    (pad_h - pad_h / 2) as i64,
-                    (pad_w - pad_w / 2) as i64,
-                    (pad_h / 2) as i64,
-                    (pad_w / 2) as i64,
-                ];
+                (pad_h - pad_h / 2, pad_w - pad_w / 2, pad_h / 2, pad_w / 2)
             }
-        }
+        } else {
+            (self.pads[0] as usize, self.pads[1] as usize, self.pads[2] as usize, self.pads[3] as usize)
+        };
 
-        let ph_begin = pads[0] as usize;
-        let pw_begin = pads[1] as usize;
-
-        let h_out = (h_in + pads[0] as usize + pads[2] as usize - kh) / sh + 1;
-        let w_out = (w_in + pads[1] as usize + pads[3] as usize - kw) / sw + 1;
+        let h_out = (h_in + p0 + p2 - kh) / sh + 1;
+        let w_out = (w_in + p1 + p3 - kw) / sw + 1;
 
         let input_f = input.floats();
         let total = n * c * h_out * w_out;
@@ -94,13 +82,13 @@ impl Layer for MaxPool {
                             for fw in 0..kw {
                                 let ih = oh * sh + fh;
                                 let iw = ow * sw + fw;
-                                if ih >= ph_begin
-                                    && iw >= pw_begin
-                                    && ih - ph_begin < h_in
-                                    && iw - pw_begin < w_in
+                                if ih >= p0
+                                    && iw >= p1
+                                    && ih - p0 < h_in
+                                    && iw - p1 < w_in
                                 {
-                                    let ih = ih - ph_begin;
-                                    let iw = iw - pw_begin;
+                                    let ih = ih - p0;
+                                    let iw = iw - p1;
                                     let idx = ((batch * c + ch) * h_in + ih) * w_in + iw;
                                     max_val = max_val.max(input_f[idx]);
                                 }
@@ -113,7 +101,7 @@ impl Layer for MaxPool {
             }
         }
 
-        output.dims = vec![n, c, h_out, w_out];
+        output.set_dims(&[n, c, h_out, w_out]);
         Ok(())
     }
 }

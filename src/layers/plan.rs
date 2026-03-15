@@ -13,7 +13,6 @@ use crate::get_attr_string;
 use crate::onnx::NodeProto;
 
 use crate::layers::Layer;
-use crate::layers::PlanNode;
 use crate::layers::OpType;
 use crate::layers::add;
 use crate::layers::auto_cast;
@@ -57,6 +56,164 @@ use crate::layers::sub;
 use crate::layers::tile;
 use crate::layers::transpose;
 use crate::layers::unsqueeze;
+
+pub enum PlanNode {
+    Single {
+        output: String,
+        layer: Box<dyn Layer>,
+    },
+    Loop(loop_op::Loop),
+}
+
+pub struct Plan {
+    pub nodes: Vec<PlanNode>,
+    pub initializers: HashMap<String, Tensor>,
+    pub output_names: Vec<String>,
+    pub shape_map: HashMap<String, Vec<usize>>,
+    pub tensor_pool: HashMap<String, Tensor>,
+}
+
+impl Plan {
+    pub fn build(
+        graph: &crate::onnx::GraphProto,
+        input_sizes: &HashMap<String, Vec<usize>>,
+    ) -> Result<Self> {
+        let mut initializers = HashMap::new();
+        for init in &graph.initializer {
+            if !init.name.is_empty() {
+                initializers.insert(init.name.clone(), Tensor::from_proto(init)?);
+            }
+        }
+
+        let output_names: Vec<String> = graph.output.iter().map(|o| o.name.clone()).collect();
+
+        let mut type_map: HashMap<String, DType> = HashMap::new();
+        for (name, tensor) in &initializers {
+            type_map.insert(name.clone(), tensor.dtype());
+        }
+        for input in &graph.input {
+            if !type_map.contains_key(&input.name) {
+                let dtype = input
+                    .r#type
+                    .as_ref()
+                    .and_then(|t| t.value.as_ref())
+                    .map(|v| match v {
+                        crate::onnx::type_proto::Value::TensorType(tt) => {
+                            if tt.elem_type == ONNX_INT32 || tt.elem_type == ONNX_INT64 {
+                                DType::Int64
+                            } else {
+                                DType::Float
+                            }
+                        }
+                        _ => DType::Float,
+                    })
+                    .unwrap_or(DType::Float);
+                type_map.insert(input.name.clone(), dtype);
+            }
+        }
+
+        let mut shape_map: HashMap<String, Vec<usize>> = HashMap::new();
+        for (name, tensor) in &initializers {
+            shape_map.insert(name.clone(), tensor.dims.clone());
+        }
+        for (name, dims) in input_sizes {
+            shape_map.insert(name.clone(), dims.clone());
+        }
+
+        let mut known_values: HashMap<String, Tensor> = HashMap::new();
+
+        let mut nodes = Vec::new();
+        let mut cast_counter = 0usize;
+
+        for node in &graph.node {
+            let op = OpType::parse(&node.op_type)
+                .map_err(|s| InferenceError::UnsupportedOperator(s))?;
+
+            let expected = op.expected_input_dtypes();
+            let mut modified_inputs = node.input.clone();
+
+            let mut input_types = Vec::new();
+            for name in &node.input {
+                if let Some(&dt) = type_map.get(name) {
+                    input_types.push(dt);
+                }
+            }
+
+            for (i, input_name) in node.input.iter().enumerate() {
+                if input_name.is_empty() {
+                    continue;
+                }
+                if let Some(Some(expected_dt)) = expected.get(i) {
+                    if let Some(&actual_dt) = type_map.get(input_name) {
+                        if actual_dt != *expected_dt {
+                            let cast_name = format!("__auto_cast_{cast_counter}__");
+                            cast_counter += 1;
+                            nodes.push(PlanNode::Single {
+                                output: cast_name.clone(),
+                                layer: Box::new(auto_cast::AutoCastF32::new(
+                                    input_name.clone(),
+                                )),
+                            });
+                            type_map.insert(cast_name.clone(), DType::Float);
+                            modified_inputs[i] = cast_name;
+                        }
+                    }
+                }
+            }
+
+            let out_dtype = op.infer_output_dtype(node, &input_types);
+            let out_name = node.output.first().filter(|s| !s.is_empty());
+            if let Some(out_name) = out_name {
+                type_map.insert(out_name.clone(), out_dtype);
+            }
+
+            if let Some(tensor) = try_propagate_value(
+                op,
+                node,
+                &node.input,
+                &known_values,
+                &initializers,
+                &shape_map,
+            ) {
+                if let Some(out_name) = out_name {
+                    shape_map.insert(out_name.clone(), tensor.dims.clone());
+                    known_values.insert(out_name.clone(), tensor);
+                }
+            } else if let Some(shape) =
+                op.infer_output_shape(node, &node.input, &shape_map, &known_values)
+            {
+                if let Some(out_name) = out_name {
+                    shape_map.insert(out_name.clone(), shape);
+                }
+            }
+
+            nodes.push(build_node(op, node, modified_inputs)?);
+        }
+
+        // Pre-allocate tensors for all known shapes/types
+        let mut tensor_pool: HashMap<String, Tensor> = HashMap::new();
+        for (name, shape) in &shape_map {
+            if initializers.contains_key(name) {
+                continue;
+            }
+            let numel: usize = shape.iter().product();
+            let dtype = type_map.get(name).copied().unwrap_or(DType::Float);
+            let tensor = match dtype {
+                DType::Float => Tensor::new(shape.clone(), vec![0.0; numel]),
+                DType::Int64 => Tensor::new_i64(shape.clone(), vec![0; numel]),
+            };
+            tensor_pool.insert(name.clone(), tensor);
+        }
+
+        Ok(Self {
+            nodes,
+            initializers,
+            output_names,
+            shape_map,
+            tensor_pool,
+        })
+    }
+}
 
 fn try_propagate_value(
     op: OpType,
@@ -104,139 +261,6 @@ fn try_propagate_value(
     } else {
         None
     }
-}
-
-pub fn build_plan(
-    graph: &crate::onnx::GraphProto,
-    input_sizes: &HashMap<String, Vec<usize>>,
-) -> Result<(
-    Vec<PlanNode>,
-    HashMap<String, Tensor>,
-    Vec<String>,
-    HashMap<String, Vec<usize>>,
-    HashMap<String, Tensor>,
-)> {
-    let mut initializers = HashMap::new();
-    for init in &graph.initializer {
-        if !init.name.is_empty() {
-            initializers.insert(init.name.clone(), Tensor::from_proto(init)?);
-        }
-    }
-
-    let output_names: Vec<String> = graph.output.iter().map(|o| o.name.clone()).collect();
-
-    let mut type_map: HashMap<String, DType> = HashMap::new();
-    for (name, tensor) in &initializers {
-        type_map.insert(name.clone(), tensor.dtype());
-    }
-    for input in &graph.input {
-        if !type_map.contains_key(&input.name) {
-            let dtype = input
-                .r#type
-                .as_ref()
-                .and_then(|t| t.value.as_ref())
-                .map(|v| match v {
-                    crate::onnx::type_proto::Value::TensorType(tt) => {
-                        if tt.elem_type == ONNX_INT32 || tt.elem_type == ONNX_INT64 {
-                            DType::Int64
-                        } else {
-                            DType::Float
-                        }
-                    }
-                    _ => DType::Float,
-                })
-                .unwrap_or(DType::Float);
-            type_map.insert(input.name.clone(), dtype);
-        }
-    }
-
-    let mut shape_map: HashMap<String, Vec<usize>> = HashMap::new();
-    for (name, tensor) in &initializers {
-        shape_map.insert(name.clone(), tensor.dims.clone());
-    }
-    for (name, dims) in input_sizes {
-        shape_map.insert(name.clone(), dims.clone());
-    }
-
-    let mut known_values: HashMap<String, Tensor> = HashMap::new();
-
-    let mut plan = Vec::new();
-    let mut cast_counter = 0usize;
-
-    for node in &graph.node {
-        let op = OpType::parse(&node.op_type)
-            .map_err(|s| InferenceError::UnsupportedOperator(s))?;
-
-        let expected = op.expected_input_dtypes();
-        let mut modified_inputs = node.input.clone();
-
-        let mut input_types = Vec::new();
-        for name in &node.input {
-            if let Some(&dt) = type_map.get(name) {
-                input_types.push(dt);
-            }
-        }
-
-        for (i, input_name) in node.input.iter().enumerate() {
-            if input_name.is_empty() {
-                continue;
-            }
-            if let Some(Some(expected_dt)) = expected.get(i) {
-                if let Some(&actual_dt) = type_map.get(input_name) {
-                    if actual_dt != *expected_dt {
-                        let cast_name = format!("__auto_cast_{cast_counter}__");
-                        cast_counter += 1;
-                        plan.push(PlanNode::Single {
-                            output: cast_name.clone(),
-                            layer: Box::new(auto_cast::AutoCastF32::new(input_name.clone())),
-                        });
-                        type_map.insert(cast_name.clone(), DType::Float);
-                        modified_inputs[i] = cast_name;
-                    }
-                }
-            }
-        }
-
-        let out_dtype = op.infer_output_dtype(node, &input_types);
-        let out_name = node.output.first().filter(|s| !s.is_empty());
-        if let Some(out_name) = out_name {
-            type_map.insert(out_name.clone(), out_dtype);
-        }
-
-        if let Some(tensor) =
-            try_propagate_value(op, node, &node.input, &known_values, &initializers, &shape_map)
-        {
-            if let Some(out_name) = out_name {
-                shape_map.insert(out_name.clone(), tensor.dims.clone());
-                known_values.insert(out_name.clone(), tensor);
-            }
-        } else if let Some(shape) =
-            op.infer_output_shape(node, &node.input, &shape_map, &known_values)
-        {
-            if let Some(out_name) = out_name {
-                shape_map.insert(out_name.clone(), shape);
-            }
-        }
-
-        plan.push(build_node(op, node, modified_inputs)?);
-    }
-
-    // Pre-allocate tensors for all known shapes/types
-    let mut tensor_pool: HashMap<String, Tensor> = HashMap::new();
-    for (name, shape) in &shape_map {
-        if initializers.contains_key(name) {
-            continue;
-        }
-        let numel: usize = shape.iter().product();
-        let dtype = type_map.get(name).copied().unwrap_or(DType::Float);
-        let tensor = match dtype {
-            DType::Float => Tensor::new(shape.clone(), vec![0.0; numel]),
-            DType::Int64 => Tensor::new_i64(shape.clone(), vec![0; numel]),
-        };
-        tensor_pool.insert(name.clone(), tensor);
-    }
-
-    Ok((plan, initializers, output_names, shape_map, tensor_pool))
 }
 
 pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<PlanNode> {
@@ -397,7 +421,8 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
         }
         OpType::QLinearAdd => Box::new(qlinear_add::QLinearAdd::new(inputs)),
         OpType::QLinearMatMul => {
-            let inner = matmul::MatMul::new(vec!["__qmm_a__".to_string(), "__qmm_b__".to_string()]);
+            let inner =
+                matmul::MatMul::new(vec!["__qmm_a__".to_string(), "__qmm_b__".to_string()]);
             Box::new(qlinear_matmul::QLinearMatMul::new(inputs, inner))
         }
         OpType::QLinearGlobalAveragePool => {
@@ -413,8 +438,8 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
 }
 
 pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
-    let op = OpType::parse(&node.op_type)
-        .map_err(|s| InferenceError::UnsupportedOperator(s))?;
+    let op =
+        OpType::parse(&node.op_type).map_err(|s| InferenceError::UnsupportedOperator(s))?;
 
     let _span = tracing::trace_span!("op", op = %op, name = %node.name).entered();
 

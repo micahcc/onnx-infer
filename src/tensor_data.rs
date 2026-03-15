@@ -136,6 +136,11 @@ impl Tensor {
         self.data = TensorData::F32(data);
     }
 
+    pub fn set_dims(&mut self, dims: &[usize]) {
+        self.dims.clear();
+        self.dims.extend_from_slice(dims);
+    }
+
     pub fn copy_from(&mut self, other: &Tensor) {
         self.dims.clone_from(&other.dims);
         match &other.data {

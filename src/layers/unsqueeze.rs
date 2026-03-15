@@ -33,24 +33,28 @@ impl Layer for Unsqueeze {
         };
 
         let out_rank = input.dims.len() + axes.len();
-        let mut out_dims = input.dims.clone();
-        let mut sorted_axes: Vec<usize> = axes
-            .iter()
-            .map(|&a| {
-                if a < 0 {
-                    (out_rank as i64 + a) as usize
-                } else {
-                    a as usize
-                }
-            })
-            .collect();
-        sorted_axes.sort();
-        for &ax in &sorted_axes {
-            out_dims.insert(ax, 1);
+
+        // Build set of axes to insert
+        let mut insert_mask = [false; 8];
+        for &a in axes {
+            let idx = if a < 0 { (out_rank as i64 + a) as usize } else { a as usize };
+            insert_mask[idx] = true;
+        }
+
+        // Build output dims: walk output positions, pulling from input for non-inserted axes
+        let mut out_dims = [0usize; 8];
+        let mut in_idx = 0;
+        for o in 0..out_rank {
+            if insert_mask[o] {
+                out_dims[o] = 1;
+            } else {
+                out_dims[o] = input.dims[in_idx];
+                in_idx += 1;
+            }
         }
 
         output.copy_from(input);
-        output.dims = out_dims;
+        output.set_dims(&out_dims[..out_rank]);
         Ok(())
     }
 }

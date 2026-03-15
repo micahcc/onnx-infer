@@ -7,11 +7,19 @@ use crate::layers::Layer;
 
 pub struct Nms {
     pub inputs: Vec<String>,
+    selected: Vec<[i64; 3]>,
+    candidates: Vec<(usize, f32)>,
+    kept: Vec<usize>,
 }
 
 impl Nms {
     pub fn new(inputs: Vec<String>) -> Self {
-        Self { inputs }
+        Self {
+            inputs,
+            selected: Vec::new(),
+            candidates: Vec::new(),
+            kept: Vec::new(),
+        }
     }
 }
 
@@ -41,29 +49,29 @@ impl Layer for Nms {
 
         let boxes_f = boxes.floats();
         let scores_f = scores.floats();
-        let mut selected: Vec<[i64; 3]> = Vec::new();
+        self.selected.clear();
 
         for batch in 0..batches {
             for class in 0..num_classes {
-                let mut candidates: Vec<(usize, f32)> = Vec::new();
+                self.candidates.clear();
                 for b in 0..num_boxes {
                     let score = scores_f[(batch * num_classes + class) * num_boxes + b];
                     if score > score_threshold {
-                        candidates.push((b, score));
+                        self.candidates.push((b, score));
                     }
                 }
-                candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                self.candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-                let mut kept: Vec<usize> = Vec::new();
-                for &(box_idx, _) in &candidates {
-                    if max_output > 0 && kept.len() >= max_output {
+                self.kept.clear();
+                for &(box_idx, _) in &self.candidates {
+                    if max_output > 0 && self.kept.len() >= max_output {
                         break;
                     }
                     let base_i = (batch * num_boxes + box_idx) * 4;
                     let bi = &boxes_f[base_i..base_i + 4];
 
                     let mut suppress = false;
-                    for &k in &kept {
+                    for &k in &self.kept {
                         let base_k = (batch * num_boxes + k) * 4;
                         let bk = &boxes_f[base_k..base_k + 4];
                         if iou(bi, bk) > iou_threshold {
@@ -72,21 +80,21 @@ impl Layer for Nms {
                         }
                     }
                     if !suppress {
-                        kept.push(box_idx);
-                        selected.push([batch as i64, class as i64, box_idx as i64]);
+                        self.kept.push(box_idx);
+                        self.selected.push([batch as i64, class as i64, box_idx as i64]);
                     }
                 }
             }
         }
 
-        let num_selected = selected.len();
+        let num_selected = self.selected.len();
         let buf = output.as_mut_i64(num_selected * 3);
-        for (i, s) in selected.iter().enumerate() {
+        for (i, s) in self.selected.iter().enumerate() {
             buf[i * 3] = s[0];
             buf[i * 3 + 1] = s[1];
             buf[i * 3 + 2] = s[2];
         }
-        output.dims = vec![num_selected, 3];
+        output.set_dims(&[num_selected, 3]);
         Ok(())
     }
 }

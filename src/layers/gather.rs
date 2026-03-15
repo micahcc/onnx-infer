@@ -51,13 +51,19 @@ impl Layer for Gather {
                         buf[0] = input.ints()[idx];
                     }
                 }
-                output.dims = vec![];
+                output.set_dims(&[]);
             } else {
                 let outer: usize = input.dims[..axis].iter().product();
                 let inner: usize = input.dims[axis + 1..].iter().product();
                 let axis_size = input.dims[axis];
-                let mut out_dims: Vec<usize> = input.dims[..axis].to_vec();
-                out_dims.extend_from_slice(&input.dims[axis + 1..]);
+                let mut out_dims = [0usize; 8];
+                let mut out_rank = 0;
+                for (i, &d) in input.dims.iter().enumerate() {
+                    if i != axis {
+                        out_dims[out_rank] = d;
+                        out_rank += 1;
+                    }
+                }
 
                 match input.dtype() {
                     DType::Float => {
@@ -79,7 +85,7 @@ impl Layer for Gather {
                         }
                     }
                 }
-                output.dims = out_dims;
+                output.set_dims(&out_dims[..out_rank]);
             }
         } else {
             return Err(InferenceError::UnsupportedOperator(

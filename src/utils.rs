@@ -42,6 +42,12 @@ pub fn get_tensor<'a>(values: &'a HashMap<String, Tensor>, name: &str) -> Result
 pub fn broadcast_shape(a: &[usize], b: &[usize]) -> Vec<usize> {
     let max_len = a.len().max(b.len());
     let mut result = vec![1usize; max_len];
+    broadcast_shape_into(a, b, &mut result);
+    result
+}
+
+pub fn broadcast_shape_into(a: &[usize], b: &[usize], out: &mut [usize]) {
+    let max_len = out.len();
     for i in 0..max_len {
         let da = if i < max_len - a.len() {
             1
@@ -53,9 +59,8 @@ pub fn broadcast_shape(a: &[usize], b: &[usize]) -> Vec<usize> {
         } else {
             b[i - (max_len - b.len())]
         };
-        result[i] = da.max(db);
+        out[i] = da.max(db);
     }
-    result
 }
 
 pub fn broadcast_index(index: &[usize], shape: &[usize], out_shape: &[usize]) -> usize {

@@ -22,7 +22,7 @@ impl Layer for Flatten {
         let outer: usize = input.dims[..self.axis].iter().product();
         let inner: usize = input.dims[self.axis..].iter().product();
         output.copy_from(input);
-        output.dims = vec![outer, inner];
+        output.set_dims(&[outer, inner]);
         Ok(())
     }
 }

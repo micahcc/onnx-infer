@@ -32,9 +32,10 @@ impl Layer for GlobalAvgPool {
             }
         }
 
-        let mut out_dims = vec![n, c];
-        out_dims.resize(input.dims.len(), 1);
-        output.dims = out_dims;
+        output.dims.clear();
+        output.dims.push(n);
+        output.dims.push(c);
+        output.dims.resize(input.dims.len(), 1);
         Ok(())
     }
 }

@@ -9,11 +9,20 @@ use crate::layers::Layer;
 pub struct Transpose {
     pub inputs: Vec<String>,
     pub perm: Option<Vec<usize>>,
+    scratch_perm: [usize; 8],
+    scratch_in_strides: [usize; 8],
+    scratch_out_strides: [usize; 8],
 }
 
 impl Transpose {
     pub fn new(inputs: Vec<String>, perm: Option<Vec<usize>>) -> Self {
-        Self { inputs, perm }
+        let mut scratch_perm = [0usize; 8];
+        if let Some(ref p) = perm {
+            for (i, &v) in p.iter().enumerate() {
+                scratch_perm[i] = v;
+            }
+        }
+        Self { inputs, perm, scratch_perm, scratch_in_strides: [0; 8], scratch_out_strides: [0; 8] }
     }
 }
 
@@ -22,26 +31,30 @@ impl Layer for Transpose {
         let input = get_tensor(values, &self.inputs[0])?;
         let rank = input.dims.len();
 
-        let perm: Vec<usize> = self
-            .perm
-            .clone()
-            .unwrap_or_else(|| (0..rank).rev().collect());
+        if self.perm.is_none() {
+            for i in 0..rank {
+                self.scratch_perm[i] = rank - 1 - i;
+            }
+        }
+        let perm = &self.scratch_perm;
 
-        let mut out_dims = vec![0usize; rank];
+        let mut out_dims = [0usize; 8];
         for i in 0..rank {
             out_dims[i] = input.dims[perm[i]];
         }
 
-        let mut in_strides = vec![1usize; rank];
+        self.scratch_in_strides[rank - 1] = 1;
         for i in (0..rank - 1).rev() {
-            in_strides[i] = in_strides[i + 1] * input.dims[i + 1];
+            self.scratch_in_strides[i] = self.scratch_in_strides[i + 1] * input.dims[i + 1];
         }
+        let in_strides = &self.scratch_in_strides;
 
         let numel = input.numel();
-        let mut out_strides = vec![1usize; rank];
+        self.scratch_out_strides[rank - 1] = 1;
         for i in (0..rank - 1).rev() {
-            out_strides[i] = out_strides[i + 1] * out_dims[i + 1];
+            self.scratch_out_strides[i] = self.scratch_out_strides[i + 1] * out_dims[i + 1];
         }
+        let out_strides = &self.scratch_out_strides;
 
         match input.dtype() {
             DType::Float => {
@@ -73,7 +86,7 @@ impl Layer for Transpose {
                 }
             }
         }
-        output.dims = out_dims;
+        output.set_dims(&out_dims[..rank]);
         Ok(())
     }
 }

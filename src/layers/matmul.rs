@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::Result;
 use crate::Tensor;
-use crate::broadcast_shape;
+use crate::broadcast_shape_into;
 use crate::get_tensor;
 use crate::layers::Layer;
 
@@ -30,12 +30,13 @@ impl Layer for MatMul {
 
         let batch_dims_a = &a.dims[..a_rank - 2];
         let batch_dims_b = &b.dims[..b_rank - 2];
-        let batch_shape = broadcast_shape(batch_dims_a, batch_dims_b);
-        let batch_size: usize = batch_shape.iter().product();
-
-        let mut out_dims = batch_shape.clone();
-        out_dims.push(m);
-        out_dims.push(n);
+        let batch_ndim = batch_dims_a.len().max(batch_dims_b.len());
+        let mut out_dims = [0usize; 8];
+        broadcast_shape_into(batch_dims_a, batch_dims_b, &mut out_dims[..batch_ndim]);
+        let batch_size: usize = out_dims[..batch_ndim].iter().product();
+        let out_rank = batch_ndim + 2;
+        out_dims[batch_ndim] = m;
+        out_dims[batch_ndim + 1] = n;
 
         let a_f = a.floats();
         let b_f = b.floats();
@@ -69,7 +70,7 @@ impl Layer for MatMul {
             }
         }
 
-        output.dims = out_dims;
+        output.set_dims(&out_dims[..out_rank]);
         Ok(())
     }
 }
