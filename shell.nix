@@ -4,13 +4,13 @@ let
     "https://github.com/NixOS/nixpkgs/archive/c8ba0d39ac852f040726e33bb08c24a953934568.tar.gz"
   )) { };
 
-  xnnpack = pkgs.callPackage ./nix/xnnpack.nix { };
+  #xnnpack = pkgs.callPackage ./nix/xnnpack.nix { };
 in
 pkgs.mkShell {
-  XNNPACK_DIR = "${xnnpack}";
+  #XNNPACK_DIR = "${xnnpack}";
   LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
   buildInputs = [
-    xnnpack
+    #xnnpack
     pkgs.llvmPackages.clang
     pkgs.cargo
     pkgs.rustc

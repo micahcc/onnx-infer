@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use prost::Message;
 
-use crate::onnx::{ModelProto, NodeProto, TensorProto};
+use crate::onnx::ModelProto;
+use crate::onnx::NodeProto;
+use crate::onnx::TensorProto;
 
 #[derive(Debug)]
 pub enum InferenceError {
@@ -45,8 +47,7 @@ impl Tensor {
     }
 
     pub fn from_proto_bytes(bytes: &[u8]) -> Result<Self> {
-        let proto =
-            TensorProto::decode(bytes).map_err(InferenceError::ParseError)?;
+        let proto = TensorProto::decode(bytes).map_err(InferenceError::ParseError)?;
         Self::from_proto(&proto)
     }
 
@@ -68,8 +69,8 @@ fn extract_float_data(tensor: &TensorProto) -> Result<Vec<f32>> {
                     .chunks_exact(8)
                     .map(|chunk| {
                         i64::from_le_bytes([
-                            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5],
-                            chunk[6], chunk[7],
+                            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
+                            chunk[7],
                         ]) as f32
                     })
                     .collect())
@@ -89,9 +90,7 @@ fn extract_float_data(tensor: &TensorProto) -> Result<Vec<f32>> {
                 Ok(tensor
                     .raw_data
                     .chunks_exact(4)
-                    .map(|chunk| {
-                        f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
-                    })
+                    .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
                     .collect())
             }
         };
@@ -150,22 +149,27 @@ impl InferenceEngine {
         Ok(outputs)
     }
 
-    fn execute_node(
-        &self,
-        node: &NodeProto,
-        values: &mut HashMap<String, Tensor>,
-    ) -> Result<()> {
+    fn execute_node(&self, node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
         match node.op_type.as_str() {
             "Constant" => exec_constant(node, values),
             "Div" => exec_div(node, values),
             "Conv" => exec_conv(node, values),
             "Reshape" => exec_reshape(node, values),
             "Add" => exec_add(node, values),
+            "Sub" => exec_sub(node, values),
+            "Mul" => exec_mul(node, values),
             "Relu" => exec_relu(node, values),
+            "Clip" => exec_clip(node, values),
             "MaxPool" => exec_maxpool(node, values),
+            "GlobalAveragePool" => exec_global_avg_pool(node, values),
             "MatMul" => exec_matmul(node, values),
+            "Gemm" => exec_gemm(node, values),
             "Softmax" => exec_softmax(node, values),
             "Flatten" => exec_flatten(node, values),
+            "Shape" => exec_shape(node, values),
+            "Gather" => exec_gather(node, values),
+            "Unsqueeze" => exec_unsqueeze(node, values),
+            "Concat" => exec_concat(node, values),
             op => Err(InferenceError::UnsupportedOperator(op.to_string())),
         }
     }
@@ -179,10 +183,11 @@ fn get_attr_ints(node: &NodeProto, name: &str) -> Option<Vec<i64>> {
 }
 
 fn get_attr_int(node: &NodeProto, name: &str) -> Option<i64> {
-    node.attribute
-        .iter()
-        .find(|a| a.name == name)
-        .map(|a| a.i)
+    node.attribute.iter().find(|a| a.name == name).map(|a| a.i)
+}
+
+fn get_attr_float(node: &NodeProto, name: &str) -> Option<f32> {
+    node.attribute.iter().find(|a| a.name == name).map(|a| a.f)
 }
 
 fn get_attr_string(node: &NodeProto, name: &str) -> Option<String> {
@@ -226,8 +231,16 @@ fn broadcast_shape(a: &[usize], b: &[usize]) -> Vec<usize> {
     let max_len = a.len().max(b.len());
     let mut result = vec![1usize; max_len];
     for i in 0..max_len {
-        let da = if i < max_len - a.len() { 1 } else { a[i - (max_len - a.len())] };
-        let db = if i < max_len - b.len() { 1 } else { b[i - (max_len - b.len())] };
+        let da = if i < max_len - a.len() {
+            1
+        } else {
+            a[i - (max_len - a.len())]
+        };
+        let db = if i < max_len - b.len() {
+            1
+        } else {
+            b[i - (max_len - b.len())]
+        };
         result[i] = da.max(db);
     }
     result
@@ -296,6 +309,14 @@ fn exec_div(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()
     exec_binary_op(node, values, |a, b| a / b)
 }
 
+fn exec_sub(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    exec_binary_op(node, values, |a, b| a - b)
+}
+
+fn exec_mul(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    exec_binary_op(node, values, |a, b| a * b)
+}
+
 fn exec_add(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
     exec_binary_op(node, values, |a, b| a + b)
 }
@@ -310,9 +331,8 @@ fn exec_conv(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<(
         None
     };
 
-    let kernel_shape = get_attr_ints(node, "kernel_shape").unwrap_or_else(|| {
-        vec![weight.dims[2] as i64, weight.dims[3] as i64]
-    });
+    let kernel_shape = get_attr_ints(node, "kernel_shape")
+        .unwrap_or_else(|| vec![weight.dims[2] as i64, weight.dims[3] as i64]);
     let strides = get_attr_ints(node, "strides").unwrap_or_else(|| vec![1, 1]);
     let mut pads = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
     let dilations = get_attr_ints(node, "dilations").unwrap_or_else(|| vec![1, 1]);
@@ -445,7 +465,12 @@ fn exec_reshape(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resul
     }
 
     if let Some(idx) = infer_idx {
-        let known: usize = dims.iter().enumerate().filter(|&(i, _)| i != idx).map(|(_, &v)| v).product();
+        let known: usize = dims
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| i != idx)
+            .map(|(_, &v)| v)
+            .product();
         dims[idx] = total / known;
     }
 
@@ -456,6 +481,31 @@ fn exec_reshape(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resul
 fn exec_relu(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
     let input = get_tensor(values, &node.input[0])?;
     let data: Vec<f32> = input.data.iter().map(|&v| v.max(0.0)).collect();
+    values.insert(node.output[0].clone(), Tensor::new(input.dims, data));
+    Ok(())
+}
+
+fn exec_clip(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+
+    // Opset 11+: min/max are optional inputs (inputs[1], inputs[2])
+    // Opset 6: min/max are attributes
+    let min_val = if node.input.len() > 1 && !node.input[1].is_empty() {
+        get_tensor(values, &node.input[1])?.data[0]
+    } else {
+        get_attr_float(node, "min").unwrap_or(f32::NEG_INFINITY)
+    };
+    let max_val = if node.input.len() > 2 && !node.input[2].is_empty() {
+        get_tensor(values, &node.input[2])?.data[0]
+    } else {
+        get_attr_float(node, "max").unwrap_or(f32::INFINITY)
+    };
+
+    let data: Vec<f32> = input
+        .data
+        .iter()
+        .map(|&v| v.clamp(min_val, max_val))
+        .collect();
     values.insert(node.output[0].clone(), Tensor::new(input.dims, data));
     Ok(())
 }
@@ -579,7 +629,11 @@ fn exec_softmax(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resul
     let input = get_tensor(values, &node.input[0])?;
     let axis = get_attr_int(node, "axis").unwrap_or(-1);
     let rank = input.dims.len() as i64;
-    let axis = if axis < 0 { (rank + axis) as usize } else { axis as usize };
+    let axis = if axis < 0 {
+        (rank + axis) as usize
+    } else {
+        axis as usize
+    };
 
     let outer: usize = input.dims[..axis].iter().product();
     let dim = input.dims[axis];
@@ -625,11 +679,243 @@ fn exec_flatten(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resul
     Ok(())
 }
 
+fn exec_global_avg_pool(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+    // Input: [N, C, H, W] -> Output: [N, C, 1, 1]
+    let n = input.dims[0];
+    let c = input.dims[1];
+    let spatial: usize = input.dims[2..].iter().product();
+
+    let mut output = vec![0.0f32; n * c];
+    for batch in 0..n {
+        for ch in 0..c {
+            let offset = (batch * c + ch) * spatial;
+            let sum: f32 = input.data[offset..offset + spatial].iter().sum();
+            output[batch * c + ch] = sum / spatial as f32;
+        }
+    }
+
+    let mut out_dims = vec![n, c];
+    for _ in 2..input.dims.len() {
+        out_dims.push(1);
+    }
+    values.insert(node.output[0].clone(), Tensor::new(out_dims, output));
+    Ok(())
+}
+
+fn exec_gemm(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let a = get_tensor(values, &node.input[0])?;
+    let b = get_tensor(values, &node.input[1])?;
+    let c_tensor = if node.input.len() > 2 && !node.input[2].is_empty() {
+        Some(get_tensor(values, &node.input[2])?)
+    } else {
+        None
+    };
+
+    let alpha = get_attr_float(node, "alpha").unwrap_or(1.0);
+    let beta = get_attr_float(node, "beta").unwrap_or(1.0);
+    let trans_a = get_attr_int(node, "transA").unwrap_or(0) != 0;
+    let trans_b = get_attr_int(node, "transB").unwrap_or(0) != 0;
+
+    let (m, k_a) = if trans_a {
+        (a.dims[1], a.dims[0])
+    } else {
+        (a.dims[0], a.dims[1])
+    };
+    let (k_b, n) = if trans_b {
+        (b.dims[1], b.dims[0])
+    } else {
+        (b.dims[0], b.dims[1])
+    };
+    debug_assert_eq!(k_a, k_b);
+    let k = k_a;
+
+    let mut output = vec![0.0f32; m * n];
+    for i in 0..m {
+        for j in 0..n {
+            let mut sum = 0.0f32;
+            for p in 0..k {
+                let a_val = if trans_a {
+                    a.data[p * m + i]
+                } else {
+                    a.data[i * k + p]
+                };
+                let b_val = if trans_b {
+                    b.data[j * k + p]
+                } else {
+                    b.data[p * n + j]
+                };
+                sum += a_val * b_val;
+            }
+            output[i * n + j] = alpha * sum;
+        }
+    }
+
+    if let Some(c_tensor) = c_tensor {
+        // Broadcast-add C (typically [N] or [M, N])
+        let c_shape = broadcast_shape(&[m, n], &c_tensor.dims);
+        for i in 0..m {
+            for j in 0..n {
+                let idx = [i, j];
+                let ci = broadcast_index(&idx, &c_tensor.dims, &c_shape);
+                output[i * n + j] += beta * c_tensor.data[ci];
+            }
+        }
+    }
+
+    values.insert(node.output[0].clone(), Tensor::new(vec![m, n], output));
+    Ok(())
+}
+
+fn exec_shape(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+    let rank = input.dims.len();
+    let data: Vec<f32> = input.dims.iter().map(|&d| d as f32).collect();
+    values.insert(node.output[0].clone(), Tensor::new(vec![rank], data));
+    Ok(())
+}
+
+fn exec_gather(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+    let indices = get_tensor(values, &node.input[1])?;
+    let axis = get_attr_int(node, "axis").unwrap_or(0);
+    let rank = input.dims.len() as i64;
+    let axis = if axis < 0 {
+        (rank + axis) as usize
+    } else {
+        axis as usize
+    };
+
+    // For scalar index gathering from a 1-D tensor (common case: Shape -> Gather)
+    if indices.dims.is_empty()
+        || (indices.dims.len() == 1 && indices.dims[0] == 1)
+        || indices.numel() == 1
+    {
+        let idx = indices.data[0] as i64;
+        let idx = if idx < 0 {
+            input.dims[axis] as i64 + idx
+        } else {
+            idx
+        } as usize;
+
+        if input.dims.len() == 1 {
+            // Scalar output
+            values.insert(
+                node.output[0].clone(),
+                Tensor::new(vec![], vec![input.data[idx]]),
+            );
+        } else {
+            // Slice along axis
+            let outer: usize = input.dims[..axis].iter().product();
+            let inner: usize = input.dims[axis + 1..].iter().product();
+            let axis_size = input.dims[axis];
+            let mut data = Vec::with_capacity(outer * inner);
+            for o in 0..outer {
+                let base = o * axis_size * inner + idx * inner;
+                data.extend_from_slice(&input.data[base..base + inner]);
+            }
+            let mut out_dims: Vec<usize> = input.dims[..axis].to_vec();
+            out_dims.extend_from_slice(&input.dims[axis + 1..]);
+            if out_dims.is_empty() {
+                out_dims = vec![];
+            }
+            values.insert(node.output[0].clone(), Tensor::new(out_dims, data));
+        }
+    } else {
+        return Err(InferenceError::UnsupportedOperator(
+            "Gather with non-scalar indices".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn exec_unsqueeze(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+
+    // Opset 13+: axes from second input; earlier: from attribute
+    let axes: Vec<i64> = if node.input.len() > 1 && !node.input[1].is_empty() {
+        let axes_tensor = get_tensor(values, &node.input[1])?;
+        axes_tensor.data.iter().map(|&v| v as i64).collect()
+    } else {
+        get_attr_ints(node, "axes").unwrap_or_default()
+    };
+
+    let out_rank = input.dims.len() + axes.len();
+    let mut out_dims = input.dims.clone();
+    let mut sorted_axes: Vec<usize> = axes
+        .iter()
+        .map(|&a| {
+            if a < 0 {
+                (out_rank as i64 + a) as usize
+            } else {
+                a as usize
+            }
+        })
+        .collect();
+    sorted_axes.sort();
+    for &ax in &sorted_axes {
+        out_dims.insert(ax, 1);
+    }
+
+    values.insert(node.output[0].clone(), Tensor::new(out_dims, input.data));
+    Ok(())
+}
+
+fn exec_concat(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let axis = get_attr_int(node, "axis").unwrap_or(0);
+
+    let tensors: Vec<Tensor> = node
+        .input
+        .iter()
+        .filter(|name| !name.is_empty())
+        .map(|name| get_tensor(values, name))
+        .collect::<Result<Vec<_>>>()?;
+
+    if tensors.is_empty() {
+        return Err(InferenceError::InvalidModel("Concat with no inputs".into()));
+    }
+
+    let rank = tensors[0].dims.len();
+    let axis = if axis < 0 {
+        (rank as i64 + axis) as usize
+    } else {
+        axis as usize
+    };
+
+    let mut out_dims = tensors[0].dims.clone();
+    out_dims[axis] = tensors.iter().map(|t| t.dims[axis]).sum();
+
+    let outer: usize = out_dims[..axis].iter().product();
+    let inner: usize = out_dims[axis + 1..].iter().product();
+    let total = out_dims.iter().product::<usize>();
+    let mut data = vec![0.0f32; total];
+
+    let mut axis_offset = 0;
+    for t in &tensors {
+        let t_axis = t.dims[axis];
+        for o in 0..outer {
+            for a in 0..t_axis {
+                let src_base = (o * t_axis + a) * inner;
+                let dst_base = (o * out_dims[axis] + axis_offset + a) * inner;
+                data[dst_base..dst_base + inner]
+                    .copy_from_slice(&t.data[src_base..src_base + inner]);
+            }
+        }
+        axis_offset += t_axis;
+    }
+
+    values.insert(node.output[0].clone(), Tensor::new(out_dims, data));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
     use std::path::Path;
+
+    use approx::assert_relative_eq;
+
+    use super::*;
 
     const FIXTURES_DIR: &str = env!("FIXTURES_DIR");
 
@@ -661,13 +947,8 @@ mod tests {
 
         assert_eq!(output.dims, expected.dims);
 
-        for (i, (got, want)) in output.data.iter().zip(expected.data.iter()).enumerate() {
-            let diff = (got - want).abs();
-            let tol = 1e-4 * want.abs().max(1.0);
-            assert!(
-                diff < tol,
-                "output[{i}]: got {got}, expected {want}, diff {diff}"
-            );
+        for (got, want) in output.data.iter().zip(expected.data.iter()) {
+            assert_relative_eq!(got, want, max_relative = 1e-3, epsilon = 1e-5);
         }
 
         let got_class = output
@@ -707,5 +988,11 @@ mod tests {
     #[test]
     fn test_mnist12_set_0() {
         run_fixture("mnist-12", "mnist-12.onnx", 0);
+    }
+
+    // mobilenetv2-12 (opset 12): depthwise conv, clip, gemm, shape/gather/unsqueeze/concat
+    #[test]
+    fn test_mobilenetv2_set_0() {
+        run_fixture("mobilenetv2-12", "mobilenetv2-12.onnx", 0);
     }
 }

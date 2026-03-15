@@ -52,7 +52,11 @@ fn load_input(
             };
 
             let (w, h) = (img.width() as usize, img.height() as usize);
-            let channels = if grayscale { 1 } else { img.color().channel_count() as usize };
+            let channels = if grayscale {
+                1
+            } else {
+                img.color().channel_count() as usize
+            };
 
             let (n, c, th, tw) = if let Some(shape) = shape_override {
                 (shape[0], shape[1], shape[2], shape[3])
@@ -62,11 +66,7 @@ fn load_input(
 
             // Resize if needed
             let img = if th != h || tw != w {
-                img.resize_exact(
-                    tw as u32,
-                    th as u32,
-                    image::imageops::FilterType::Lanczos3,
-                )
+                img.resize_exact(tw as u32, th as u32, image::imageops::FilterType::Lanczos3)
             } else {
                 img
             };
@@ -119,7 +119,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if tensor.data.len() <= 100 {
             println!("  values: {:?}", tensor.data);
         } else {
-            println!("  values: [{}, {}, ... ({} total)]", tensor.data[0], tensor.data[1], tensor.data.len());
+            println!(
+                "  values: [{}, {}, ... ({} total)]",
+                tensor.data[0],
+                tensor.data[1],
+                tensor.data.len()
+            );
         }
         // Print argmax for classification outputs
         if tensor.dims.len() == 2 && tensor.dims[0] == 1 {
