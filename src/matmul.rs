@@ -9,7 +9,11 @@ use crate::get_attr_int;
 use crate::get_tensor;
 use crate::onnx::NodeProto;
 
-pub fn exec_matmul(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+pub fn exec_matmul(
+    node: &NodeProto,
+    values: &HashMap<String, Tensor>,
+    output: &mut Tensor,
+) -> Result<()> {
     let a = get_tensor(values, &node.input[0])?;
     let b = get_tensor(values, &node.input[1])?;
 
@@ -31,7 +35,9 @@ pub fn exec_matmul(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Re
 
     let a_f = a.floats();
     let b_f = b.floats();
-    let mut output = vec![0.0f32; batch_size * m * n];
+    let total = batch_size * m * n;
+    let buf = output.as_mut_f32(total);
+    buf.fill(0.0);
 
     let a_batch_stride = m * k;
     let b_batch_stride = k * n;
@@ -54,16 +60,20 @@ pub fn exec_matmul(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Re
                 for p in 0..k {
                     sum += a_f[a_off + i * k + p] * b_f[b_off + p * n + j];
                 }
-                output[batch * o_batch_stride + i * n + j] = sum;
+                buf[batch * o_batch_stride + i * n + j] = sum;
             }
         }
     }
 
-    values.insert(node.output[0].clone(), Tensor::new(out_dims, output));
+    output.dims = out_dims;
     Ok(())
 }
 
-pub fn exec_gemm(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+pub fn exec_gemm(
+    node: &NodeProto,
+    values: &HashMap<String, Tensor>,
+    output: &mut Tensor,
+) -> Result<()> {
     let a = get_tensor(values, &node.input[0])?;
     let b = get_tensor(values, &node.input[1])?;
     let c_tensor = if node.input.len() > 2 && !node.input[2].is_empty() {
@@ -92,7 +102,7 @@ pub fn exec_gemm(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resu
 
     let a_f = a.floats();
     let b_f = b.floats();
-    let mut output = vec![0.0f32; m * n];
+    let buf = output.as_mut_f32(m * n);
     for i in 0..m {
         for j in 0..n {
             let mut sum = 0.0f32;
@@ -109,7 +119,7 @@ pub fn exec_gemm(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resu
                 };
                 sum += a_val * b_val;
             }
-            output[i * n + j] = alpha * sum;
+            buf[i * n + j] = alpha * sum;
         }
     }
 
@@ -120,11 +130,11 @@ pub fn exec_gemm(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resu
             for j in 0..n {
                 let idx = [i, j];
                 let ci = broadcast_index(&idx, &c_tensor.dims, &c_shape);
-                output[i * n + j] += beta * c_f[ci];
+                buf[i * n + j] += beta * c_f[ci];
             }
         }
     }
 
-    values.insert(node.output[0].clone(), Tensor::new(vec![m, n], output));
+    output.dims = vec![m, n];
     Ok(())
 }

@@ -8,7 +8,11 @@ use crate::get_attr_string;
 use crate::get_tensor;
 use crate::onnx::NodeProto;
 
-pub fn exec_maxpool(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+pub fn exec_maxpool(
+    node: &NodeProto,
+    values: &HashMap<String, Tensor>,
+    output: &mut Tensor,
+) -> Result<()> {
     let input = get_tensor(values, &node.input[0])?;
 
     let kernel_shape = get_attr_ints(node, "kernel_shape")
@@ -56,7 +60,9 @@ pub fn exec_maxpool(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
     let w_out = (w_in + pads[1] as usize + pads[3] as usize - kw) / sw + 1;
 
     let input_f = input.floats();
-    let mut output = vec![f32::NEG_INFINITY; n * c * h_out * w_out];
+    let total = n * c * h_out * w_out;
+    let buf = output.as_mut_f32(total);
+    buf.fill(f32::NEG_INFINITY);
 
     for batch in 0..n {
         for ch in 0..c {
@@ -80,37 +86,38 @@ pub fn exec_maxpool(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
                         }
                     }
                     let out_idx = ((batch * c + ch) * h_out + oh) * w_out + ow;
-                    output[out_idx] = max_val;
+                    buf[out_idx] = max_val;
                 }
             }
         }
     }
 
-    values.insert(
-        node.output[0].clone(),
-        Tensor::new(vec![n, c, h_out, w_out], output),
-    );
+    output.dims = vec![n, c, h_out, w_out];
     Ok(())
 }
 
-pub fn exec_global_avg_pool(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+pub fn exec_global_avg_pool(
+    node: &NodeProto,
+    values: &HashMap<String, Tensor>,
+    output: &mut Tensor,
+) -> Result<()> {
     let input = get_tensor(values, &node.input[0])?;
     let n = input.dims[0];
     let c = input.dims[1];
     let spatial: usize = input.dims[2..].iter().product();
 
     let input_f = input.floats();
-    let mut output = vec![0.0f32; n * c];
+    let buf = output.as_mut_f32(n * c);
     for batch in 0..n {
         for ch in 0..c {
             let offset = (batch * c + ch) * spatial;
             let sum: f32 = input_f[offset..offset + spatial].iter().sum();
-            output[batch * c + ch] = sum / spatial as f32;
+            buf[batch * c + ch] = sum / spatial as f32;
         }
     }
 
     let mut out_dims = vec![n, c];
     out_dims.resize(input.dims.len(), 1);
-    values.insert(node.output[0].clone(), Tensor::new(out_dims, output));
+    output.dims = out_dims;
     Ok(())
 }

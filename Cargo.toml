@@ -5,13 +5,24 @@ edition = "2024"
 description = "Pure Rust ONNX inference engine for computer vision models"
 license = "BSD-3-Clause"
 
+[features]
+cli = ["dep:clap", "dep:image"]
+
 [dependencies]
 prost = "0"
-clap = { version = "4", features = ["derive"] }
-image = "0.25"
+clap = { version = "4", features = ["derive"], optional = true }
+image = { version = "0.25", optional = true }
+tracing = "0.1"
 
 [dev-dependencies]
 approx = "0.5"
+tracing-chrome = "0.7"
+tracing-subscriber = "0.3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "inference"
+harness = false
 
 [build-dependencies]
 prost-build = "0"

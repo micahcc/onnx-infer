@@ -8,7 +8,11 @@ use crate::get_attr_string;
 use crate::get_tensor;
 use crate::onnx::NodeProto;
 
-pub fn exec_conv(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+pub fn exec_conv(
+    node: &NodeProto,
+    values: &HashMap<String, Tensor>,
+    output: &mut Tensor,
+) -> Result<()> {
     let input = get_tensor(values, &node.input[0])?;
     let weight = get_tensor(values, &node.input[1])?;
 
@@ -72,7 +76,9 @@ pub fn exec_conv(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resu
 
     let input_f = input.floats();
     let weight_f = weight.floats();
-    let mut output = vec![0.0f32; n * c_out * h_out * w_out];
+    let total = n * c_out * h_out * w_out;
+    let buf = output.as_mut_f32(total);
+    buf.fill(0.0);
 
     for batch in 0..n {
         for g in 0..group {
@@ -107,16 +113,13 @@ pub fn exec_conv(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resu
                             sum += bias.floats()[abs_oc];
                         }
                         let out_idx = ((batch * c_out + abs_oc) * h_out + oh) * w_out + ow;
-                        output[out_idx] = sum;
+                        buf[out_idx] = sum;
                     }
                 }
             }
         }
     }
 
-    values.insert(
-        node.output[0].clone(),
-        Tensor::new(vec![n, c_out, h_out, w_out], output),
-    );
+    output.dims = vec![n, c_out, h_out, w_out];
     Ok(())
 }

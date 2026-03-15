@@ -41,60 +41,85 @@ impl std::error::Error for InferenceError {}
 
 pub type Result<T> = std::result::Result<T, InferenceError>;
 
-#[derive(Debug, Clone)]
-pub enum TensorData {
-    Float(Vec<f32>),
-    Int64(Vec<i64>),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DType {
+    Float,
+    Int64,
 }
 
 #[derive(Debug, Clone)]
 pub struct Tensor {
     pub dims: Vec<usize>,
-    pub data: TensorData,
+    pub dtype: DType,
+    f32_buf: Vec<f32>,
+    i64_buf: Vec<i64>,
 }
 
 impl Tensor {
     pub fn new(dims: Vec<usize>, data: Vec<f32>) -> Self {
         Self {
             dims,
-            data: TensorData::Float(data),
+            dtype: DType::Float,
+            f32_buf: data,
+            i64_buf: vec![],
         }
     }
 
     pub fn new_i64(dims: Vec<usize>, data: Vec<i64>) -> Self {
         Self {
             dims,
-            data: TensorData::Int64(data),
+            dtype: DType::Int64,
+            f32_buf: vec![],
+            i64_buf: data,
         }
     }
 
-    /// Access float data by reference. Panics if tensor holds Int64 data.
+    /// Read-only access to float data. Panics if dtype is Int64.
     pub fn floats(&self) -> &[f32] {
-        match &self.data {
-            TensorData::Float(d) => d,
-            TensorData::Int64(_) => panic!("expected float tensor, got int64"),
+        assert!(self.dtype == DType::Float, "expected float tensor, got int64");
+        &self.f32_buf
+    }
+
+    /// Read-only access to i64 data. Panics if dtype is Float.
+    pub fn ints(&self) -> &[i64] {
+        assert!(self.dtype == DType::Int64, "expected int64 tensor, got float");
+        &self.i64_buf
+    }
+
+    /// Consume the tensor and return the f32 data. Converts from i64 if needed.
+    pub fn into_f32_vec(self) -> Vec<f32> {
+        match self.dtype {
+            DType::Float => self.f32_buf,
+            DType::Int64 => self.i64_buf.iter().map(|&v| v as f32).collect(),
         }
     }
 
-    /// Convert data to Vec<f32>, regardless of storage type.
-    pub fn to_f32_vec(&self) -> Vec<f32> {
-        match &self.data {
-            TensorData::Float(d) => d.clone(),
-            TensorData::Int64(d) => d.iter().map(|&v| v as f32).collect(),
+    /// Consume the tensor and return the i64 data. Converts from f32 if needed.
+    pub fn into_i64_vec(self) -> Vec<i64> {
+        match self.dtype {
+            DType::Float => self.f32_buf.iter().map(|&v| v as i64).collect(),
+            DType::Int64 => self.i64_buf,
         }
     }
 
-    /// Convert data to Vec<i64>, regardless of storage type.
-    pub fn to_i64_vec(&self) -> Vec<i64> {
-        match &self.data {
-            TensorData::Float(d) => d.iter().map(|&v| v as i64).collect(),
-            TensorData::Int64(d) => d.clone(),
+    /// Read a single element as f32, regardless of storage type.
+    pub fn f32_at(&self, idx: usize) -> f32 {
+        match self.dtype {
+            DType::Float => self.f32_buf[idx],
+            DType::Int64 => self.i64_buf[idx] as f32,
+        }
+    }
+
+    /// Read a single element as i64, regardless of storage type.
+    pub fn i64_at(&self, idx: usize) -> i64 {
+        match self.dtype {
+            DType::Float => self.f32_buf[idx] as i64,
+            DType::Int64 => self.i64_buf[idx],
         }
     }
 
     pub fn from_proto(proto: &TensorProto) -> Result<Self> {
         let dims: Vec<usize> = proto.dims.iter().map(|&d| d as usize).collect();
-        // INT32 and INT64 are stored natively to preserve precision
         if proto.data_type == 6 || proto.data_type == 7 {
             let data = extract_int_data(proto)?;
             Ok(Self::new_i64(dims, data))
@@ -111,6 +136,53 @@ impl Tensor {
 
     pub fn numel(&self) -> usize {
         self.dims.iter().product()
+    }
+
+    /// Get the f32 output buffer, resized to `len`. Both buffers are preserved across type changes.
+    pub fn as_mut_f32(&mut self, len: usize) -> &mut Vec<f32> {
+        self.dtype = DType::Float;
+        self.f32_buf.resize(len, 0.0);
+        &mut self.f32_buf
+    }
+
+    /// Get the i64 output buffer, resized to `len`. Both buffers are preserved across type changes.
+    pub fn as_mut_i64(&mut self, len: usize) -> &mut Vec<i64> {
+        self.dtype = DType::Int64;
+        self.i64_buf.resize(len, 0);
+        &mut self.i64_buf
+    }
+
+    /// Replace the f32 buffer with the given data, setting dtype to Float.
+    pub fn data_replace_f32(&mut self, data: Vec<f32>) {
+        self.dtype = DType::Float;
+        self.f32_buf = data;
+    }
+
+    /// Copy data from another tensor, reusing existing buffer allocation.
+    pub fn copy_from(&mut self, other: &Tensor) {
+        self.dims.clone_from(&other.dims);
+        self.dtype = other.dtype;
+        match other.dtype {
+            DType::Float => {
+                self.f32_buf.clear();
+                self.f32_buf.extend_from_slice(&other.f32_buf);
+            }
+            DType::Int64 => {
+                self.i64_buf.clear();
+                self.i64_buf.extend_from_slice(&other.i64_buf);
+            }
+        }
+    }
+}
+
+impl Default for Tensor {
+    fn default() -> Self {
+        Self {
+            dims: vec![],
+            dtype: DType::Float,
+            f32_buf: vec![],
+            i64_buf: vec![],
+        }
     }
 }
 
@@ -208,6 +280,7 @@ impl InferenceEngine {
         inputs: HashMap<String, Tensor>,
         output_names: &[String],
     ) -> Result<HashMap<String, Tensor>> {
+        let _span = tracing::trace_span!("inference").entered();
         let graph = self
             .model
             .graph
@@ -245,48 +318,73 @@ impl InferenceEngine {
 }
 
 pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let _span = tracing::trace_span!("op", op = %node.op_type, name = %node.name).entered();
+
+    // Multi-output ops handle the map directly
+    if node.op_type == "Loop" {
+        return shape::exec_loop(node, values);
+    }
+
+    if node.output.is_empty() || node.output[0].is_empty() {
+        return Ok(());
+    }
+
+    // Single-output ops: remove output tensor (reuse allocation), dispatch, reinsert
+    let out_name = node.output[0].clone();
+    let mut output = values.remove(&out_name).unwrap_or_default();
+
+    let result = dispatch_node(node, values, &mut output);
+
+    values.insert(out_name, output);
+    result
+}
+
+fn dispatch_node(
+    node: &NodeProto,
+    values: &HashMap<String, Tensor>,
+    output: &mut Tensor,
+) -> Result<()> {
     match node.op_type.as_str() {
-        "Constant" => shape::exec_constant(node, values),
-        "Div" => binary::exec_div(node, values),
-        "Conv" => conv::exec_conv(node, values),
-        "Reshape" => shape::exec_reshape(node, values),
-        "Add" => binary::exec_add(node, values),
-        "Sub" => binary::exec_sub(node, values),
-        "Mul" => binary::exec_mul(node, values),
-        "Relu" => activation::exec_relu(node, values),
-        "LeakyRelu" => activation::exec_leaky_relu(node, values),
-        "BatchNormalization" => activation::exec_batch_normalization(node, values),
-        "Clip" => activation::exec_clip(node, values),
-        "MaxPool" => pool::exec_maxpool(node, values),
-        "GlobalAveragePool" => pool::exec_global_avg_pool(node, values),
-        "MatMul" => matmul::exec_matmul(node, values),
-        "Gemm" => matmul::exec_gemm(node, values),
-        "Softmax" => activation::exec_softmax(node, values),
-        "Flatten" => shape::exec_flatten(node, values),
-        "Shape" => shape::exec_shape(node, values),
-        "Gather" => shape::exec_gather(node, values),
-        "Unsqueeze" => shape::exec_unsqueeze(node, values),
-        "Concat" => shape::exec_concat(node, values),
-        "QuantizeLinear" => quantize::exec_quantize_linear(node, values),
-        "DequantizeLinear" => quantize::exec_dequantize_linear(node, values),
-        "QLinearConv" => quantize::exec_qlinear_conv(node, values),
-        "QLinearAdd" => quantize::exec_qlinear_add(node, values),
-        "QLinearMatMul" => quantize::exec_qlinear_matmul(node, values),
-        "QLinearGlobalAveragePool" => quantize::exec_qlinear_global_avg_pool(node, values),
-        "Sigmoid" => activation::exec_sigmoid(node, values),
-        "Exp" => activation::exec_exp(node, values),
-        "Ceil" => activation::exec_ceil(node, values),
-        "Round" => activation::exec_round(node, values),
-        "Identity" => shape::exec_identity(node, values),
-        "Cast" => shape::exec_cast(node, values),
-        "Transpose" => shape::exec_transpose(node, values),
-        "Squeeze" => shape::exec_squeeze(node, values),
-        "Slice" => shape::exec_slice(node, values),
-        "Tile" => shape::exec_tile(node, values),
-        "Resize" => shape::exec_resize(node, values),
-        "ReduceMin" => shape::exec_reduce_min(node, values),
-        "Loop" => shape::exec_loop(node, values),
-        "NonMaxSuppression" => shape::exec_nms(node, values),
+        "Constant" => shape::exec_constant(node, values, output),
+        "Div" => binary::exec_div(node, values, output),
+        "Conv" => conv::exec_conv(node, values, output),
+        "Reshape" => shape::exec_reshape(node, values, output),
+        "Add" => binary::exec_add(node, values, output),
+        "Sub" => binary::exec_sub(node, values, output),
+        "Mul" => binary::exec_mul(node, values, output),
+        "Relu" => activation::exec_relu(node, values, output),
+        "LeakyRelu" => activation::exec_leaky_relu(node, values, output),
+        "BatchNormalization" => activation::exec_batch_normalization(node, values, output),
+        "Clip" => activation::exec_clip(node, values, output),
+        "MaxPool" => pool::exec_maxpool(node, values, output),
+        "GlobalAveragePool" => pool::exec_global_avg_pool(node, values, output),
+        "MatMul" => matmul::exec_matmul(node, values, output),
+        "Gemm" => matmul::exec_gemm(node, values, output),
+        "Softmax" => activation::exec_softmax(node, values, output),
+        "Flatten" => shape::exec_flatten(node, values, output),
+        "Shape" => shape::exec_shape(node, values, output),
+        "Gather" => shape::exec_gather(node, values, output),
+        "Unsqueeze" => shape::exec_unsqueeze(node, values, output),
+        "Concat" => shape::exec_concat(node, values, output),
+        "QuantizeLinear" => quantize::exec_quantize_linear(node, values, output),
+        "DequantizeLinear" => quantize::exec_dequantize_linear(node, values, output),
+        "QLinearConv" => quantize::exec_qlinear_conv(node, values, output),
+        "QLinearAdd" => quantize::exec_qlinear_add(node, values, output),
+        "QLinearMatMul" => quantize::exec_qlinear_matmul(node, values, output),
+        "QLinearGlobalAveragePool" => quantize::exec_qlinear_global_avg_pool(node, values, output),
+        "Sigmoid" => activation::exec_sigmoid(node, values, output),
+        "Exp" => activation::exec_exp(node, values, output),
+        "Ceil" => activation::exec_ceil(node, values, output),
+        "Round" => activation::exec_round(node, values, output),
+        "Identity" => shape::exec_identity(node, values, output),
+        "Cast" => shape::exec_cast(node, values, output),
+        "Transpose" => shape::exec_transpose(node, values, output),
+        "Squeeze" => shape::exec_squeeze(node, values, output),
+        "Slice" => shape::exec_slice(node, values, output),
+        "Tile" => shape::exec_tile(node, values, output),
+        "Resize" => shape::exec_resize(node, values, output),
+        "ReduceMin" => shape::exec_reduce_min(node, values, output),
+        "NonMaxSuppression" => shape::exec_nms(node, values, output),
         op => Err(InferenceError::UnsupportedOperator(op.to_string())),
     }
 }
@@ -321,10 +419,9 @@ pub fn get_attr_string(node: &NodeProto, name: &str) -> Option<String> {
         })
 }
 
-pub fn get_tensor(values: &HashMap<String, Tensor>, name: &str) -> Result<Tensor> {
+pub fn get_tensor<'a>(values: &'a HashMap<String, Tensor>, name: &str) -> Result<&'a Tensor> {
     values
         .get(name)
-        .cloned()
         .ok_or_else(|| InferenceError::InvalidModel(format!("Tensor '{name}' not found")))
 }
 
@@ -365,6 +462,8 @@ mod tests {
     use std::path::Path;
 
     use approx::assert_relative_eq;
+    use tracing_chrome::ChromeLayerBuilder;
+    use tracing_subscriber::prelude::*;
 
     use super::*;
 
@@ -372,6 +471,24 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures")
             .join(name)
+    }
+
+    fn setup_tracing(
+        test_name: &str,
+    ) -> (
+        tracing_chrome::FlushGuard,
+        tracing::subscriber::DefaultGuard,
+    ) {
+        let trace_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("traces");
+        fs::create_dir_all(&trace_dir).ok();
+        let trace_path = trace_dir.join(format!("{test_name}.json"));
+        let (chrome_layer, flush_guard) = ChromeLayerBuilder::new()
+            .file(trace_path)
+            .include_args(true)
+            .build();
+        let subscriber = tracing_subscriber::registry().with(chrome_layer);
+        let default_guard = tracing::subscriber::set_default(subscriber);
+        (flush_guard, default_guard)
     }
 
     /// Run a model fixture against its bundled test data set.
@@ -483,36 +600,43 @@ mod tests {
 
     #[test]
     fn test_mnist1_set_0() {
+        let _t = setup_tracing("mnist1_set_0");
         run_fixture(&fixture("mnist-1"), "model.onnx", 0);
     }
 
     #[test]
     fn test_mnist1_set_1() {
+        let _t = setup_tracing("mnist1_set_1");
         run_fixture(&fixture("mnist-1"), "model.onnx", 1);
     }
 
     #[test]
     fn test_mnist1_set_2() {
+        let _t = setup_tracing("mnist1_set_2");
         run_fixture(&fixture("mnist-1"), "model.onnx", 2);
     }
 
     #[test]
     fn test_mnist7_set_0() {
+        let _t = setup_tracing("mnist7_set_0");
         run_fixture(&fixture("mnist-7"), "model.onnx", 0);
     }
 
     #[test]
     fn test_mnist8_set_0() {
+        let _t = setup_tracing("mnist8_set_0");
         run_fixture(&fixture("mnist-8"), "model.onnx", 0);
     }
 
     #[test]
     fn test_mnist12_set_0() {
+        let _t = setup_tracing("mnist12_set_0");
         run_fixture(&fixture("mnist-12"), "mnist-12.onnx", 0);
     }
 
     #[test]
     fn test_mnist12_int8_set_0() {
+        let _t = setup_tracing("mnist12_int8_set_0");
         run_quantized_fixture(&fixture("mnist-12-int8"), "mnist-12-int8.onnx", 0);
     }
 
@@ -520,16 +644,19 @@ mod tests {
 
     #[test]
     fn test_mobilenetv2_7_set_0() {
+        let _t = setup_tracing("mobilenetv2_7_set_0");
         run_fixture(&fixture("mobilenetv2-7"), "mobilenetv2-7.onnx", 0);
     }
 
     #[test]
     fn test_mobilenetv2_12_set_0() {
+        let _t = setup_tracing("mobilenetv2_12_set_0");
         run_fixture(&fixture("mobilenetv2-12"), "mobilenetv2-12.onnx", 0);
     }
 
     #[test]
     fn test_mobilenetv2_12_int8_set_0() {
+        let _t = setup_tracing("mobilenetv2_12_int8_set_0");
         run_quantized_fixture(
             &fixture("mobilenetv2-12-int8"),
             "mobilenetv2-12-int8.onnx",
@@ -539,6 +666,7 @@ mod tests {
 
     #[test]
     fn test_mobilenetv2_12_qdq_set_0() {
+        let _t = setup_tracing("mobilenetv2_12_qdq_set_0");
         run_quantized_fixture(&fixture("mobilenetv2-12-qdq"), "mobilenetv2-12-qdq.onnx", 0);
     }
 
@@ -546,11 +674,13 @@ mod tests {
 
     #[test]
     fn test_tinyyolov2_7_set_0() {
+        let _t = setup_tracing("tinyyolov2_7_set_0");
         run_fixture(&fixture("tinyyolov2-7"), "model.onnx", 0);
     }
 
     #[test]
     fn test_tinyyolov2_8_set_0() {
+        let _t = setup_tracing("tinyyolov2_8_set_0");
         run_fixture(&fixture("tinyyolov2-8"), "model.onnx", 0);
     }
 
@@ -589,13 +719,25 @@ mod tests {
                     .unwrap_or_else(|| panic!("missing output {name}"));
                 assert_eq!(output.dims, expected.dims, "shape mismatch for {name}");
 
-                let got = output.to_f32_vec();
-                let want = expected.to_f32_vec();
-                for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
-                    assert!(
-                        (g - w).abs() < 1e-3 || (g - w).abs() / w.abs().max(1e-6) < 1e-3,
-                        "output {name}[{j}]: got {g}, want {w}"
-                    );
+                match output.dtype {
+                    DType::Float => {
+                        let got = output.floats();
+                        let want = expected.floats();
+                        for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                            assert!(
+                                (g - w).abs() < 1e-3
+                                    || (g - w).abs() / w.abs().max(1e-6) < 1e-3,
+                                "output {name}[{j}]: got {g}, want {w}"
+                            );
+                        }
+                    }
+                    DType::Int64 => {
+                        let got = output.ints();
+                        let want = expected.ints();
+                        for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                            assert_eq!(g, w, "output {name}[{j}]: got {g}, want {w}");
+                        }
+                    }
                 }
             }
         }
@@ -603,6 +745,7 @@ mod tests {
 
     #[test]
     fn test_tinyyolov3_11_set_0() {
+        let _t = setup_tracing("tinyyolov3_11_set_0");
         run_multi_io_fixture(&fixture("tiny-yolov3-11"), "yolov3-tiny.onnx", 0);
     }
 }
