@@ -56,16 +56,54 @@ impl Tensor {
 }
 
 fn extract_float_data(tensor: &TensorProto) -> Result<Vec<f32>> {
+    // data_type: 1=FLOAT, 7=INT64, 6=INT32
+    let dtype = tensor.data_type;
+
     if !tensor.raw_data.is_empty() {
-        let data: Vec<f32> = tensor
-            .raw_data
-            .chunks_exact(4)
-            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-            .collect();
-        return Ok(data);
+        return match dtype {
+            7 => {
+                // INT64: 8 bytes each
+                Ok(tensor
+                    .raw_data
+                    .chunks_exact(8)
+                    .map(|chunk| {
+                        i64::from_le_bytes([
+                            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5],
+                            chunk[6], chunk[7],
+                        ]) as f32
+                    })
+                    .collect())
+            }
+            6 => {
+                // INT32: 4 bytes each
+                Ok(tensor
+                    .raw_data
+                    .chunks_exact(4)
+                    .map(|chunk| {
+                        i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as f32
+                    })
+                    .collect())
+            }
+            _ => {
+                // FLOAT (1) and others stored as 4-byte floats
+                Ok(tensor
+                    .raw_data
+                    .chunks_exact(4)
+                    .map(|chunk| {
+                        f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+                    })
+                    .collect())
+            }
+        };
     }
     if !tensor.float_data.is_empty() {
         return Ok(tensor.float_data.clone());
+    }
+    if !tensor.int64_data.is_empty() {
+        return Ok(tensor.int64_data.iter().map(|&v| v as f32).collect());
+    }
+    if !tensor.int32_data.is_empty() {
+        return Ok(tensor.int32_data.iter().map(|&v| v as f32).collect());
     }
     Ok(vec![])
 }
@@ -595,36 +633,34 @@ mod tests {
 
     const FIXTURES_DIR: &str = env!("FIXTURES_DIR");
 
-    fn load_mnist_test_set(set_idx: usize) -> (Tensor, Tensor) {
-        let dir = Path::new(FIXTURES_DIR)
-            .join("mnist")
-            .join(format!("test_data_set_{set_idx}"));
+    /// Run a model fixture against its bundled test data set.
+    /// `fixture_dir` is relative to FIXTURES_DIR.
+    /// `model_file` is the .onnx filename within that dir.
+    fn run_fixture(fixture_dir: &str, model_file: &str, test_set: usize) {
+        let base = Path::new(FIXTURES_DIR).join(fixture_dir);
+        let model_bytes = fs::read(base.join(model_file)).expect("read model");
+        let engine = InferenceEngine::from_bytes(&model_bytes).expect("load model");
 
-        let input_bytes = fs::read(dir.join("input_0.pb")).expect("read input");
-        let output_bytes = fs::read(dir.join("output_0.pb")).expect("read output");
-
+        let test_dir = base.join(format!("test_data_set_{test_set}"));
+        let input_bytes = fs::read(test_dir.join("input_0.pb")).expect("read input");
+        let output_bytes = fs::read(test_dir.join("output_0.pb")).expect("read output");
         let input = Tensor::from_proto_bytes(&input_bytes).expect("parse input");
         let expected = Tensor::from_proto_bytes(&output_bytes).expect("parse output");
 
-        (input, expected)
-    }
-
-    fn run_mnist(set_idx: usize) {
-        let model_path = Path::new(FIXTURES_DIR).join("mnist").join("model.onnx");
-        let model_bytes = fs::read(&model_path).expect("read model");
-        let engine = InferenceEngine::from_bytes(&model_bytes).expect("load model");
-
-        let (input, expected) = load_mnist_test_set(set_idx);
+        // Discover input name from model graph
+        let model = ModelProto::decode(&model_bytes[..]).unwrap();
+        let graph = model.graph.as_ref().unwrap();
+        let input_name = graph.input[0].name.clone();
+        let output_name = graph.output[0].name.clone();
 
         let mut inputs = HashMap::new();
-        inputs.insert("Input73".to_string(), input);
+        inputs.insert(input_name, input);
 
         let outputs = engine.run(inputs).expect("inference");
-        let output = &outputs["Plus422_Output_0"];
+        let output = &outputs[&output_name];
 
         assert_eq!(output.dims, expected.dims);
 
-        // Check that values match within tolerance
         for (i, (got, want)) in output.data.iter().zip(expected.data.iter()).enumerate() {
             let diff = (got - want).abs();
             let tol = 1e-4 * want.abs().max(1.0);
@@ -634,7 +670,6 @@ mod tests {
             );
         }
 
-        // Check argmax matches
         let got_class = output
             .data
             .iter()
@@ -652,18 +687,25 @@ mod tests {
         assert_eq!(got_class, expected_class);
     }
 
+    // mnist-1 (opset 1): weights as Constant nodes, legacy broadcast
     #[test]
-    fn test_mnist_set_0() {
-        run_mnist(0);
+    fn test_mnist1_set_0() {
+        run_fixture("mnist", "model.onnx", 0);
     }
 
     #[test]
-    fn test_mnist_set_1() {
-        run_mnist(1);
+    fn test_mnist1_set_1() {
+        run_fixture("mnist", "model.onnx", 1);
     }
 
     #[test]
-    fn test_mnist_set_2() {
-        run_mnist(2);
+    fn test_mnist1_set_2() {
+        run_fixture("mnist", "model.onnx", 2);
+    }
+
+    // mnist-12 (opset 12): weights as initializers, standard broadcast
+    #[test]
+    fn test_mnist12_set_0() {
+        run_fixture("mnist-12", "mnist-12.onnx", 0);
     }
 }
