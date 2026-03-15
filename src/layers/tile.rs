@@ -39,7 +39,7 @@ impl Layer for Tile {
             in_strides[i] = in_strides[i + 1] * input.dims[i + 1];
         }
 
-        match input.dtype {
+        match input.dtype() {
             DType::Float => {
                 let in_data = input.floats();
                 let buf = output.as_mut_f32(numel);

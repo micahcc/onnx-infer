@@ -118,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (name, tensor) in &outputs {
         println!("Output '{name}': shape {:?}", tensor.dims);
-        match tensor.dtype {
+        match tensor.dtype() {
             onnx_infer::DType::Float => {
                 let floats = tensor.floats();
                 if floats.len() <= 100 {

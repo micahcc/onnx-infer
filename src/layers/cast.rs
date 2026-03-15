@@ -4,6 +4,8 @@ use crate::DType;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
+use crate::ONNX_INT32;
+use crate::ONNX_INT64;
 use crate::layers::Layer;
 
 pub struct Cast {
@@ -21,10 +23,11 @@ impl Layer for Cast {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
         let numel = input.numel();
-        match self.to {
-            6 | 7 => {
+        let to32 = self.to as i32;
+        match to32 == ONNX_INT32 || to32 == ONNX_INT64 {
+            true => {
                 let buf = output.as_mut_i64(numel);
-                match input.dtype {
+                match input.dtype() {
                     DType::Int64 => buf.copy_from_slice(input.ints()),
                     DType::Float => {
                         for (o, &v) in buf.iter_mut().zip(input.floats().iter()) {
@@ -34,9 +37,9 @@ impl Layer for Cast {
                 }
                 output.dims.clone_from(&input.dims);
             }
-            _ => {
+            false => {
                 let buf = output.as_mut_f32(numel);
-                match input.dtype {
+                match input.dtype() {
                     DType::Float => buf.copy_from_slice(input.floats()),
                     DType::Int64 => {
                         for (o, &v) in buf.iter_mut().zip(input.ints().iter()) {

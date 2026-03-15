@@ -44,7 +44,7 @@ impl Layer for Concat {
         let outer: usize = out_dims[..axis].iter().product();
         let inner: usize = out_dims[axis + 1..].iter().product();
 
-        let is_int = tensors[0].dtype == DType::Int64;
+        let is_int = tensors[0].dtype() == DType::Int64;
         if is_int {
             let total = out_dims.iter().product::<usize>();
             let buf = output.as_mut_i64(total);

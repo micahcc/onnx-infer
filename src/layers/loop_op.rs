@@ -94,7 +94,7 @@ impl Loop {
                     let inner_dims = &scans[0].dims;
                     let mut out_dims = vec![scans.len()];
                     out_dims.extend_from_slice(inner_dims);
-                    match scans[0].dtype {
+                    match scans[0].dtype() {
                         DType::Float => {
                             let data: Vec<f32> = scans
                                 .iter()

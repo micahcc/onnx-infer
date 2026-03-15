@@ -43,7 +43,7 @@ impl Layer for Transpose {
             out_strides[i] = out_strides[i + 1] * out_dims[i + 1];
         }
 
-        match input.dtype {
+        match input.dtype() {
             DType::Float => {
                 let in_data = input.floats();
                 let buf = output.as_mut_f32(numel);

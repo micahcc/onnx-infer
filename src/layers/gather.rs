@@ -41,7 +41,7 @@ impl Layer for Gather {
             };
 
             if input.dims.len() == 1 {
-                match input.dtype {
+                match input.dtype() {
                     DType::Float => {
                         let buf = output.as_mut_f32(1);
                         buf[0] = input.floats()[idx];
@@ -59,7 +59,7 @@ impl Layer for Gather {
                 let mut out_dims: Vec<usize> = input.dims[..axis].to_vec();
                 out_dims.extend_from_slice(&input.dims[axis + 1..]);
 
-                match input.dtype {
+                match input.dtype() {
                     DType::Float => {
                         let d = input.floats();
                         let buf = output.as_mut_f32(outer * inner);
