@@ -16,7 +16,7 @@ struct Args {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let bytes = fs::read(&args.input)?;
-    let engine = onnx_infer::InferenceEngine::from_bytes(&bytes)?;
+    let mut engine = onnx_infer::InferenceEngine::new(&bytes, HashMap::new())?;
     let outputs = engine.run(HashMap::new())?;
     println!("{:#?}", outputs);
     Ok(())

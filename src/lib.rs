@@ -2,18 +2,14 @@ pub mod onnx {
     include!(concat!(env!("OUT_DIR"), "/onnx.rs"));
 }
 
-pub mod activation;
-pub mod binary;
-pub mod conv;
-pub mod matmul;
-pub mod pool;
-pub mod quantize;
-pub mod shape;
+pub mod layers;
 
 use std::collections::HashMap;
 
 use prost::Message;
 
+use crate::layers::PlanNode;
+use crate::layers::build_plan;
 use crate::onnx::ModelProto;
 use crate::onnx::NodeProto;
 use crate::onnx::TensorProto;
@@ -74,19 +70,22 @@ impl Tensor {
         }
     }
 
-    /// Read-only access to float data. Panics if dtype is Int64.
     pub fn floats(&self) -> &[f32] {
-        assert!(self.dtype == DType::Float, "expected float tensor, got int64");
+        assert!(
+            self.dtype == DType::Float,
+            "expected float tensor, got int64"
+        );
         &self.f32_buf
     }
 
-    /// Read-only access to i64 data. Panics if dtype is Float.
     pub fn ints(&self) -> &[i64] {
-        assert!(self.dtype == DType::Int64, "expected int64 tensor, got float");
+        assert!(
+            self.dtype == DType::Int64,
+            "expected int64 tensor, got float"
+        );
         &self.i64_buf
     }
 
-    /// Consume the tensor and return the f32 data. Converts from i64 if needed.
     pub fn into_f32_vec(self) -> Vec<f32> {
         match self.dtype {
             DType::Float => self.f32_buf,
@@ -94,7 +93,6 @@ impl Tensor {
         }
     }
 
-    /// Consume the tensor and return the i64 data. Converts from f32 if needed.
     pub fn into_i64_vec(self) -> Vec<i64> {
         match self.dtype {
             DType::Float => self.f32_buf.iter().map(|&v| v as i64).collect(),
@@ -102,7 +100,6 @@ impl Tensor {
         }
     }
 
-    /// Read a single element as f32, regardless of storage type.
     pub fn f32_at(&self, idx: usize) -> f32 {
         match self.dtype {
             DType::Float => self.f32_buf[idx],
@@ -110,7 +107,6 @@ impl Tensor {
         }
     }
 
-    /// Read a single element as i64, regardless of storage type.
     pub fn i64_at(&self, idx: usize) -> i64 {
         match self.dtype {
             DType::Float => self.f32_buf[idx] as i64,
@@ -138,27 +134,23 @@ impl Tensor {
         self.dims.iter().product()
     }
 
-    /// Get the f32 output buffer, resized to `len`. Both buffers are preserved across type changes.
     pub fn as_mut_f32(&mut self, len: usize) -> &mut Vec<f32> {
         self.dtype = DType::Float;
         self.f32_buf.resize(len, 0.0);
         &mut self.f32_buf
     }
 
-    /// Get the i64 output buffer, resized to `len`. Both buffers are preserved across type changes.
     pub fn as_mut_i64(&mut self, len: usize) -> &mut Vec<i64> {
         self.dtype = DType::Int64;
         self.i64_buf.resize(len, 0);
         &mut self.i64_buf
     }
 
-    /// Replace the f32 buffer with the given data, setting dtype to Float.
     pub fn data_replace_f32(&mut self, data: Vec<f32>) {
         self.dtype = DType::Float;
         self.f32_buf = data;
     }
 
-    /// Copy data from another tensor, reusing existing buffer allocation.
     pub fn copy_from(&mut self, other: &Tensor) {
         self.dims.clone_from(&other.dims);
         self.dtype = other.dtype;
@@ -170,6 +162,24 @@ impl Tensor {
             DType::Int64 => {
                 self.i64_buf.clear();
                 self.i64_buf.extend_from_slice(&other.i64_buf);
+            }
+        }
+    }
+
+    /// Copy data from another tensor, casting to f32. Reuses existing buffer.
+    pub fn copy_cast_f32(&mut self, src: &Tensor) {
+        self.dims.clone_from(&src.dims);
+        self.dtype = DType::Float;
+        let len = src.numel();
+        self.f32_buf.resize(len, 0.0);
+        match src.dtype {
+            DType::Float => {
+                self.f32_buf[..len].copy_from_slice(&src.f32_buf[..len]);
+            }
+            DType::Int64 => {
+                for i in 0..len {
+                    self.f32_buf[i] = src.i64_buf[i] as f32;
+                }
             }
         }
     }
@@ -187,7 +197,6 @@ impl Default for Tensor {
 }
 
 fn extract_float_data(tensor: &TensorProto) -> Result<Vec<f32>> {
-    // data_type: 1=FLOAT, 2=UINT8, 3=INT8, 11=DOUBLE
     let dtype = tensor.data_type;
 
     if !tensor.raw_data.is_empty() {
@@ -214,7 +223,6 @@ fn extract_float_data(tensor: &TensorProto) -> Result<Vec<f32>> {
     if !tensor.float_data.is_empty() {
         return Ok(tensor.float_data.clone());
     }
-    // Some non-float types (e.g. UINT8) store scalars in int32_data
     if !tensor.int32_data.is_empty() {
         return Ok(tensor.int32_data.iter().map(|&v| v as f32).collect());
     }
@@ -255,50 +263,66 @@ fn extract_int_data(tensor: &TensorProto) -> Result<Vec<i64>> {
 }
 
 pub struct InferenceEngine {
-    model: ModelProto,
+    plan: Vec<PlanNode>,
+    initializers: HashMap<String, Tensor>,
+    output_names: Vec<String>,
+    input_sizes: HashMap<String, Vec<usize>>,
 }
 
 impl InferenceEngine {
-    pub fn from_bytes(model_bytes: &[u8]) -> Result<Self> {
+    pub fn new(model_bytes: &[u8], input_sizes: HashMap<String, Vec<usize>>) -> Result<Self> {
         let model = ModelProto::decode(model_bytes).map_err(InferenceError::ParseError)?;
-        Ok(Self { model })
-    }
-
-    pub fn run(&self, inputs: HashMap<String, Tensor>) -> Result<HashMap<String, Tensor>> {
-        let graph = self
-            .model
+        let graph = model
             .graph
             .as_ref()
             .ok_or_else(|| InferenceError::InvalidModel("Model has no graph".into()))?;
 
-        let output_names: Vec<String> = graph.output.iter().map(|o| o.name.clone()).collect();
+        let (plan, initializers, output_names) = build_plan(graph)?;
+
+        Ok(Self {
+            plan,
+            initializers,
+            output_names,
+            input_sizes,
+        })
+    }
+
+    pub fn run(&mut self, inputs: HashMap<String, Tensor>) -> Result<HashMap<String, Tensor>> {
+        let output_names = self.output_names.clone();
         self.run_with_outputs(inputs, &output_names)
     }
 
     pub fn run_with_outputs(
-        &self,
+        &mut self,
         inputs: HashMap<String, Tensor>,
         output_names: &[String],
     ) -> Result<HashMap<String, Tensor>> {
         let _span = tracing::trace_span!("inference").entered();
-        let graph = self
-            .model
-            .graph
-            .as_ref()
-            .ok_or_else(|| InferenceError::InvalidModel("Model has no graph".into()))?;
 
         let mut values: HashMap<String, Tensor> = inputs;
 
         // Load initializers
-        for init in &graph.initializer {
-            if !init.name.is_empty() {
-                values.insert(init.name.clone(), Tensor::from_proto(init)?);
-            }
+        for (k, v) in &self.initializers {
+            values.insert(k.clone(), v.clone());
         }
 
-        // Execute nodes in topological order
-        for node in &graph.node {
-            self.execute_node(node, &mut values)?;
+        // Execute plan
+        for node in &mut self.plan {
+            match node {
+                PlanNode::Single { output, layer } => {
+                    if output.is_empty() {
+                        continue;
+                    }
+                    let _span = tracing::trace_span!("op").entered();
+                    let mut out = values.remove(output.as_str()).unwrap_or_default();
+                    let result = layer.execute(&values, &mut out);
+                    values.insert(output.clone(), out);
+                    result?;
+                }
+                PlanNode::Loop(loop_layer) => {
+                    loop_layer.execute(&mut values)?;
+                }
+            }
         }
 
         // Collect requested outputs
@@ -312,84 +336,12 @@ impl InferenceEngine {
         Ok(outputs)
     }
 
-    fn execute_node(&self, node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
-        execute_node(node, values)
+    pub fn input_sizes(&self) -> &HashMap<String, Vec<usize>> {
+        &self.input_sizes
     }
 }
 
-pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
-    let _span = tracing::trace_span!("op", op = %node.op_type, name = %node.name).entered();
-
-    // Multi-output ops handle the map directly
-    if node.op_type == "Loop" {
-        return shape::exec_loop(node, values);
-    }
-
-    if node.output.is_empty() || node.output[0].is_empty() {
-        return Ok(());
-    }
-
-    // Single-output ops: remove output tensor (reuse allocation), dispatch, reinsert
-    let out_name = node.output[0].clone();
-    let mut output = values.remove(&out_name).unwrap_or_default();
-
-    let result = dispatch_node(node, values, &mut output);
-
-    values.insert(out_name, output);
-    result
-}
-
-fn dispatch_node(
-    node: &NodeProto,
-    values: &HashMap<String, Tensor>,
-    output: &mut Tensor,
-) -> Result<()> {
-    match node.op_type.as_str() {
-        "Constant" => shape::exec_constant(node, values, output),
-        "Div" => binary::exec_div(node, values, output),
-        "Conv" => conv::exec_conv(node, values, output),
-        "Reshape" => shape::exec_reshape(node, values, output),
-        "Add" => binary::exec_add(node, values, output),
-        "Sub" => binary::exec_sub(node, values, output),
-        "Mul" => binary::exec_mul(node, values, output),
-        "Relu" => activation::exec_relu(node, values, output),
-        "LeakyRelu" => activation::exec_leaky_relu(node, values, output),
-        "BatchNormalization" => activation::exec_batch_normalization(node, values, output),
-        "Clip" => activation::exec_clip(node, values, output),
-        "MaxPool" => pool::exec_maxpool(node, values, output),
-        "GlobalAveragePool" => pool::exec_global_avg_pool(node, values, output),
-        "MatMul" => matmul::exec_matmul(node, values, output),
-        "Gemm" => matmul::exec_gemm(node, values, output),
-        "Softmax" => activation::exec_softmax(node, values, output),
-        "Flatten" => shape::exec_flatten(node, values, output),
-        "Shape" => shape::exec_shape(node, values, output),
-        "Gather" => shape::exec_gather(node, values, output),
-        "Unsqueeze" => shape::exec_unsqueeze(node, values, output),
-        "Concat" => shape::exec_concat(node, values, output),
-        "QuantizeLinear" => quantize::exec_quantize_linear(node, values, output),
-        "DequantizeLinear" => quantize::exec_dequantize_linear(node, values, output),
-        "QLinearConv" => quantize::exec_qlinear_conv(node, values, output),
-        "QLinearAdd" => quantize::exec_qlinear_add(node, values, output),
-        "QLinearMatMul" => quantize::exec_qlinear_matmul(node, values, output),
-        "QLinearGlobalAveragePool" => quantize::exec_qlinear_global_avg_pool(node, values, output),
-        "Sigmoid" => activation::exec_sigmoid(node, values, output),
-        "Exp" => activation::exec_exp(node, values, output),
-        "Ceil" => activation::exec_ceil(node, values, output),
-        "Round" => activation::exec_round(node, values, output),
-        "Identity" => shape::exec_identity(node, values, output),
-        "Cast" => shape::exec_cast(node, values, output),
-        "Transpose" => shape::exec_transpose(node, values, output),
-        "Squeeze" => shape::exec_squeeze(node, values, output),
-        "Slice" => shape::exec_slice(node, values, output),
-        "Tile" => shape::exec_tile(node, values, output),
-        "Resize" => shape::exec_resize(node, values, output),
-        "ReduceMin" => shape::exec_reduce_min(node, values, output),
-        "NonMaxSuppression" => shape::exec_nms(node, values, output),
-        op => Err(InferenceError::UnsupportedOperator(op.to_string())),
-    }
-}
-
-// --- Shared helpers used by submodules ---
+// --- Shared helpers used by layer submodules ---
 
 pub fn get_attr_ints(node: &NodeProto, name: &str) -> Option<Vec<i64>> {
     node.attribute
@@ -491,24 +443,48 @@ mod tests {
         (flush_guard, default_guard)
     }
 
-    /// Run a model fixture against its bundled test data set.
-    fn run_fixture(base: &Path, model_file: &str, test_set: usize) {
+    fn load_model_and_inputs(
+        base: &Path,
+        model_file: &str,
+        test_set: usize,
+    ) -> (
+        Vec<u8>,
+        HashMap<String, Tensor>,
+        HashMap<String, Vec<usize>>,
+    ) {
         let model_bytes = fs::read(base.join(model_file)).expect("read model");
-        let engine = InferenceEngine::from_bytes(&model_bytes).expect("load model");
+        let model = ModelProto::decode(&model_bytes[..]).unwrap();
+        let graph = model.graph.as_ref().unwrap();
 
         let test_dir = base.join(format!("test_data_set_{test_set}"));
-        let input_bytes = fs::read(test_dir.join("input_0.pb")).expect("read input");
-        let output_bytes = fs::read(test_dir.join("output_0.pb")).expect("read output");
-        let input = Tensor::from_proto_bytes(&input_bytes).expect("parse input");
-        let expected = Tensor::from_proto_bytes(&output_bytes).expect("parse output");
+
+        let mut inputs = HashMap::new();
+        let mut input_sizes = HashMap::new();
+        for i in 0..graph.input.len() {
+            let pb_path = test_dir.join(format!("input_{i}.pb"));
+            if pb_path.exists() {
+                let input = Tensor::from_proto_bytes(&fs::read(&pb_path).expect("read input"))
+                    .expect("parse input");
+                let name = graph.input[i].name.clone();
+                input_sizes.insert(name.clone(), input.dims.clone());
+                inputs.insert(name, input);
+            }
+        }
+
+        (model_bytes, inputs, input_sizes)
+    }
+
+    fn run_fixture(base: &Path, model_file: &str, test_set: usize) {
+        let (model_bytes, inputs, input_sizes) = load_model_and_inputs(base, model_file, test_set);
+        let mut engine = InferenceEngine::new(&model_bytes, input_sizes).expect("load model");
 
         let model = ModelProto::decode(&model_bytes[..]).unwrap();
         let graph = model.graph.as_ref().unwrap();
-        let input_name = graph.input[0].name.clone();
         let output_name = graph.output[0].name.clone();
 
-        let mut inputs = HashMap::new();
-        inputs.insert(input_name, input);
+        let test_dir = base.join(format!("test_data_set_{test_set}"));
+        let output_bytes = fs::read(test_dir.join("output_0.pb")).expect("read output");
+        let expected = Tensor::from_proto_bytes(&output_bytes).expect("parse output");
 
         let outputs = engine.run(inputs).expect("inference");
         let output = &outputs[&output_name];
@@ -536,25 +512,17 @@ mod tests {
         assert_eq!(got_class, expected_class);
     }
 
-    /// Run a quantized model fixture. Compares softmax probabilities since
-    /// dequant-compute-requant in float32 accumulates small rounding errors.
     fn run_quantized_fixture(base: &Path, model_file: &str, test_set: usize) {
-        let model_bytes = fs::read(base.join(model_file)).expect("read model");
-        let engine = InferenceEngine::from_bytes(&model_bytes).expect("load model");
-
-        let test_dir = base.join(format!("test_data_set_{test_set}"));
-        let input_bytes = fs::read(test_dir.join("input_0.pb")).expect("read input");
-        let output_bytes = fs::read(test_dir.join("output_0.pb")).expect("read output");
-        let input = Tensor::from_proto_bytes(&input_bytes).expect("parse input");
-        let expected = Tensor::from_proto_bytes(&output_bytes).expect("parse output");
+        let (model_bytes, inputs, input_sizes) = load_model_and_inputs(base, model_file, test_set);
+        let mut engine = InferenceEngine::new(&model_bytes, input_sizes).expect("load model");
 
         let model = ModelProto::decode(&model_bytes[..]).unwrap();
         let graph = model.graph.as_ref().unwrap();
-        let input_name = graph.input[0].name.clone();
         let output_name = graph.output[0].name.clone();
 
-        let mut inputs = HashMap::new();
-        inputs.insert(input_name, input);
+        let test_dir = base.join(format!("test_data_set_{test_set}"));
+        let output_bytes = fs::read(test_dir.join("output_0.pb")).expect("read output");
+        let expected = Tensor::from_proto_bytes(&output_bytes).expect("parse output");
 
         let outputs = engine.run(inputs).expect("inference");
         let output = &outputs[&output_name];
@@ -578,9 +546,6 @@ mod tests {
         eprintln!("int8 max softmax probability error: {max_abs_err:.6}");
         assert!(max_abs_err < 0.1, "max softmax error {max_abs_err} >= 0.1");
 
-        // Quantized models may swap closely-ranked classes due to accumulated
-        // rounding in the dequant-compute-requant pipeline. Check that the
-        // expected top-1 class appears in our top-5 predictions.
         let expected_class = want_probs
             .iter()
             .enumerate()
@@ -594,6 +559,50 @@ mod tests {
             top5.contains(&expected_class),
             "expected class {expected_class} not in top-5: {top5:?}"
         );
+    }
+
+    fn run_multi_io_fixture(base: &Path, model_file: &str, test_set: usize) {
+        let (model_bytes, inputs, input_sizes) = load_model_and_inputs(base, model_file, test_set);
+        let mut engine = InferenceEngine::new(&model_bytes, input_sizes).expect("load model");
+
+        let model = ModelProto::decode(&model_bytes[..]).unwrap();
+        let graph = model.graph.as_ref().unwrap();
+
+        let test_dir = base.join(format!("test_data_set_{test_set}"));
+        let outputs = engine.run(inputs).expect("inference");
+
+        for i in 0..graph.output.len() {
+            let pb_path = test_dir.join(format!("output_{i}.pb"));
+            if pb_path.exists() {
+                let expected = Tensor::from_proto_bytes(&fs::read(&pb_path).expect("read output"))
+                    .expect("parse output");
+                let name = &graph.output[i].name;
+                let output = outputs
+                    .get(name)
+                    .unwrap_or_else(|| panic!("missing output {name}"));
+                assert_eq!(output.dims, expected.dims, "shape mismatch for {name}");
+
+                match output.dtype {
+                    DType::Float => {
+                        let got = output.floats();
+                        let want = expected.floats();
+                        for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                            assert!(
+                                (g - w).abs() < 1e-3 || (g - w).abs() / w.abs().max(1e-6) < 1e-3,
+                                "output {name}[{j}]: got {g}, want {w}"
+                            );
+                        }
+                    }
+                    DType::Int64 => {
+                        let got = output.ints();
+                        let want = expected.ints();
+                        for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                            assert_eq!(g, w, "output {name}[{j}]: got {g}, want {w}");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // --- MNIST models ---
@@ -685,63 +694,6 @@ mod tests {
     }
 
     // --- Tiny YOLOv3 models ---
-
-    /// Run a multi-input/output model fixture.
-    fn run_multi_io_fixture(base: &Path, model_file: &str, test_set: usize) {
-        let model_bytes = fs::read(base.join(model_file)).expect("read model");
-        let engine = InferenceEngine::from_bytes(&model_bytes).expect("load model");
-
-        let model = ModelProto::decode(&model_bytes[..]).unwrap();
-        let graph = model.graph.as_ref().unwrap();
-
-        let test_dir = base.join(format!("test_data_set_{test_set}"));
-
-        let mut inputs = HashMap::new();
-        for i in 0..graph.input.len() {
-            let pb_path = test_dir.join(format!("input_{i}.pb"));
-            if pb_path.exists() {
-                let input = Tensor::from_proto_bytes(&fs::read(&pb_path).expect("read input"))
-                    .expect("parse input");
-                inputs.insert(graph.input[i].name.clone(), input);
-            }
-        }
-
-        let outputs = engine.run(inputs).expect("inference");
-
-        for i in 0..graph.output.len() {
-            let pb_path = test_dir.join(format!("output_{i}.pb"));
-            if pb_path.exists() {
-                let expected = Tensor::from_proto_bytes(&fs::read(&pb_path).expect("read output"))
-                    .expect("parse output");
-                let name = &graph.output[i].name;
-                let output = outputs
-                    .get(name)
-                    .unwrap_or_else(|| panic!("missing output {name}"));
-                assert_eq!(output.dims, expected.dims, "shape mismatch for {name}");
-
-                match output.dtype {
-                    DType::Float => {
-                        let got = output.floats();
-                        let want = expected.floats();
-                        for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
-                            assert!(
-                                (g - w).abs() < 1e-3
-                                    || (g - w).abs() / w.abs().max(1e-6) < 1e-3,
-                                "output {name}[{j}]: got {g}, want {w}"
-                            );
-                        }
-                    }
-                    DType::Int64 => {
-                        let got = output.ints();
-                        let want = expected.ints();
-                        for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
-                            assert_eq!(g, w, "output {name}[{j}]: got {g}, want {w}");
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     #[test]
     fn test_tinyyolov3_11_set_0() {

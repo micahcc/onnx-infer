@@ -1,0 +1,32 @@
+use std::collections::HashMap;
+
+use crate::Result;
+use crate::Tensor;
+use crate::get_tensor;
+use crate::layers::Layer;
+
+pub struct QuantizeLinear {
+    pub inputs: Vec<String>,
+}
+
+impl QuantizeLinear {
+    pub fn new(inputs: Vec<String>) -> Self {
+        Self { inputs }
+    }
+}
+
+impl Layer for QuantizeLinear {
+    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+        let input = get_tensor(values, &self.inputs[0])?;
+        let scale = get_tensor(values, &self.inputs[1])?;
+        let zero_point = if self.inputs.len() > 2 && !self.inputs[2].is_empty() {
+            get_tensor(values, &self.inputs[2])?.floats()[0]
+        } else {
+            0.0
+        };
+        let data = crate::layers::quantize_u8(input.floats(), scale.floats()[0], zero_point);
+        output.dims.clone_from(&input.dims);
+        output.data_replace_f32(data);
+        Ok(())
+    }
+}

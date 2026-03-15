@@ -94,7 +94,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     let model_bytes = fs::read(&args.model)?;
-    let engine = onnx_infer::InferenceEngine::from_bytes(&model_bytes)?;
 
     let shape_override: Option<Vec<usize>> = args.shape.as_ref().map(|s| {
         s.split(',')
@@ -103,15 +102,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let mut inputs = HashMap::new();
+    let mut input_sizes = HashMap::new();
     for input_spec in &args.inputs {
         let (name, path) = input_spec
             .split_once('=')
             .ok_or_else(|| format!("Invalid input spec '{input_spec}', expected name=path"))?;
         let tensor = load_input(&PathBuf::from(path), &shape_override, args.grayscale)?;
         eprintln!("Input '{}': shape {:?}", name, tensor.dims);
+        input_sizes.insert(name.to_string(), tensor.dims.clone());
         inputs.insert(name.to_string(), tensor);
     }
 
+    let mut engine = onnx_infer::InferenceEngine::new(&model_bytes, input_sizes)?;
     let outputs = engine.run(inputs)?;
 
     for (name, tensor) in &outputs {
