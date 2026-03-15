@@ -267,6 +267,7 @@ pub struct InferenceEngine {
     initializers: HashMap<String, Tensor>,
     output_names: Vec<String>,
     input_sizes: HashMap<String, Vec<usize>>,
+    shape_map: HashMap<String, Vec<usize>>,
 }
 
 impl InferenceEngine {
@@ -277,13 +278,14 @@ impl InferenceEngine {
             .as_ref()
             .ok_or_else(|| InferenceError::InvalidModel("Model has no graph".into()))?;
 
-        let (plan, initializers, output_names) = build_plan(graph)?;
+        let (plan, initializers, output_names, shape_map) = build_plan(graph, &input_sizes)?;
 
         Ok(Self {
             plan,
             initializers,
             output_names,
             input_sizes,
+            shape_map,
         })
     }
 
@@ -338,6 +340,10 @@ impl InferenceEngine {
 
     pub fn input_sizes(&self) -> &HashMap<String, Vec<usize>> {
         &self.input_sizes
+    }
+
+    pub fn shape_map(&self) -> &HashMap<String, Vec<usize>> {
+        &self.shape_map
     }
 }
 
