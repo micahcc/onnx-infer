@@ -78,7 +78,7 @@ fn load_input(
                 for x in 0..tw {
                     for ch in 0..c {
                         let src_idx = (y * tw + x) * channels + ch;
-                        let dst_idx = ((0 * c + ch) * th + y) * tw + x;
+                        let dst_idx = (ch * th + y) * tw + x;
                         data[dst_idx] = raw[src_idx] as f32;
                     }
                 }

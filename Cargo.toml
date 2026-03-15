@@ -1,6 +1,6 @@
 [package]
 name = "onnx-infer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Pure Rust ONNX inference engine for computer vision models"
 license = "BSD-3-Clause"
@@ -16,6 +16,9 @@ approx = "0.5"
 [build-dependencies]
 prost-build = "0"
 protox = "0.9"
+reqwest = { version = "0.12", features = ["blocking"] }
+flate2 = "1"
+tar = "0.4"
 
 [[bin]]
 name = "onnx-infer"
