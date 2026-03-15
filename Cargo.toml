@@ -31,3 +31,14 @@ protox = "0.9"
 [[bin]]
 name = "onnx-infer"
 path = "src/bin/infer.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "dump_onnx"
+path = "src/bin/dump_onnx.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "load_onnx"
+path = "src/bin/load_onnx.rs"
+required-features = ["cli"]
