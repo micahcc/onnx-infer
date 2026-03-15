@@ -55,6 +55,7 @@ pub fn exec_maxpool(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
     let h_out = (h_in + pads[0] as usize + pads[2] as usize - kh) / sh + 1;
     let w_out = (w_in + pads[1] as usize + pads[3] as usize - kw) / sw + 1;
 
+    let input_f = input.floats();
     let mut output = vec![f32::NEG_INFINITY; n * c * h_out * w_out];
 
     for batch in 0..n {
@@ -74,7 +75,7 @@ pub fn exec_maxpool(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
                                 let ih = ih - ph_begin;
                                 let iw = iw - pw_begin;
                                 let idx = ((batch * c + ch) * h_in + ih) * w_in + iw;
-                                max_val = max_val.max(input.data[idx]);
+                                max_val = max_val.max(input_f[idx]);
                             }
                         }
                     }
@@ -94,16 +95,16 @@ pub fn exec_maxpool(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
 
 pub fn exec_global_avg_pool(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
     let input = get_tensor(values, &node.input[0])?;
-    // Input: [N, C, H, W] -> Output: [N, C, 1, 1]
     let n = input.dims[0];
     let c = input.dims[1];
     let spatial: usize = input.dims[2..].iter().product();
 
+    let input_f = input.floats();
     let mut output = vec![0.0f32; n * c];
     for batch in 0..n {
         for ch in 0..c {
             let offset = (batch * c + ch) * spatial;
-            let sum: f32 = input.data[offset..offset + spatial].iter().sum();
+            let sum: f32 = input_f[offset..offset + spatial].iter().sum();
             output[batch * c + ch] = sum / spatial as f32;
         }
     }

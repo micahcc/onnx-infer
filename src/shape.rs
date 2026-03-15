@@ -3,9 +3,12 @@ use std::collections::HashMap;
 use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
+use crate::TensorData;
+use crate::execute_node;
 use crate::get_attr_int;
 use crate::get_attr_ints;
 use crate::get_tensor;
+use crate::onnx::GraphProto;
 use crate::onnx::NodeProto;
 
 pub fn exec_constant(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
@@ -28,12 +31,10 @@ pub fn exec_constant(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> 
 pub fn exec_reshape(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
     let input = get_tensor(values, &node.input[0])?;
 
-    // Shape can come from attribute or second input
     let new_shape: Vec<i64> = if node.input.len() > 1 && !node.input[1].is_empty() {
         let shape_tensor = get_tensor(values, &node.input[1])?;
-        shape_tensor.data.iter().map(|&v| v as i64).collect()
+        shape_tensor.to_i64_vec()
     } else {
-        // Check for shape attribute (older ONNX format)
         get_attr_ints(node, "shape").ok_or_else(|| {
             InferenceError::InvalidModel("Reshape: no shape input or attribute".into())
         })?
@@ -46,7 +47,7 @@ pub fn exec_reshape(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
     for (i, &s) in new_shape.iter().enumerate() {
         if s == -1 {
             infer_idx = Some(i);
-            dims.push(0); // placeholder
+            dims.push(0);
         } else if s == 0 {
             dims.push(input.dims[i]);
         } else {
@@ -64,7 +65,13 @@ pub fn exec_reshape(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
         dims[idx] = total / known;
     }
 
-    values.insert(node.output[0].clone(), Tensor::new(dims, input.data));
+    values.insert(
+        node.output[0].clone(),
+        Tensor {
+            dims,
+            data: input.data,
+        },
+    );
     Ok(())
 }
 
@@ -77,7 +84,10 @@ pub fn exec_flatten(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
 
     values.insert(
         node.output[0].clone(),
-        Tensor::new(vec![outer, inner], input.data),
+        Tensor {
+            dims: vec![outer, inner],
+            data: input.data,
+        },
     );
     Ok(())
 }
@@ -85,8 +95,8 @@ pub fn exec_flatten(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
 pub fn exec_shape(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
     let input = get_tensor(values, &node.input[0])?;
     let rank = input.dims.len();
-    let data: Vec<f32> = input.dims.iter().map(|&d| d as f32).collect();
-    values.insert(node.output[0].clone(), Tensor::new(vec![rank], data));
+    let data: Vec<i64> = input.dims.iter().map(|&d| d as i64).collect();
+    values.insert(node.output[0].clone(), Tensor::new_i64(vec![rank], data));
     Ok(())
 }
 
@@ -101,40 +111,55 @@ pub fn exec_gather(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Re
         axis as usize
     };
 
-    // For scalar index gathering from a 1-D tensor (common case: Shape -> Gather)
     if indices.dims.is_empty()
         || (indices.dims.len() == 1 && indices.dims[0] == 1)
         || indices.numel() == 1
     {
-        let idx = indices.data[0] as i64;
-        let idx = if idx < 0 {
-            input.dims[axis] as i64 + idx
+        let idx_i64 = indices.to_i64_vec()[0];
+        let idx = if idx_i64 < 0 {
+            (input.dims[axis] as i64 + idx_i64) as usize
         } else {
-            idx
-        } as usize;
+            idx_i64 as usize
+        };
 
         if input.dims.len() == 1 {
-            // Scalar output
-            values.insert(
-                node.output[0].clone(),
-                Tensor::new(vec![], vec![input.data[idx]]),
-            );
+            // Scalar output — preserve type
+            match &input.data {
+                TensorData::Float(d) => {
+                    values.insert(node.output[0].clone(), Tensor::new(vec![], vec![d[idx]]));
+                }
+                TensorData::Int64(d) => {
+                    values.insert(
+                        node.output[0].clone(),
+                        Tensor::new_i64(vec![], vec![d[idx]]),
+                    );
+                }
+            }
         } else {
-            // Slice along axis
             let outer: usize = input.dims[..axis].iter().product();
             let inner: usize = input.dims[axis + 1..].iter().product();
             let axis_size = input.dims[axis];
-            let mut data = Vec::with_capacity(outer * inner);
-            for o in 0..outer {
-                let base = o * axis_size * inner + idx * inner;
-                data.extend_from_slice(&input.data[base..base + inner]);
-            }
             let mut out_dims: Vec<usize> = input.dims[..axis].to_vec();
             out_dims.extend_from_slice(&input.dims[axis + 1..]);
-            if out_dims.is_empty() {
-                out_dims = vec![];
+
+            match &input.data {
+                TensorData::Float(d) => {
+                    let mut data = Vec::with_capacity(outer * inner);
+                    for o in 0..outer {
+                        let base = o * axis_size * inner + idx * inner;
+                        data.extend_from_slice(&d[base..base + inner]);
+                    }
+                    values.insert(node.output[0].clone(), Tensor::new(out_dims, data));
+                }
+                TensorData::Int64(d) => {
+                    let mut data = Vec::with_capacity(outer * inner);
+                    for o in 0..outer {
+                        let base = o * axis_size * inner + idx * inner;
+                        data.extend_from_slice(&d[base..base + inner]);
+                    }
+                    values.insert(node.output[0].clone(), Tensor::new_i64(out_dims, data));
+                }
             }
-            values.insert(node.output[0].clone(), Tensor::new(out_dims, data));
         }
     } else {
         return Err(InferenceError::UnsupportedOperator(
@@ -147,10 +172,9 @@ pub fn exec_gather(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Re
 pub fn exec_unsqueeze(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
     let input = get_tensor(values, &node.input[0])?;
 
-    // Opset 13+: axes from second input; earlier: from attribute
     let axes: Vec<i64> = if node.input.len() > 1 && !node.input[1].is_empty() {
         let axes_tensor = get_tensor(values, &node.input[1])?;
-        axes_tensor.data.iter().map(|&v| v as i64).collect()
+        axes_tensor.to_i64_vec()
     } else {
         get_attr_ints(node, "axes").unwrap_or_default()
     };
@@ -172,7 +196,13 @@ pub fn exec_unsqueeze(node: &NodeProto, values: &mut HashMap<String, Tensor>) ->
         out_dims.insert(ax, 1);
     }
 
-    values.insert(node.output[0].clone(), Tensor::new(out_dims, input.data));
+    values.insert(
+        node.output[0].clone(),
+        Tensor {
+            dims: out_dims,
+            data: input.data,
+        },
+    );
     Ok(())
 }
 
@@ -202,23 +232,686 @@ pub fn exec_concat(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Re
 
     let outer: usize = out_dims[..axis].iter().product();
     let inner: usize = out_dims[axis + 1..].iter().product();
-    let total = out_dims.iter().product::<usize>();
-    let mut data = vec![0.0f32; total];
 
-    let mut axis_offset = 0;
-    for t in &tensors {
-        let t_axis = t.dims[axis];
-        for o in 0..outer {
-            for a in 0..t_axis {
-                let src_base = (o * t_axis + a) * inner;
-                let dst_base = (o * out_dims[axis] + axis_offset + a) * inner;
-                data[dst_base..dst_base + inner]
-                    .copy_from_slice(&t.data[src_base..src_base + inner]);
+    // Dispatch based on data type of first tensor
+    let is_int = matches!(&tensors[0].data, TensorData::Int64(_));
+    if is_int {
+        let total = out_dims.iter().product::<usize>();
+        let mut data = vec![0i64; total];
+        let mut axis_offset = 0;
+        for t in &tensors {
+            let t_data = t.to_i64_vec();
+            let t_axis = t.dims[axis];
+            for o in 0..outer {
+                for a in 0..t_axis {
+                    let src_base = (o * t_axis + a) * inner;
+                    let dst_base = (o * out_dims[axis] + axis_offset + a) * inner;
+                    data[dst_base..dst_base + inner]
+                        .copy_from_slice(&t_data[src_base..src_base + inner]);
+                }
             }
+            axis_offset += t_axis;
         }
-        axis_offset += t_axis;
+        values.insert(node.output[0].clone(), Tensor::new_i64(out_dims, data));
+    } else {
+        let total = out_dims.iter().product::<usize>();
+        let mut data = vec![0.0f32; total];
+        let mut axis_offset = 0;
+        for t in &tensors {
+            let t_data = t.to_f32_vec();
+            let t_axis = t.dims[axis];
+            for o in 0..outer {
+                for a in 0..t_axis {
+                    let src_base = (o * t_axis + a) * inner;
+                    let dst_base = (o * out_dims[axis] + axis_offset + a) * inner;
+                    data[dst_base..dst_base + inner]
+                        .copy_from_slice(&t_data[src_base..src_base + inner]);
+                }
+            }
+            axis_offset += t_axis;
+        }
+        values.insert(node.output[0].clone(), Tensor::new(out_dims, data));
+    }
+    Ok(())
+}
+
+pub fn exec_identity(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+    values.insert(node.output[0].clone(), input);
+    Ok(())
+}
+
+pub fn exec_cast(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+    let to = get_attr_int(node, "to").unwrap_or(1);
+    // Cast to float types (1=FLOAT, 11=DOUBLE) → store as Float
+    // Cast to int types (6=INT32, 7=INT64) → store as Int64
+    match to {
+        6 | 7 => {
+            let data = input.to_i64_vec();
+            values.insert(node.output[0].clone(), Tensor::new_i64(input.dims, data));
+        }
+        _ => {
+            let data = input.to_f32_vec();
+            values.insert(node.output[0].clone(), Tensor::new(input.dims, data));
+        }
+    }
+    Ok(())
+}
+
+pub fn exec_transpose(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+    let rank = input.dims.len();
+
+    let perm: Vec<usize> = get_attr_ints(node, "perm")
+        .map(|p| p.iter().map(|&v| v as usize).collect())
+        .unwrap_or_else(|| (0..rank).rev().collect());
+
+    let mut out_dims = vec![0usize; rank];
+    for i in 0..rank {
+        out_dims[i] = input.dims[perm[i]];
+    }
+
+    let mut in_strides = vec![1usize; rank];
+    for i in (0..rank - 1).rev() {
+        in_strides[i] = in_strides[i + 1] * input.dims[i + 1];
+    }
+
+    let numel = input.numel();
+    let mut out_strides = vec![1usize; rank];
+    for i in (0..rank - 1).rev() {
+        out_strides[i] = out_strides[i + 1] * out_dims[i + 1];
+    }
+
+    match &input.data {
+        TensorData::Float(in_data) => {
+            let mut data = vec![0.0f32; numel];
+            for out_flat in 0..numel {
+                let mut remaining = out_flat;
+                let mut in_flat = 0;
+                for i in 0..rank {
+                    let coord = remaining / out_strides[i];
+                    remaining %= out_strides[i];
+                    in_flat += coord * in_strides[perm[i]];
+                }
+                data[out_flat] = in_data[in_flat];
+            }
+            values.insert(node.output[0].clone(), Tensor::new(out_dims, data));
+        }
+        TensorData::Int64(in_data) => {
+            let mut data = vec![0i64; numel];
+            for out_flat in 0..numel {
+                let mut remaining = out_flat;
+                let mut in_flat = 0;
+                for i in 0..rank {
+                    let coord = remaining / out_strides[i];
+                    remaining %= out_strides[i];
+                    in_flat += coord * in_strides[perm[i]];
+                }
+                data[out_flat] = in_data[in_flat];
+            }
+            values.insert(node.output[0].clone(), Tensor::new_i64(out_dims, data));
+        }
+    }
+    Ok(())
+}
+
+pub fn exec_squeeze(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+
+    let axes: Vec<i64> = if node.input.len() > 1 && !node.input[1].is_empty() {
+        let axes_tensor = get_tensor(values, &node.input[1])?;
+        axes_tensor.to_i64_vec()
+    } else {
+        get_attr_ints(node, "axes").unwrap_or_default()
+    };
+
+    let rank = input.dims.len() as i64;
+    let axes_set: std::collections::HashSet<usize> = if axes.is_empty() {
+        input
+            .dims
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| **d == 1)
+            .map(|(i, _)| i)
+            .collect()
+    } else {
+        axes.iter()
+            .map(|&a| {
+                if a < 0 {
+                    (rank + a) as usize
+                } else {
+                    a as usize
+                }
+            })
+            .collect()
+    };
+
+    let out_dims: Vec<usize> = input
+        .dims
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !axes_set.contains(i))
+        .map(|(_, &d)| d)
+        .collect();
+
+    values.insert(
+        node.output[0].clone(),
+        Tensor {
+            dims: out_dims,
+            data: input.data,
+        },
+    );
+    Ok(())
+}
+
+pub fn exec_slice(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+    let starts_t = get_tensor(values, &node.input[1])?;
+    let ends_t = get_tensor(values, &node.input[2])?;
+    let axes_t = if node.input.len() > 3 && !node.input[3].is_empty() {
+        Some(get_tensor(values, &node.input[3])?)
+    } else {
+        None
+    };
+    let steps_t = if node.input.len() > 4 && !node.input[4].is_empty() {
+        Some(get_tensor(values, &node.input[4])?)
+    } else {
+        None
+    };
+
+    let rank = input.dims.len();
+    let mut starts = vec![0i64; rank];
+    let mut ends: Vec<i64> = input.dims.iter().map(|&d| d as i64).collect();
+    let mut steps = vec![1i64; rank];
+
+    let starts_ints = starts_t.to_i64_vec();
+    let ends_ints = ends_t.to_i64_vec();
+
+    let axes: Vec<usize> = if let Some(ref at) = axes_t {
+        at.to_i64_vec()
+            .iter()
+            .map(|&a| {
+                if a < 0 {
+                    (rank as i64 + a) as usize
+                } else {
+                    a as usize
+                }
+            })
+            .collect()
+    } else {
+        (0..starts_ints.len()).collect()
+    };
+
+    for (i, &ax) in axes.iter().enumerate() {
+        starts[ax] = starts_ints[i];
+        ends[ax] = ends_ints[i];
+        if let Some(ref st) = steps_t {
+            steps[ax] = st.to_i64_vec()[i];
+        }
+    }
+
+    // Clamp starts/ends per ONNX Slice spec
+    for ax in 0..rank {
+        let dim = input.dims[ax] as i64;
+        if steps[ax] > 0 {
+            if starts[ax] < 0 {
+                starts[ax] += dim;
+            }
+            if ends[ax] < 0 {
+                ends[ax] += dim;
+            }
+            starts[ax] = starts[ax].clamp(0, dim);
+            ends[ax] = ends[ax].clamp(0, dim);
+        } else {
+            if starts[ax] < 0 {
+                starts[ax] += dim;
+            }
+            if ends[ax] < -dim {
+                ends[ax] = -1;
+            } else if ends[ax] < 0 {
+                ends[ax] += dim;
+            }
+            starts[ax] = starts[ax].clamp(-1, dim - 1);
+            ends[ax] = ends[ax].clamp(-1, dim - 1);
+        }
+    }
+
+    // Compute output dims
+    let mut out_dims = vec![0usize; rank];
+    for ax in 0..rank {
+        if steps[ax] > 0 {
+            if ends[ax] <= starts[ax] {
+                out_dims[ax] = 0;
+            } else {
+                out_dims[ax] = ((ends[ax] - starts[ax] - 1) / steps[ax] + 1) as usize;
+            }
+        } else if starts[ax] <= ends[ax] {
+            out_dims[ax] = 0;
+        } else {
+            out_dims[ax] = ((starts[ax] - ends[ax] - 1) / (-steps[ax]) + 1) as usize;
+        }
+    }
+
+    let numel: usize = out_dims.iter().product();
+
+    let mut in_strides = vec![1usize; rank];
+    for i in (0..rank - 1).rev() {
+        in_strides[i] = in_strides[i + 1] * input.dims[i + 1];
+    }
+
+    let mut out_strides = vec![1usize; rank];
+    for i in (0..rank - 1).rev() {
+        out_strides[i] = out_strides[i + 1] * out_dims[i + 1];
+    }
+
+    match &input.data {
+        TensorData::Float(in_data) => {
+            let mut data = vec![0.0f32; numel];
+            for out_flat in 0..numel {
+                let mut remaining = out_flat;
+                let mut in_flat = 0;
+                for ax in 0..rank {
+                    let coord = remaining / out_strides[ax];
+                    remaining %= out_strides[ax];
+                    let in_coord = starts[ax] + coord as i64 * steps[ax];
+                    in_flat += in_coord as usize * in_strides[ax];
+                }
+                data[out_flat] = in_data[in_flat];
+            }
+            values.insert(node.output[0].clone(), Tensor::new(out_dims, data));
+        }
+        TensorData::Int64(in_data) => {
+            let mut data = vec![0i64; numel];
+            for out_flat in 0..numel {
+                let mut remaining = out_flat;
+                let mut in_flat = 0;
+                for ax in 0..rank {
+                    let coord = remaining / out_strides[ax];
+                    remaining %= out_strides[ax];
+                    let in_coord = starts[ax] + coord as i64 * steps[ax];
+                    in_flat += in_coord as usize * in_strides[ax];
+                }
+                data[out_flat] = in_data[in_flat];
+            }
+            values.insert(node.output[0].clone(), Tensor::new_i64(out_dims, data));
+        }
+    }
+    Ok(())
+}
+
+pub fn exec_tile(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+    let repeats_t = get_tensor(values, &node.input[1])?;
+    let repeats: Vec<usize> = repeats_t.to_i64_vec().iter().map(|&v| v as usize).collect();
+
+    let rank = input.dims.len();
+    let mut out_dims = vec![0usize; rank];
+    for i in 0..rank {
+        out_dims[i] = input.dims[i] * repeats[i];
+    }
+
+    let numel: usize = out_dims.iter().product();
+
+    let mut out_strides = vec![1usize; rank];
+    for i in (0..rank - 1).rev() {
+        out_strides[i] = out_strides[i + 1] * out_dims[i + 1];
+    }
+    let mut in_strides = vec![1usize; rank];
+    for i in (0..rank - 1).rev() {
+        in_strides[i] = in_strides[i + 1] * input.dims[i + 1];
+    }
+
+    match &input.data {
+        TensorData::Float(in_data) => {
+            let mut data = vec![0.0f32; numel];
+            for out_flat in 0..numel {
+                let mut remaining = out_flat;
+                let mut in_flat = 0;
+                for ax in 0..rank {
+                    let coord = remaining / out_strides[ax];
+                    remaining %= out_strides[ax];
+                    in_flat += (coord % input.dims[ax]) * in_strides[ax];
+                }
+                data[out_flat] = in_data[in_flat];
+            }
+            values.insert(node.output[0].clone(), Tensor::new(out_dims, data));
+        }
+        TensorData::Int64(in_data) => {
+            let mut data = vec![0i64; numel];
+            for out_flat in 0..numel {
+                let mut remaining = out_flat;
+                let mut in_flat = 0;
+                for ax in 0..rank {
+                    let coord = remaining / out_strides[ax];
+                    remaining %= out_strides[ax];
+                    in_flat += (coord % input.dims[ax]) * in_strides[ax];
+                }
+                data[out_flat] = in_data[in_flat];
+            }
+            values.insert(node.output[0].clone(), Tensor::new_i64(out_dims, data));
+        }
+    }
+    Ok(())
+}
+
+pub fn exec_resize(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+
+    let rank = input.dims.len();
+
+    let out_dims: Vec<usize> = if node.input.len() > 3 && !node.input[3].is_empty() {
+        let sizes = get_tensor(values, &node.input[3])?;
+        sizes.to_i64_vec().iter().map(|&v| v as usize).collect()
+    } else if node.input.len() > 2 && !node.input[2].is_empty() {
+        let scales = get_tensor(values, &node.input[2])?;
+        let scales_f = scales.to_f32_vec();
+        input
+            .dims
+            .iter()
+            .zip(scales_f.iter())
+            .map(|(&d, &s)| (d as f32 * s) as usize)
+            .collect()
+    } else {
+        return Err(InferenceError::InvalidModel(
+            "Resize: no scales or sizes".into(),
+        ));
+    };
+
+    let numel: usize = out_dims.iter().product();
+    let mut data = vec![0.0f32; numel];
+
+    let mut out_strides = vec![1usize; rank];
+    for i in (0..rank - 1).rev() {
+        out_strides[i] = out_strides[i + 1] * out_dims[i + 1];
+    }
+    let mut in_strides = vec![1usize; rank];
+    for i in (0..rank - 1).rev() {
+        in_strides[i] = in_strides[i + 1] * input.dims[i + 1];
+    }
+
+    let input_f = input.floats();
+    for out_flat in 0..numel {
+        let mut remaining = out_flat;
+        let mut in_flat = 0;
+        for ax in 0..rank {
+            let out_coord = remaining / out_strides[ax];
+            remaining %= out_strides[ax];
+            let scale = out_dims[ax] as f32 / input.dims[ax] as f32;
+            let in_coord = ((out_coord as f32 + 0.5) / scale - 0.5)
+                .round()
+                .max(0.0)
+                .min((input.dims[ax] - 1) as f32) as usize;
+            in_flat += in_coord * in_strides[ax];
+        }
+        data[out_flat] = input_f[in_flat];
     }
 
     values.insert(node.output[0].clone(), Tensor::new(out_dims, data));
     Ok(())
+}
+
+pub fn exec_reduce_min(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let input = get_tensor(values, &node.input[0])?;
+    let keepdims = get_attr_int(node, "keepdims").unwrap_or(1) != 0;
+
+    let axes: Vec<i64> = if node.input.len() > 1 && !node.input[1].is_empty() {
+        let axes_t = get_tensor(values, &node.input[1])?;
+        axes_t.to_i64_vec()
+    } else {
+        get_attr_ints(node, "axes").unwrap_or_else(|| (0..input.dims.len() as i64).collect())
+    };
+
+    let rank = input.dims.len() as i64;
+    let axes_set: std::collections::HashSet<usize> = axes
+        .iter()
+        .map(|&a| {
+            if a < 0 {
+                (rank + a) as usize
+            } else {
+                a as usize
+            }
+        })
+        .collect();
+
+    let mut out_dims = Vec::new();
+    for (i, &d) in input.dims.iter().enumerate() {
+        if axes_set.contains(&i) {
+            if keepdims {
+                out_dims.push(1);
+            }
+        } else {
+            out_dims.push(d);
+        }
+    }
+    if out_dims.is_empty() {
+        out_dims.push(1);
+    }
+
+    let out_numel: usize = out_dims.iter().product();
+    let mut data = vec![f32::INFINITY; out_numel];
+
+    let in_rank = input.dims.len();
+    let mut in_strides = vec![1usize; in_rank];
+    for i in (0..in_rank - 1).rev() {
+        in_strides[i] = in_strides[i + 1] * input.dims[i + 1];
+    }
+
+    let out_rank = out_dims.len();
+    let mut out_strides = vec![1usize; out_rank];
+    if out_rank > 1 {
+        for i in (0..out_rank - 1).rev() {
+            out_strides[i] = out_strides[i + 1] * out_dims[i + 1];
+        }
+    }
+
+    let input_f = input.floats();
+    for in_flat in 0..input.numel() {
+        let mut remaining = in_flat;
+        let mut out_flat = 0;
+        let mut out_idx = 0;
+        for ax in 0..in_rank {
+            let coord = remaining / in_strides[ax];
+            remaining %= in_strides[ax];
+            if !axes_set.contains(&ax) {
+                out_flat += coord * out_strides[out_idx];
+                out_idx += 1;
+            } else if keepdims {
+                out_idx += 1;
+            }
+        }
+        data[out_flat] = data[out_flat].min(input_f[in_flat]);
+    }
+
+    values.insert(node.output[0].clone(), Tensor::new(out_dims, data));
+    Ok(())
+}
+
+pub fn exec_loop(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let body: &GraphProto = node
+        .attribute
+        .iter()
+        .find(|a| a.name == "body")
+        .and_then(|a| a.g.as_ref())
+        .ok_or_else(|| InferenceError::InvalidModel("Loop: no body graph".into()))?;
+
+    let trip_tensor = get_tensor(values, &node.input[0])?;
+    let trip_count = trip_tensor.to_i64_vec()[0] as usize;
+
+    let num_carried = node.input.len() - 2;
+    let mut carried: Vec<Tensor> = (0..num_carried)
+        .map(|i| get_tensor(values, &node.input[i + 2]))
+        .collect::<Result<Vec<_>>>()?;
+
+    let num_scan = body.output.len() - 1 - num_carried;
+    let mut scan_outputs: Vec<Vec<Tensor>> = vec![vec![]; num_scan];
+
+    for i in 0..trip_count {
+        let mut body_values: HashMap<String, Tensor> = HashMap::new();
+
+        for (k, v) in values.iter() {
+            body_values.insert(k.clone(), v.clone());
+        }
+
+        body_values.insert(
+            body.input[0].name.clone(),
+            Tensor::new_i64(vec![], vec![i as i64]),
+        );
+        body_values.insert(body.input[1].name.clone(), Tensor::new(vec![], vec![1.0]));
+        for (j, c) in carried.iter().enumerate() {
+            body_values.insert(body.input[j + 2].name.clone(), c.clone());
+        }
+
+        for init in &body.initializer {
+            if !init.name.is_empty() {
+                body_values.insert(init.name.clone(), Tensor::from_proto(init)?);
+            }
+        }
+
+        for body_node in &body.node {
+            execute_node(body_node, &mut body_values)?;
+        }
+
+        for j in 0..num_carried {
+            carried[j] = body_values
+                .get(&body.output[j + 1].name)
+                .cloned()
+                .unwrap_or_else(|| Tensor::new(vec![], vec![]));
+        }
+
+        for j in 0..num_scan {
+            let scan_val = body_values
+                .get(&body.output[1 + num_carried + j].name)
+                .cloned()
+                .unwrap_or_else(|| Tensor::new(vec![], vec![]));
+            scan_outputs[j].push(scan_val);
+        }
+    }
+
+    let mut out_idx = 0;
+    for j in 0..num_carried {
+        if out_idx < node.output.len() && !node.output[out_idx].is_empty() {
+            values.insert(node.output[out_idx].clone(), carried[j].clone());
+        }
+        out_idx += 1;
+    }
+    for j in 0..num_scan {
+        if out_idx < node.output.len() && !node.output[out_idx].is_empty() {
+            let scans = &scan_outputs[j];
+            if scans.is_empty() {
+                values.insert(node.output[out_idx].clone(), Tensor::new(vec![0], vec![]));
+            } else {
+                let inner_dims = &scans[0].dims;
+                let mut out_dims = vec![scans.len()];
+                out_dims.extend_from_slice(inner_dims);
+                // Preserve type from scan outputs
+                match &scans[0].data {
+                    TensorData::Float(_) => {
+                        let data: Vec<f32> = scans
+                            .iter()
+                            .flat_map(|t| t.floats().iter().copied())
+                            .collect();
+                        values.insert(node.output[out_idx].clone(), Tensor::new(out_dims, data));
+                    }
+                    TensorData::Int64(_) => {
+                        let data: Vec<i64> = scans
+                            .iter()
+                            .flat_map(|t| t.to_i64_vec().into_iter())
+                            .collect();
+                        values.insert(
+                            node.output[out_idx].clone(),
+                            Tensor::new_i64(out_dims, data),
+                        );
+                    }
+                }
+            }
+        }
+        out_idx += 1;
+    }
+
+    Ok(())
+}
+
+pub fn exec_nms(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    let boxes = get_tensor(values, &node.input[0])?;
+    let scores = get_tensor(values, &node.input[1])?;
+    let max_output = if node.input.len() > 2 && !node.input[2].is_empty() {
+        get_tensor(values, &node.input[2])?.to_i64_vec()[0] as usize
+    } else {
+        0
+    };
+    let iou_threshold = if node.input.len() > 3 && !node.input[3].is_empty() {
+        get_tensor(values, &node.input[3])?.floats()[0]
+    } else {
+        0.0
+    };
+    let score_threshold = if node.input.len() > 4 && !node.input[4].is_empty() {
+        get_tensor(values, &node.input[4])?.floats()[0]
+    } else {
+        f32::NEG_INFINITY
+    };
+
+    let batches = boxes.dims[0];
+    let num_boxes = boxes.dims[1];
+    let num_classes = scores.dims[1];
+
+    let boxes_f = boxes.floats();
+    let scores_f = scores.floats();
+    let mut selected: Vec<[i64; 3]> = Vec::new();
+
+    for batch in 0..batches {
+        for class in 0..num_classes {
+            let mut candidates: Vec<(usize, f32)> = Vec::new();
+            for b in 0..num_boxes {
+                let score = scores_f[(batch * num_classes + class) * num_boxes + b];
+                if score > score_threshold {
+                    candidates.push((b, score));
+                }
+            }
+            candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+            let mut kept: Vec<usize> = Vec::new();
+            for &(box_idx, _) in &candidates {
+                if max_output > 0 && kept.len() >= max_output {
+                    break;
+                }
+                let base_i = (batch * num_boxes + box_idx) * 4;
+                let bi = &boxes_f[base_i..base_i + 4];
+
+                let mut suppress = false;
+                for &k in &kept {
+                    let base_k = (batch * num_boxes + k) * 4;
+                    let bk = &boxes_f[base_k..base_k + 4];
+                    if iou(bi, bk) > iou_threshold {
+                        suppress = true;
+                        break;
+                    }
+                }
+                if !suppress {
+                    kept.push(box_idx);
+                    selected.push([batch as i64, class as i64, box_idx as i64]);
+                }
+            }
+        }
+    }
+
+    let num_selected = selected.len();
+    let data: Vec<i64> = selected.iter().flat_map(|s| s.iter().copied()).collect();
+    values.insert(
+        node.output[0].clone(),
+        Tensor::new_i64(vec![num_selected, 3], data),
+    );
+    Ok(())
+}
+
+fn iou(a: &[f32], b: &[f32]) -> f32 {
+    let y1 = a[0].max(b[0]);
+    let x1 = a[1].max(b[1]);
+    let y2 = a[2].min(b[2]);
+    let x2 = a[3].min(b[3]);
+    let inter = (y2 - y1).max(0.0) * (x2 - x1).max(0.0);
+    let area_a = (a[2] - a[0]).abs() * (a[3] - a[1]).abs();
+    let area_b = (b[2] - b[0]).abs() * (b[3] - b[1]).abs();
+    let union = area_a + area_b - inter;
+    if union <= 0.0 { 0.0 } else { inter / union }
 }

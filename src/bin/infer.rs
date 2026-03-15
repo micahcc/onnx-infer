@@ -115,21 +115,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let outputs = engine.run(inputs)?;
 
     for (name, tensor) in &outputs {
+        let floats = tensor.to_f32_vec();
         println!("Output '{name}': shape {:?}", tensor.dims);
-        if tensor.data.len() <= 100 {
-            println!("  values: {:?}", tensor.data);
+        if floats.len() <= 100 {
+            println!("  values: {floats:?}");
         } else {
             println!(
                 "  values: [{}, {}, ... ({} total)]",
-                tensor.data[0],
-                tensor.data[1],
-                tensor.data.len()
+                floats[0],
+                floats[1],
+                floats.len()
             );
         }
         // Print argmax for classification outputs
         if tensor.dims.len() == 2 && tensor.dims[0] == 1 {
-            let (class, score) = tensor
-                .data
+            let (class, score) = floats
                 .iter()
                 .enumerate()
                 .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())

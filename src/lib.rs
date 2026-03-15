@@ -42,20 +42,66 @@ impl std::error::Error for InferenceError {}
 pub type Result<T> = std::result::Result<T, InferenceError>;
 
 #[derive(Debug, Clone)]
+pub enum TensorData {
+    Float(Vec<f32>),
+    Int64(Vec<i64>),
+}
+
+#[derive(Debug, Clone)]
 pub struct Tensor {
     pub dims: Vec<usize>,
-    pub data: Vec<f32>,
+    pub data: TensorData,
 }
 
 impl Tensor {
     pub fn new(dims: Vec<usize>, data: Vec<f32>) -> Self {
-        Self { dims, data }
+        Self {
+            dims,
+            data: TensorData::Float(data),
+        }
+    }
+
+    pub fn new_i64(dims: Vec<usize>, data: Vec<i64>) -> Self {
+        Self {
+            dims,
+            data: TensorData::Int64(data),
+        }
+    }
+
+    /// Access float data by reference. Panics if tensor holds Int64 data.
+    pub fn floats(&self) -> &[f32] {
+        match &self.data {
+            TensorData::Float(d) => d,
+            TensorData::Int64(_) => panic!("expected float tensor, got int64"),
+        }
+    }
+
+    /// Convert data to Vec<f32>, regardless of storage type.
+    pub fn to_f32_vec(&self) -> Vec<f32> {
+        match &self.data {
+            TensorData::Float(d) => d.clone(),
+            TensorData::Int64(d) => d.iter().map(|&v| v as f32).collect(),
+        }
+    }
+
+    /// Convert data to Vec<i64>, regardless of storage type.
+    pub fn to_i64_vec(&self) -> Vec<i64> {
+        match &self.data {
+            TensorData::Float(d) => d.iter().map(|&v| v as i64).collect(),
+            TensorData::Int64(d) => d.clone(),
+        }
     }
 
     pub fn from_proto(proto: &TensorProto) -> Result<Self> {
         let dims: Vec<usize> = proto.dims.iter().map(|&d| d as usize).collect();
-        let data = extract_float_data(proto)?;
-        Ok(Self { dims, data })
+        // INT32 and INT64 are stored natively to preserve precision
+        if proto.data_type == 6 || proto.data_type == 7 {
+            let data = extract_int_data(proto)?;
+            Ok(Self::new_i64(dims, data))
+        } else {
+            let data = extract_float_data(proto)?;
+            Ok(Self::new(dims, data))
+        }
     }
 
     pub fn from_proto_bytes(bytes: &[u8]) -> Result<Self> {
@@ -69,73 +115,69 @@ impl Tensor {
 }
 
 fn extract_float_data(tensor: &TensorProto) -> Result<Vec<f32>> {
-    // data_type: 1=FLOAT, 2=UINT8, 3=INT8, 6=INT32, 7=INT64, 11=DOUBLE
+    // data_type: 1=FLOAT, 2=UINT8, 3=INT8, 11=DOUBLE
     let dtype = tensor.data_type;
 
     if !tensor.raw_data.is_empty() {
         return match dtype {
-            2 => {
-                // UINT8: 1 byte each
-                Ok(tensor.raw_data.iter().map(|&b| b as f32).collect())
-            }
-            3 => {
-                // INT8: 1 byte each
-                Ok(tensor.raw_data.iter().map(|&b| (b as i8) as f32).collect())
-            }
-            6 => {
-                // INT32: 4 bytes each
-                Ok(tensor
-                    .raw_data
-                    .chunks_exact(4)
-                    .map(|chunk| {
-                        i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as f32
-                    })
-                    .collect())
-            }
-            7 => {
-                // INT64: 8 bytes each
-                Ok(tensor
-                    .raw_data
-                    .chunks_exact(8)
-                    .map(|chunk| {
-                        i64::from_le_bytes([
-                            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
-                            chunk[7],
-                        ]) as f32
-                    })
-                    .collect())
-            }
-            11 => {
-                // DOUBLE: 8 bytes each
-                Ok(tensor
-                    .raw_data
-                    .chunks_exact(8)
-                    .map(|chunk| {
-                        f64::from_le_bytes([
-                            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
-                            chunk[7],
-                        ]) as f32
-                    })
-                    .collect())
-            }
-            _ => {
-                // FLOAT (1) and others stored as 4-byte floats
-                Ok(tensor
-                    .raw_data
-                    .chunks_exact(4)
-                    .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                    .collect())
-            }
+            2 => Ok(tensor.raw_data.iter().map(|&b| b as f32).collect()),
+            3 => Ok(tensor.raw_data.iter().map(|&b| (b as i8) as f32).collect()),
+            11 => Ok(tensor
+                .raw_data
+                .chunks_exact(8)
+                .map(|chunk| {
+                    f64::from_le_bytes([
+                        chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
+                        chunk[7],
+                    ]) as f32
+                })
+                .collect()),
+            _ => Ok(tensor
+                .raw_data
+                .chunks_exact(4)
+                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect()),
         };
     }
     if !tensor.float_data.is_empty() {
         return Ok(tensor.float_data.clone());
     }
+    // Some non-float types (e.g. UINT8) store scalars in int32_data
+    if !tensor.int32_data.is_empty() {
+        return Ok(tensor.int32_data.iter().map(|&v| v as f32).collect());
+    }
     if !tensor.int64_data.is_empty() {
         return Ok(tensor.int64_data.iter().map(|&v| v as f32).collect());
     }
+    Ok(vec![])
+}
+
+fn extract_int_data(tensor: &TensorProto) -> Result<Vec<i64>> {
+    if !tensor.raw_data.is_empty() {
+        return match tensor.data_type {
+            6 => Ok(tensor
+                .raw_data
+                .chunks_exact(4)
+                .map(|chunk| i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as i64)
+                .collect()),
+            7 => Ok(tensor
+                .raw_data
+                .chunks_exact(8)
+                .map(|chunk| {
+                    i64::from_le_bytes([
+                        chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
+                        chunk[7],
+                    ])
+                })
+                .collect()),
+            _ => unreachable!(),
+        };
+    }
+    if !tensor.int64_data.is_empty() {
+        return Ok(tensor.int64_data.clone());
+    }
     if !tensor.int32_data.is_empty() {
-        return Ok(tensor.int32_data.iter().map(|&v| v as f32).collect());
+        return Ok(tensor.int32_data.iter().map(|&v| v as i64).collect());
     }
     Ok(vec![])
 }
@@ -157,6 +199,21 @@ impl InferenceEngine {
             .as_ref()
             .ok_or_else(|| InferenceError::InvalidModel("Model has no graph".into()))?;
 
+        let output_names: Vec<String> = graph.output.iter().map(|o| o.name.clone()).collect();
+        self.run_with_outputs(inputs, &output_names)
+    }
+
+    pub fn run_with_outputs(
+        &self,
+        inputs: HashMap<String, Tensor>,
+        output_names: &[String],
+    ) -> Result<HashMap<String, Tensor>> {
+        let graph = self
+            .model
+            .graph
+            .as_ref()
+            .ok_or_else(|| InferenceError::InvalidModel("Model has no graph".into()))?;
+
         let mut values: HashMap<String, Tensor> = inputs;
 
         // Load initializers
@@ -171,11 +228,11 @@ impl InferenceEngine {
             self.execute_node(node, &mut values)?;
         }
 
-        // Collect outputs
+        // Collect requested outputs
         let mut outputs = HashMap::new();
-        for output in &graph.output {
-            if let Some(tensor) = values.get(&output.name) {
-                outputs.insert(output.name.clone(), tensor.clone());
+        for name in output_names {
+            if let Some(tensor) = values.get(name) {
+                outputs.insert(name.clone(), tensor.clone());
             }
         }
 
@@ -183,36 +240,54 @@ impl InferenceEngine {
     }
 
     fn execute_node(&self, node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
-        match node.op_type.as_str() {
-            "Constant" => shape::exec_constant(node, values),
-            "Div" => binary::exec_div(node, values),
-            "Conv" => conv::exec_conv(node, values),
-            "Reshape" => shape::exec_reshape(node, values),
-            "Add" => binary::exec_add(node, values),
-            "Sub" => binary::exec_sub(node, values),
-            "Mul" => binary::exec_mul(node, values),
-            "Relu" => activation::exec_relu(node, values),
-            "LeakyRelu" => activation::exec_leaky_relu(node, values),
-            "BatchNormalization" => activation::exec_batch_normalization(node, values),
-            "Clip" => activation::exec_clip(node, values),
-            "MaxPool" => pool::exec_maxpool(node, values),
-            "GlobalAveragePool" => pool::exec_global_avg_pool(node, values),
-            "MatMul" => matmul::exec_matmul(node, values),
-            "Gemm" => matmul::exec_gemm(node, values),
-            "Softmax" => activation::exec_softmax(node, values),
-            "Flatten" => shape::exec_flatten(node, values),
-            "Shape" => shape::exec_shape(node, values),
-            "Gather" => shape::exec_gather(node, values),
-            "Unsqueeze" => shape::exec_unsqueeze(node, values),
-            "Concat" => shape::exec_concat(node, values),
-            "QuantizeLinear" => quantize::exec_quantize_linear(node, values),
-            "DequantizeLinear" => quantize::exec_dequantize_linear(node, values),
-            "QLinearConv" => quantize::exec_qlinear_conv(node, values),
-            "QLinearAdd" => quantize::exec_qlinear_add(node, values),
-            "QLinearMatMul" => quantize::exec_qlinear_matmul(node, values),
-            "QLinearGlobalAveragePool" => quantize::exec_qlinear_global_avg_pool(node, values),
-            op => Err(InferenceError::UnsupportedOperator(op.to_string())),
-        }
+        execute_node(node, values)
+    }
+}
+
+pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    match node.op_type.as_str() {
+        "Constant" => shape::exec_constant(node, values),
+        "Div" => binary::exec_div(node, values),
+        "Conv" => conv::exec_conv(node, values),
+        "Reshape" => shape::exec_reshape(node, values),
+        "Add" => binary::exec_add(node, values),
+        "Sub" => binary::exec_sub(node, values),
+        "Mul" => binary::exec_mul(node, values),
+        "Relu" => activation::exec_relu(node, values),
+        "LeakyRelu" => activation::exec_leaky_relu(node, values),
+        "BatchNormalization" => activation::exec_batch_normalization(node, values),
+        "Clip" => activation::exec_clip(node, values),
+        "MaxPool" => pool::exec_maxpool(node, values),
+        "GlobalAveragePool" => pool::exec_global_avg_pool(node, values),
+        "MatMul" => matmul::exec_matmul(node, values),
+        "Gemm" => matmul::exec_gemm(node, values),
+        "Softmax" => activation::exec_softmax(node, values),
+        "Flatten" => shape::exec_flatten(node, values),
+        "Shape" => shape::exec_shape(node, values),
+        "Gather" => shape::exec_gather(node, values),
+        "Unsqueeze" => shape::exec_unsqueeze(node, values),
+        "Concat" => shape::exec_concat(node, values),
+        "QuantizeLinear" => quantize::exec_quantize_linear(node, values),
+        "DequantizeLinear" => quantize::exec_dequantize_linear(node, values),
+        "QLinearConv" => quantize::exec_qlinear_conv(node, values),
+        "QLinearAdd" => quantize::exec_qlinear_add(node, values),
+        "QLinearMatMul" => quantize::exec_qlinear_matmul(node, values),
+        "QLinearGlobalAveragePool" => quantize::exec_qlinear_global_avg_pool(node, values),
+        "Sigmoid" => activation::exec_sigmoid(node, values),
+        "Exp" => activation::exec_exp(node, values),
+        "Ceil" => activation::exec_ceil(node, values),
+        "Round" => activation::exec_round(node, values),
+        "Identity" => shape::exec_identity(node, values),
+        "Cast" => shape::exec_cast(node, values),
+        "Transpose" => shape::exec_transpose(node, values),
+        "Squeeze" => shape::exec_squeeze(node, values),
+        "Slice" => shape::exec_slice(node, values),
+        "Tile" => shape::exec_tile(node, values),
+        "Resize" => shape::exec_resize(node, values),
+        "ReduceMin" => shape::exec_reduce_min(node, values),
+        "Loop" => shape::exec_loop(node, values),
+        "NonMaxSuppression" => shape::exec_nms(node, values),
+        op => Err(InferenceError::UnsupportedOperator(op.to_string())),
     }
 }
 
@@ -323,19 +398,19 @@ mod tests {
 
         assert_eq!(output.dims, expected.dims);
 
-        for (got, want) in output.data.iter().zip(expected.data.iter()) {
+        let out_data = output.floats();
+        let exp_data = expected.floats();
+        for (got, want) in out_data.iter().zip(exp_data.iter()) {
             assert_relative_eq!(got, want, max_relative = 1e-3, epsilon = 1e-5);
         }
 
-        let got_class = output
-            .data
+        let got_class = out_data
             .iter()
             .enumerate()
             .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
             .unwrap()
             .0;
-        let expected_class = expected
-            .data
+        let expected_class = exp_data
             .iter()
             .enumerate()
             .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
@@ -376,8 +451,8 @@ mod tests {
             exps.iter().map(|&e| e / sum).collect()
         }
 
-        let got_probs = softmax(&output.data);
-        let want_probs = softmax(&expected.data);
+        let got_probs = softmax(output.floats());
+        let want_probs = softmax(expected.floats());
 
         let mut max_abs_err: f32 = 0.0;
         for (g, w) in got_probs.iter().zip(want_probs.iter()) {
@@ -477,5 +552,57 @@ mod tests {
     #[test]
     fn test_tinyyolov2_8_set_0() {
         run_fixture(&fixture("tinyyolov2-8"), "model.onnx", 0);
+    }
+
+    // --- Tiny YOLOv3 models ---
+
+    /// Run a multi-input/output model fixture.
+    fn run_multi_io_fixture(base: &Path, model_file: &str, test_set: usize) {
+        let model_bytes = fs::read(base.join(model_file)).expect("read model");
+        let engine = InferenceEngine::from_bytes(&model_bytes).expect("load model");
+
+        let model = ModelProto::decode(&model_bytes[..]).unwrap();
+        let graph = model.graph.as_ref().unwrap();
+
+        let test_dir = base.join(format!("test_data_set_{test_set}"));
+
+        let mut inputs = HashMap::new();
+        for i in 0..graph.input.len() {
+            let pb_path = test_dir.join(format!("input_{i}.pb"));
+            if pb_path.exists() {
+                let input = Tensor::from_proto_bytes(&fs::read(&pb_path).expect("read input"))
+                    .expect("parse input");
+                inputs.insert(graph.input[i].name.clone(), input);
+            }
+        }
+
+        let outputs = engine.run(inputs).expect("inference");
+
+        for i in 0..graph.output.len() {
+            let pb_path = test_dir.join(format!("output_{i}.pb"));
+            if pb_path.exists() {
+                let expected = Tensor::from_proto_bytes(&fs::read(&pb_path).expect("read output"))
+                    .expect("parse output");
+                let name = &graph.output[i].name;
+                let output = outputs
+                    .get(name)
+                    .unwrap_or_else(|| panic!("missing output {name}"));
+                assert_eq!(output.dims, expected.dims, "shape mismatch for {name}");
+
+                let got = output.to_f32_vec();
+                let want = expected.to_f32_vec();
+                for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                    assert!(
+                        (g - w).abs() < 1e-3 || (g - w).abs() / w.abs().max(1e-6) < 1e-3,
+                        "output {name}[{j}]: got {g}, want {w}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_tinyyolov3_11_set_0() {
+        run_multi_io_fixture(&fixture("tiny-yolov3-11"), "yolov3-tiny.onnx", 0);
     }
 }

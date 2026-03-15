@@ -26,8 +26,6 @@ pub fn exec_conv(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resu
     let group = get_attr_int(node, "group").unwrap_or(1) as usize;
     let auto_pad = get_attr_string(node, "auto_pad").unwrap_or_default();
 
-    // input: [N, C, H, W]
-    // weight: [M, C/group, kH, kW]
     let n = input.dims[0];
     let c_in = input.dims[1];
     let h_in = input.dims[2];
@@ -41,7 +39,6 @@ pub fn exec_conv(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resu
     let dh = dilations[0] as usize;
     let dw = dilations[1] as usize;
 
-    // Handle auto_pad
     if auto_pad == "SAME_UPPER" || auto_pad == "SAME_LOWER" {
         let oh = h_in.div_ceil(sh);
         let ow = w_in.div_ceil(sw);
@@ -73,6 +70,8 @@ pub fn exec_conv(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resu
     let c_in_per_group = c_in / group;
     let c_out_per_group = c_out / group;
 
+    let input_f = input.floats();
+    let weight_f = weight.floats();
     let mut output = vec![0.0f32; n * c_out * h_out * w_out];
 
     for batch in 0..n {
@@ -99,13 +98,13 @@ pub fn exec_conv(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resu
                                             ((batch * c_in + abs_ic) * h_in + ih) * w_in + iw;
                                         let weight_idx =
                                             ((abs_oc * c_in_per_group + ic) * kh + fh) * kw + fw;
-                                        sum += input.data[input_idx] * weight.data[weight_idx];
+                                        sum += input_f[input_idx] * weight_f[weight_idx];
                                     }
                                 }
                             }
                         }
                         if let Some(ref bias) = bias {
-                            sum += bias.data[abs_oc];
+                            sum += bias.floats()[abs_oc];
                         }
                         let out_idx = ((batch * c_out + abs_oc) * h_out + oh) * w_out + ow;
                         output[out_idx] = sum;

@@ -13,8 +13,6 @@ pub fn exec_matmul(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Re
     let a = get_tensor(values, &node.input[0])?;
     let b = get_tensor(values, &node.input[1])?;
 
-    // Support 2D matmul: [M, K] x [K, N] -> [M, N]
-    // Also handle batched: [..., M, K] x [..., K, N] -> [..., M, N]
     let a_rank = a.dims.len();
     let b_rank = b.dims.len();
 
@@ -22,7 +20,6 @@ pub fn exec_matmul(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Re
     let k = a.dims[a_rank - 1];
     let n = b.dims[b_rank - 1];
 
-    // For simplicity, handle 2D case and batch prefix
     let batch_dims_a = &a.dims[..a_rank - 2];
     let batch_dims_b = &b.dims[..b_rank - 2];
     let batch_shape = broadcast_shape(batch_dims_a, batch_dims_b);
@@ -32,6 +29,8 @@ pub fn exec_matmul(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Re
     out_dims.push(m);
     out_dims.push(n);
 
+    let a_f = a.floats();
+    let b_f = b.floats();
     let mut output = vec![0.0f32; batch_size * m * n];
 
     let a_batch_stride = m * k;
@@ -53,7 +52,7 @@ pub fn exec_matmul(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Re
             for j in 0..n {
                 let mut sum = 0.0f32;
                 for p in 0..k {
-                    sum += a.data[a_off + i * k + p] * b.data[b_off + p * n + j];
+                    sum += a_f[a_off + i * k + p] * b_f[b_off + p * n + j];
                 }
                 output[batch * o_batch_stride + i * n + j] = sum;
             }
@@ -91,20 +90,22 @@ pub fn exec_gemm(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resu
     debug_assert_eq!(k_a, k_b);
     let k = k_a;
 
+    let a_f = a.floats();
+    let b_f = b.floats();
     let mut output = vec![0.0f32; m * n];
     for i in 0..m {
         for j in 0..n {
             let mut sum = 0.0f32;
             for p in 0..k {
                 let a_val = if trans_a {
-                    a.data[p * m + i]
+                    a_f[p * m + i]
                 } else {
-                    a.data[i * k + p]
+                    a_f[i * k + p]
                 };
                 let b_val = if trans_b {
-                    b.data[j * k + p]
+                    b_f[j * k + p]
                 } else {
-                    b.data[p * n + j]
+                    b_f[p * n + j]
                 };
                 sum += a_val * b_val;
             }
@@ -113,13 +114,13 @@ pub fn exec_gemm(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Resu
     }
 
     if let Some(c_tensor) = c_tensor {
-        // Broadcast-add C (typically [N] or [M, N])
+        let c_f = c_tensor.floats();
         let c_shape = broadcast_shape(&[m, n], &c_tensor.dims);
         for i in 0..m {
             for j in 0..n {
                 let idx = [i, j];
                 let ci = broadcast_index(&idx, &c_tensor.dims, &c_shape);
-                output[i * n + j] += beta * c_tensor.data[ci];
+                output[i * n + j] += beta * c_f[ci];
             }
         }
     }
