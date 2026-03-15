@@ -6,6 +6,11 @@ edition = "2024"
 [dependencies]
 prost = "0"
 clap = { version = "4", features = ["derive"] }
+image = "0.25"
 
 [build-dependencies]
 prost-build = "0"
+
+[[bin]]
+name = "onnx-infer"
+path = "src/bin/infer.rs"
