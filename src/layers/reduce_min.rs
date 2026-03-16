@@ -56,10 +56,10 @@ impl ReduceMin {
         };
 
         // If we have a static axes mask and input shape, fully precompute
-        if !input_shape.is_empty() {
-            if let Some(mask) = s.axes_attr_mask {
-                s.precomp = Some(Self::compute_precomp(input_shape, &mask, keepdims));
-            }
+        if !input_shape.is_empty()
+            && let Some(mask) = s.axes_attr_mask
+        {
+            s.precomp = Some(Self::compute_precomp(input_shape, &mask, keepdims));
         }
 
         s

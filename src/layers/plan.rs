@@ -417,10 +417,10 @@ pub fn build_node(
     let empty: &[usize] = &[];
     let mut input_shapes: [&[usize]; 8] = [empty; 8];
     for (i, name) in inputs.iter().enumerate().take(8) {
-        if !name.is_empty() {
-            if let Some(s) = shape_map.get(name) {
-                input_shapes[i] = s.as_slice();
-            }
+        if !name.is_empty()
+            && let Some(s) = shape_map.get(name)
+        {
+            input_shapes[i] = s.as_slice();
         }
     }
 
