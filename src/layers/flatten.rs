@@ -1,48 +1,62 @@
 use std::collections::HashMap;
 
+use crate::Dims;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+pub struct FlattenPrecomp {
+    pub outer: usize,
+    pub inner: usize,
+}
+
 pub struct Flatten {
     pub inputs: Vec<String>,
     pub axis: usize,
-    // Precomputed (0 = not precomputed)
-    pub pre_outer: usize,
-    pub pre_inner: usize,
+    pub shape_cache: Dims,
+    pub precomp: Option<FlattenPrecomp>,
 }
 
 impl Flatten {
-    pub fn new(inputs: Vec<String>, axis: usize, input_shape: &[usize]) -> Self {
-        let mut s = Self {
+    pub fn compute_shapes(axis: usize, shape: &[usize]) -> FlattenPrecomp {
+        FlattenPrecomp {
+            outer: shape[..axis].iter().product(),
+            inner: shape[axis..].iter().product(),
+        }
+    }
+
+    pub fn new(inputs: Vec<String>, axis: usize, initial_shape: &[usize]) -> Self {
+        let (shape_cache, precomp) = if !initial_shape.is_empty() {
+            (
+                Dims::from_slice(initial_shape),
+                Some(Self::compute_shapes(axis, initial_shape)),
+            )
+        } else {
+            (Dims::new(), None)
+        };
+        Self {
             inputs,
             axis,
-            pre_outer: 0,
-            pre_inner: 0,
-        };
-        if !input_shape.is_empty() {
-            let shape = input_shape;
-            s.pre_outer = shape[..axis].iter().product();
-            s.pre_inner = shape[axis..].iter().product();
+            shape_cache,
+            precomp,
         }
-        s
     }
 }
 
 impl Layer for Flatten {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
-        let (outer, inner) = if self.pre_inner > 0 {
-            (self.pre_outer, self.pre_inner)
-        } else {
-            (
-                input.dims[..self.axis].iter().product(),
-                input.dims[self.axis..].iter().product(),
-            )
+        let p = match &self.precomp {
+            Some(p) if self.shape_cache.as_slice() == input.dims.as_slice() => p,
+            _ => {
+                self.precomp = Some(Self::compute_shapes(self.axis, &input.dims));
+                self.shape_cache.clone_from(&input.dims);
+                self.precomp.as_ref().expect("just set")
+            }
         };
         output.copy_from(input);
-        output.set_dims(&[outer, inner]);
+        output.set_dims(&[p.outer, p.inner]);
         Ok(())
     }
 }

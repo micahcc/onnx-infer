@@ -1,46 +1,60 @@
 use std::collections::HashMap;
 
 use crate::DType;
+use crate::Dims;
 use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+pub struct ConcatPrecomp {
+    pub axis: usize,
+    pub rank: usize,
+    pub outer: usize,
+    pub inner: usize,
+}
+
 pub struct Concat {
     pub inputs: Vec<String>,
     pub axis: i64,
-    // Precomputed (0 = not precomputed)
-    pub pre_axis: usize,
-    pub pre_rank: usize,
-    pub pre_outer: usize,
-    pub pre_inner: usize,
+    pub shape_cache: Dims,
+    pub precomp: Option<ConcatPrecomp>,
 }
 
 impl Concat {
-    pub fn new(inputs: Vec<String>, axis: i64, input_shapes: &[&[usize]]) -> Self {
-        let mut s = Self {
+    pub fn compute_shapes(axis: i64, shape: &[usize]) -> ConcatPrecomp {
+        let rank = shape.len();
+        let axis = if axis < 0 {
+            (rank as i64 + axis) as usize
+        } else {
+            axis as usize
+        };
+        ConcatPrecomp {
+            axis,
+            rank,
+            outer: shape[..axis].iter().product(),
+            inner: shape[axis + 1..].iter().product(),
+        }
+    }
+
+    pub fn new(inputs: Vec<String>, axis: i64, initial_shapes: &[&[usize]]) -> Self {
+        let (shape_cache, precomp) =
+            if let Some(shape) = initial_shapes.iter().find(|s| !s.is_empty()) {
+                (
+                    Dims::from_slice(shape),
+                    Some(Self::compute_shapes(axis, shape)),
+                )
+            } else {
+                (Dims::new(), None)
+            };
+
+        Self {
             inputs,
             axis,
-            pre_axis: 0,
-            pre_rank: 0,
-            pre_outer: 0,
-            pre_inner: 0,
-        };
-        // Use the first non-empty input shape to precompute
-        if let Some(shape) = input_shapes.iter().find(|s| !s.is_empty()) {
-            let rank = shape.len();
-            let axis = if axis < 0 {
-                (rank as i64 + axis) as usize
-            } else {
-                axis as usize
-            };
-            s.pre_axis = axis;
-            s.pre_rank = rank;
-            s.pre_outer = shape[..axis].iter().product();
-            s.pre_inner = shape[axis + 1..].iter().product();
+            shape_cache,
+            precomp,
         }
-        s
     }
 }
 
@@ -53,38 +67,27 @@ impl Layer for Concat {
             .ok_or_else(|| InferenceError::InvalidModel("Concat with no inputs".into()))?;
         let first = get_tensor(values, first_name)?;
 
-        let (axis, rank, outer, inner) = if self.pre_rank > 0 && self.pre_rank == first.dims.len() {
-            // Verify pre-computed values match runtime
-            let rt_outer: usize = first.dims[..self.pre_axis].iter().product();
-            let rt_inner: usize = first.dims[self.pre_axis + 1..].iter().product();
-            if rt_outer != self.pre_outer || rt_inner != self.pre_inner {
-                // Dynamic shape: fall back to runtime computation
-                (self.pre_axis, self.pre_rank, rt_outer, rt_inner)
-            } else {
-                (self.pre_axis, self.pre_rank, self.pre_outer, self.pre_inner)
+        let p = match &self.precomp {
+            Some(p)
+                if p.rank == first.dims.len() && {
+                    let rt_outer: usize = first.dims[..p.axis].iter().product();
+                    let rt_inner: usize = first.dims[p.axis + 1..].iter().product();
+                    rt_outer == p.outer && rt_inner == p.inner
+                } =>
+            {
+                p
             }
-        } else if self.pre_rank > 0 {
-            // Rank mismatch: fall back
-            let rank = first.dims.len();
-            let axis = if self.axis < 0 {
-                (rank as i64 + self.axis) as usize
-            } else {
-                self.axis as usize
-            };
-            let outer: usize = first.dims[..axis].iter().product();
-            let inner: usize = first.dims[axis + 1..].iter().product();
-            (axis, rank, outer, inner)
-        } else {
-            let rank = first.dims.len();
-            let axis = if self.axis < 0 {
-                (rank as i64 + self.axis) as usize
-            } else {
-                self.axis as usize
-            };
-            let outer: usize = first.dims[..axis].iter().product();
-            let inner: usize = first.dims[axis + 1..].iter().product();
-            (axis, rank, outer, inner)
+            _ => {
+                self.precomp = Some(Self::compute_shapes(self.axis, &first.dims));
+                self.shape_cache.clone_from(&first.dims);
+                self.precomp.as_ref().expect("just set")
+            }
         };
+
+        let axis = p.axis;
+        let rank = p.rank;
+        let outer = p.outer;
+        let inner = p.inner;
 
         let mut out_dims = [0usize; 8];
         for (i, &d) in first.dims.iter().enumerate() {

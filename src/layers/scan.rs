@@ -6,7 +6,6 @@ use crate::Dims;
 use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
-use crate::dims;
 use crate::get_tensor;
 use crate::layers::Plan;
 use crate::layers::PlanNode;
@@ -198,17 +197,17 @@ impl Scan {
         };
 
         // Initialize state from outer values
-        for (j, name) in self.state_in_names.iter().enumerate() {
+        for (j, _name) in self.state_in_names.iter().enumerate() {
             let src = get_tensor(outer_values, &self.inputs[j])?;
             self.state[j].copy_from(src);
         }
 
         // Update outer references
         for name in &self.outer_refs {
-            if let Some(outer) = outer_values.get(name) {
-                if let Some(body) = self.values.get_mut(name) {
-                    body.copy_from(outer);
-                }
+            if let Some(outer) = outer_values.get(name)
+                && let Some(body) = self.values.get_mut(name)
+            {
+                body.copy_from(outer);
             }
         }
 
@@ -352,12 +351,12 @@ impl Scan {
         // Write state outputs
         let mut out_idx = 0;
         let outputs = &self.outputs;
-        for j in 0..num_state {
+        for s in state.iter().take(num_state) {
             if out_idx < outputs.len() && !outputs[out_idx].is_empty() {
                 let (key, mut outer) = outer_values
                     .remove_entry(outputs[out_idx].as_str())
                     .unwrap_or_else(|| (outputs[out_idx].clone(), Tensor::default()));
-                outer.copy_from(&state[j]);
+                outer.copy_from(s);
                 outer_values.insert(key, outer);
             }
             out_idx += 1;

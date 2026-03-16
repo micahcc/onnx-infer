@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::Dims;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
@@ -16,33 +17,41 @@ pub struct DequantizeLinear {
     pub inputs: Vec<String>,
     pub axis: i64,
     default_zp: Tensor,
+    pub shape_cache: Dims,
     pub precomp: Option<DequantizePrecomp>,
 }
 
 impl DequantizeLinear {
-    pub fn new(inputs: Vec<String>, axis: i64, input_shape: &[usize]) -> Self {
-        let precomp = if !input_shape.is_empty() {
-            let shape = input_shape;
-            let rank = shape.len() as i64;
-            let a = if axis < 0 {
-                (rank + axis) as usize
-            } else {
-                axis as usize
-            };
-            Some(DequantizePrecomp {
-                axis: a,
-                outer: shape[..a].iter().product(),
-                ch: shape[a],
-                inner: shape[a + 1..].iter().product(),
-            })
+    pub fn compute_shapes(axis: i64, shape: &[usize]) -> DequantizePrecomp {
+        let rank = shape.len() as i64;
+        let a = if axis < 0 {
+            (rank + axis) as usize
         } else {
-            None
+            axis as usize
+        };
+        DequantizePrecomp {
+            axis: a,
+            outer: shape[..a].iter().product(),
+            ch: shape[a],
+            inner: shape[a + 1..].iter().product(),
+        }
+    }
+
+    pub fn new(inputs: Vec<String>, axis: i64, initial_shape: &[usize]) -> Self {
+        let (shape_cache, precomp) = if !initial_shape.is_empty() {
+            (
+                Dims::from_slice(initial_shape),
+                Some(Self::compute_shapes(axis, initial_shape)),
+            )
+        } else {
+            (Dims::new(), None)
         };
 
         Self {
             inputs,
             axis,
             default_zp: Tensor::new(crate::dims![], vec![0.0]),
+            shape_cache,
             precomp,
         }
     }
@@ -72,28 +81,22 @@ impl Layer for DequantizeLinear {
             }
             output.set_dims(&input.dims);
         } else {
-            let (outer, ch, inner) = if let Some(p) = &self.precomp {
-                (p.outer, p.ch, p.inner)
-            } else {
-                let rank = input.dims.len() as i64;
-                let axis = if self.axis < 0 {
-                    (rank + self.axis) as usize
-                } else {
-                    self.axis as usize
-                };
-                (
-                    input.dims[..axis].iter().product(),
-                    input.dims[axis],
-                    input.dims[axis + 1..].iter().product(),
-                )
+            let p = match &self.precomp {
+                Some(p) if self.shape_cache.as_slice() == input.dims.as_slice() => p,
+                _ => {
+                    self.precomp = Some(Self::compute_shapes(self.axis, &input.dims));
+                    self.shape_cache.clone_from(&input.dims);
+                    self.precomp.as_ref().expect("just set")
+                }
             };
+
             let buf = output.as_mut_f32(numel);
-            for o in 0..outer {
-                for c in 0..ch {
+            for o in 0..p.outer {
+                for c in 0..p.ch {
                     let s = scale_f[c];
                     let z = zp_f[c];
-                    let base = (o * ch + c) * inner;
-                    for i in 0..inner {
+                    let base = (o * p.ch + c) * p.inner;
+                    for i in 0..p.inner {
                         buf[base + i] = (input_f[base + i] - z) * s;
                     }
                 }

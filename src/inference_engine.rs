@@ -50,8 +50,10 @@ impl InferenceEngine {
 
     pub fn run(&mut self, inputs: HashMap<String, Tensor>) -> Result<()> {
         let output_names = std::mem::take(&mut self.plan.output_names);
-        let result = self.run_for(inputs, &output_names);
+        let mut outputs = std::mem::take(&mut self.outputs);
+        let result = self.run_for(inputs, &output_names, &mut outputs);
         self.plan.output_names = output_names;
+        self.outputs = outputs;
         result
     }
 
@@ -59,6 +61,7 @@ impl InferenceEngine {
         &mut self,
         inputs: HashMap<String, Tensor>,
         output_names: &[String],
+        outputs: &mut HashMap<String, Tensor>,
     ) -> Result<()> {
         let _span = tracing::trace_span!("inference").entered();
 
@@ -98,11 +101,12 @@ impl InferenceEngine {
             }
         }
 
-        // Copy results into persistent output buffer (no allocation after warmup)
+        // Copy results into caller-provided output buffer
         for name in output_names {
-            if let Some(src) = self.values.get(name)
-                && let Some(dst) = self.outputs.get_mut(name)
-            {
+            if let Some(src) = self.values.get(name) {
+                let dst = outputs
+                    .entry(name.clone())
+                    .or_default();
                 dst.copy_from(src);
             }
         }

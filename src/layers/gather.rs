@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::DType;
+use crate::Dims;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
@@ -18,56 +19,75 @@ pub struct GatherPrecomp {
 pub struct Gather {
     pub inputs: Vec<String>,
     pub axis: i64,
+    pub shape_cache: Dims,
     pub precomp: Option<GatherPrecomp>,
 }
 
 impl Gather {
+    pub fn compute_shapes(
+        axis_raw: i64,
+        data_shape: &[usize],
+        indices_shape: &[usize],
+    ) -> GatherPrecomp {
+        let rank = data_shape.len() as i64;
+        let axis = if axis_raw < 0 {
+            (rank + axis_raw) as usize
+        } else {
+            axis_raw as usize
+        };
+        let outer: usize = data_shape[..axis].iter().product();
+        let axis_size = data_shape[axis];
+        let inner: usize = data_shape[axis + 1..].iter().product();
+        let mut out_dims = [0usize; 8];
+        let mut out_rank = 0;
+        for &d in &data_shape[..axis] {
+            out_dims[out_rank] = d;
+            out_rank += 1;
+        }
+        for &d in indices_shape {
+            out_dims[out_rank] = d;
+            out_rank += 1;
+        }
+        for &d in &data_shape[axis + 1..] {
+            out_dims[out_rank] = d;
+            out_rank += 1;
+        }
+        GatherPrecomp {
+            axis,
+            outer,
+            axis_size,
+            inner,
+            out_dims,
+            out_rank,
+        }
+    }
+
     pub fn new(
         inputs: Vec<String>,
         axis: i64,
-        data_shape: &[usize],
-        indices_shape: &[usize],
+        initial_data_shape: &[usize],
+        initial_indices_shape: &[usize],
     ) -> Self {
-        let precomp = if !data_shape.is_empty() && !indices_shape.is_empty() {
-            let (ds, is) = (data_shape, indices_shape);
-            let rank = ds.len() as i64;
-            let axis = if axis < 0 {
-                (rank + axis) as usize
+        let (shape_cache, precomp) =
+            if !initial_data_shape.is_empty() && !initial_indices_shape.is_empty() {
+                let mut cache = Dims::from_slice(initial_data_shape);
+                cache.extend_from_slice(initial_indices_shape);
+                (
+                    cache,
+                    Some(Self::compute_shapes(
+                        axis,
+                        initial_data_shape,
+                        initial_indices_shape,
+                    )),
+                )
             } else {
-                axis as usize
+                (Dims::new(), None)
             };
-            let outer: usize = ds[..axis].iter().product();
-            let axis_size = ds[axis];
-            let inner: usize = ds[axis + 1..].iter().product();
-            let mut out_dims = [0usize; 8];
-            let mut out_rank = 0;
-            for &d in &ds[..axis] {
-                out_dims[out_rank] = d;
-                out_rank += 1;
-            }
-            for &d in is {
-                out_dims[out_rank] = d;
-                out_rank += 1;
-            }
-            for &d in &ds[axis + 1..] {
-                out_dims[out_rank] = d;
-                out_rank += 1;
-            }
-            Some(GatherPrecomp {
-                axis,
-                outer,
-                axis_size,
-                inner,
-                out_dims,
-                out_rank,
-            })
-        } else {
-            None
-        };
 
         Self {
             inputs,
             axis,
+            shape_cache,
             precomp,
         }
     }
@@ -78,34 +98,19 @@ impl Layer for Gather {
         let input = get_tensor(values, &self.inputs[0])?;
         let indices = get_tensor(values, &self.inputs[1])?;
 
-        let rank = input.dims.len() as i64;
-        let axis = if let Some(p) = &self.precomp {
-            p.axis
-        } else if self.axis < 0 {
-            (rank + self.axis) as usize
-        } else {
-            self.axis as usize
+        let mut key = Dims::from_slice(&input.dims);
+        key.extend_from_slice(&indices.dims);
+        let p = match &self.precomp {
+            Some(p) if self.shape_cache.as_slice() == key.as_slice() => p,
+            _ => {
+                self.precomp = Some(Self::compute_shapes(self.axis, &input.dims, &indices.dims));
+                self.shape_cache = key;
+                self.precomp.as_ref().expect("just set")
+            }
         };
-        let outer: usize = input.dims[..axis].iter().product();
-        let axis_size = input.dims[axis];
-        let inner: usize = input.dims[axis + 1..].iter().product();
-        let mut out_dims = [0usize; 8];
-        let mut out_rank = 0;
-        for &d in &input.dims[..axis] {
-            out_dims[out_rank] = d;
-            out_rank += 1;
-        }
-        for &d in &indices.dims {
-            out_dims[out_rank] = d;
-            out_rank += 1;
-        }
-        for &d in &input.dims[axis + 1..] {
-            out_dims[out_rank] = d;
-            out_rank += 1;
-        }
 
         let num_indices = indices.numel();
-        let numel = outer * num_indices * inner;
+        let numel = p.outer * num_indices * p.inner;
 
         let idx_is_int = indices.dtype() == DType::Int64;
         let resolve_idx = |i: usize| -> i64 {
@@ -121,17 +126,17 @@ impl Layer for Gather {
                 let d = input.floats();
                 let buf = output.as_mut_f32(numel);
                 let mut dst = 0;
-                for o in 0..outer {
+                for o in 0..p.outer {
                     for j in 0..num_indices {
                         let raw_idx = resolve_idx(j);
                         let idx = if raw_idx < 0 {
-                            (axis_size as i64 + raw_idx) as usize
+                            (p.axis_size as i64 + raw_idx) as usize
                         } else {
                             raw_idx as usize
                         };
-                        let base = o * axis_size * inner + idx * inner;
-                        buf[dst..dst + inner].copy_from_slice(&d[base..base + inner]);
-                        dst += inner;
+                        let base = o * p.axis_size * p.inner + idx * p.inner;
+                        buf[dst..dst + p.inner].copy_from_slice(&d[base..base + p.inner]);
+                        dst += p.inner;
                     }
                 }
             }
@@ -139,24 +144,23 @@ impl Layer for Gather {
                 let d = input.ints();
                 let buf = output.as_mut_i64(numel);
                 let mut dst = 0;
-                for o in 0..outer {
+                for o in 0..p.outer {
                     for j in 0..num_indices {
                         let raw_idx = resolve_idx(j);
                         let idx = if raw_idx < 0 {
-                            (axis_size as i64 + raw_idx) as usize
+                            (p.axis_size as i64 + raw_idx) as usize
                         } else {
                             raw_idx as usize
                         };
-                        let base = o * axis_size * inner + idx * inner;
-                        buf[dst..dst + inner].copy_from_slice(&d[base..base + inner]);
-                        dst += inner;
+                        let base = o * p.axis_size * p.inner + idx * p.inner;
+                        buf[dst..dst + p.inner].copy_from_slice(&d[base..base + p.inner]);
+                        dst += p.inner;
                     }
                 }
             }
             DType::String => unreachable!("strings not supported"),
         }
-        let _ = axis; // suppress unused warning (used in precomp path)
-        output.set_dims(&out_dims[..out_rank]);
+        output.set_dims(&p.out_dims[..p.out_rank]);
         Ok(())
     }
 }

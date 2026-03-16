@@ -497,11 +497,7 @@ impl OpType {
                         DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
                         DType::String => return None,
                     }
-                } else if let Some(attr) = get_attr_ints(node, "shape") {
-                    attr
-                } else {
-                    return None;
-                };
+                } else { get_attr_ints(node, "shape")? };
 
                 let mut dims: Dims = Dims::new();
                 let mut infer_idx = None;
@@ -522,6 +518,7 @@ impl OpType {
                         .filter(|&(i, _)| i != idx)
                         .map(|(_, &v)| v)
                         .product();
+                    #[allow(clippy::manual_checked_ops)]
                     if known > 0 {
                         dims[idx] = total / known;
                     }

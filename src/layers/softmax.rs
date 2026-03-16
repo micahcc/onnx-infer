@@ -1,48 +1,56 @@
 use std::collections::HashMap;
 
+use crate::Dims;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+pub struct SoftmaxPrecomp {
+    pub axis: usize,
+    pub outer: usize,
+    pub dim: usize,
+    pub inner: usize,
+}
+
 pub struct Softmax {
     pub inputs: Vec<String>,
     pub axis: i64,
-    // Precomputed (0 = not precomputed)
-    pub pre_axis: usize,
-    pub pre_outer: usize,
-    pub pre_dim: usize,
-    pub pre_inner: usize,
+    pub shape_cache: Dims,
+    pub precomp: Option<SoftmaxPrecomp>,
 }
 
 impl Softmax {
-    pub fn new(inputs: Vec<String>, axis: i64, input_shape: &[usize]) -> Self {
-        let mut s = Self {
-            inputs,
-            axis,
-            pre_axis: 0,
-            pre_outer: 0,
-            pre_dim: 0,
-            pre_inner: 0,
+    pub fn compute_shapes(axis: i64, shape: &[usize]) -> SoftmaxPrecomp {
+        let rank = shape.len() as i64;
+        let axis = if axis < 0 {
+            (rank + axis) as usize
+        } else {
+            axis as usize
         };
-        if !input_shape.is_empty() {
-            let shape = input_shape;
-            s.precompute(shape);
+        SoftmaxPrecomp {
+            axis,
+            outer: shape[..axis].iter().product(),
+            dim: shape[axis],
+            inner: shape[axis + 1..].iter().product(),
         }
-        s
     }
 
-    fn precompute(&mut self, shape: &[usize]) {
-        let rank = shape.len() as i64;
-        let axis = if self.axis < 0 {
-            (rank + self.axis) as usize
+    pub fn new(inputs: Vec<String>, axis: i64, initial_shape: &[usize]) -> Self {
+        let (shape_cache, precomp) = if !initial_shape.is_empty() {
+            (
+                Dims::from_slice(initial_shape),
+                Some(Self::compute_shapes(axis, initial_shape)),
+            )
         } else {
-            self.axis as usize
+            (Dims::new(), None)
         };
-        self.pre_axis = axis;
-        self.pre_outer = shape[..axis].iter().product();
-        self.pre_dim = shape[axis];
-        self.pre_inner = shape[axis + 1..].iter().product();
+        Self {
+            inputs,
+            axis,
+            shape_cache,
+            precomp,
+        }
     }
 }
 
@@ -50,40 +58,34 @@ impl Layer for Softmax {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
 
-        let (outer, dim, inner) = if self.pre_dim > 0 {
-            (self.pre_outer, self.pre_dim, self.pre_inner)
-        } else {
-            let rank = input.dims.len() as i64;
-            let axis = if self.axis < 0 {
-                (rank + self.axis) as usize
-            } else {
-                self.axis as usize
-            };
-            let outer: usize = input.dims[..axis].iter().product();
-            let dim = input.dims[axis];
-            let inner: usize = input.dims[axis + 1..].iter().product();
-            (outer, dim, inner)
+        let p = match &self.precomp {
+            Some(p) if self.shape_cache.as_slice() == input.dims.as_slice() => p,
+            _ => {
+                self.precomp = Some(Self::compute_shapes(self.axis, &input.dims));
+                self.shape_cache.clone_from(&input.dims);
+                self.precomp.as_ref().expect("just set")
+            }
         };
 
         let inp = input.floats();
         let buf = output.as_mut_f32(inp.len());
         buf.copy_from_slice(inp);
 
-        for o in 0..outer {
-            for i in 0..inner {
+        for o in 0..p.outer {
+            for i in 0..p.inner {
                 let mut max_val = f32::NEG_INFINITY;
-                for d in 0..dim {
-                    let idx = (o * dim + d) * inner + i;
+                for d in 0..p.dim {
+                    let idx = (o * p.dim + d) * p.inner + i;
                     max_val = max_val.max(buf[idx]);
                 }
                 let mut sum = 0.0f32;
-                for d in 0..dim {
-                    let idx = (o * dim + d) * inner + i;
+                for d in 0..p.dim {
+                    let idx = (o * p.dim + d) * p.inner + i;
                     buf[idx] = (buf[idx] - max_val).exp();
                     sum += buf[idx];
                 }
-                for d in 0..dim {
-                    let idx = (o * dim + d) * inner + i;
+                for d in 0..p.dim {
+                    let idx = (o * p.dim + d) * p.inner + i;
                     buf[idx] /= sum;
                 }
             }

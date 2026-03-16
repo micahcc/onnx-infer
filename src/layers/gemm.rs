@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::Dims;
 use crate::Result;
 use crate::Tensor;
 use crate::broadcast_index;
@@ -19,28 +20,49 @@ pub struct Gemm {
     pub beta: f32,
     pub trans_a: bool,
     pub trans_b: bool,
+    pub shape_cache: Dims,
     pub precomp: Option<GemmPrecomp>,
 }
 
 impl Gemm {
+    pub fn compute_shapes(
+        a_shape: &[usize],
+        b_shape: &[usize],
+        trans_a: bool,
+        trans_b: bool,
+    ) -> GemmPrecomp {
+        let (m, k) = if trans_a {
+            (a_shape[1], a_shape[0])
+        } else {
+            (a_shape[0], a_shape[1])
+        };
+        let n = if trans_b { b_shape[0] } else { b_shape[1] };
+        GemmPrecomp { m, k, n }
+    }
+
     pub fn new(
         inputs: Vec<String>,
         alpha: f32,
         beta: f32,
         trans_a: bool,
         trans_b: bool,
-        a_shape: &[usize],
-        b_shape: &[usize],
+        initial_shape_a: &[usize],
+        initial_shape_b: &[usize],
     ) -> Self {
-        let precomp = if a_shape.len() == 2 && b_shape.len() == 2 {
-            {
-                let (a, b) = (a_shape, b_shape);
-                let (m, k) = if trans_a { (a[1], a[0]) } else { (a[0], a[1]) };
-                let n = if trans_b { b[0] } else { b[1] };
-                Some(GemmPrecomp { m, k, n })
-            }
+        let (shape_cache, precomp) = if initial_shape_a.len() == 2 && initial_shape_b.len() == 2 {
+            let mut cache = Dims::from_slice(initial_shape_a);
+            cache.extend_from_slice(initial_shape_b);
+            (
+                cache,
+                Some(Self::compute_shapes(
+                    initial_shape_a,
+                    initial_shape_b,
+                    trans_a,
+                    trans_b,
+                )),
+            )
         } else {
-            None
+            (Dims::new(), None)
         };
 
         Self {
@@ -49,6 +71,7 @@ impl Gemm {
             beta,
             trans_a,
             trans_b,
+            shape_cache,
             precomp,
         }
     }
@@ -64,17 +87,25 @@ impl Layer for Gemm {
             None
         };
 
-        let (m, k, n) = if let Some(p) = &self.precomp {
-            (p.m, p.k, p.n)
-        } else {
-            let (m, k) = if self.trans_a {
-                (a.dims[1], a.dims[0])
-            } else {
-                (a.dims[0], a.dims[1])
-            };
-            let n = if self.trans_b { b.dims[0] } else { b.dims[1] };
-            (m, k, n)
+        let mut key = Dims::from_slice(&a.dims);
+        key.extend_from_slice(&b.dims);
+        let p = match &self.precomp {
+            Some(p) if self.shape_cache.as_slice() == key.as_slice() => p,
+            _ => {
+                self.precomp = Some(Self::compute_shapes(
+                    &a.dims,
+                    &b.dims,
+                    self.trans_a,
+                    self.trans_b,
+                ));
+                self.shape_cache = key;
+                self.precomp.as_ref().expect("just set")
+            }
         };
+
+        let m = p.m;
+        let k = p.k;
+        let n = p.n;
 
         let a_f = a.floats();
         let b_f = b.floats();
