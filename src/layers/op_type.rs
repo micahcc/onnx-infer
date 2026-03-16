@@ -29,6 +29,7 @@ pub enum OpType {
     GlobalAveragePool,
     Identity,
     LeakyRelu,
+    Log,
     Loop,
     MatMul,
     MaxPool,
@@ -48,8 +49,10 @@ pub enum OpType {
     Sigmoid,
     Slice,
     Softmax,
+    Split,
     Squeeze,
     Sub,
+    Tanh,
     Tile,
     Transpose,
     Unsqueeze,
@@ -75,6 +78,7 @@ impl OpType {
             "GlobalAveragePool" => Ok(Self::GlobalAveragePool),
             "Identity" => Ok(Self::Identity),
             "LeakyRelu" => Ok(Self::LeakyRelu),
+            "Log" => Ok(Self::Log),
             "Loop" => Ok(Self::Loop),
             "MatMul" => Ok(Self::MatMul),
             "MaxPool" => Ok(Self::MaxPool),
@@ -94,8 +98,10 @@ impl OpType {
             "Sigmoid" => Ok(Self::Sigmoid),
             "Slice" => Ok(Self::Slice),
             "Softmax" => Ok(Self::Softmax),
+            "Split" => Ok(Self::Split),
             "Squeeze" => Ok(Self::Squeeze),
             "Sub" => Ok(Self::Sub),
+            "Tanh" => Ok(Self::Tanh),
             "Tile" => Ok(Self::Tile),
             "Transpose" => Ok(Self::Transpose),
             "Unsqueeze" => Ok(Self::Unsqueeze),
@@ -115,7 +121,9 @@ impl OpType {
             | Self::Exp
             | Self::Ceil
             | Self::Round
-            | Self::Softmax => &[F],
+            | Self::Softmax
+            | Self::Log
+            | Self::Tanh => &[F],
             Self::Conv => &[F, F, F],
             Self::MatMul => &[F, F],
             Self::Gemm => &[F, F, F],
@@ -198,6 +206,8 @@ impl OpType {
             | Self::Ceil
             | Self::Round
             | Self::Softmax
+            | Self::Log
+            | Self::Tanh
             | Self::BatchNormalization
             | Self::Identity
             | Self::Cast
@@ -663,7 +673,7 @@ impl OpType {
                 Some(t.dims.iter().map(|&d| d as usize).collect())
             }
 
-            Self::NonMaxSuppression | Self::Loop => None,
+            Self::NonMaxSuppression | Self::Loop | Self::Split => None,
 
             Self::QLinearConv
             | Self::QLinearAdd

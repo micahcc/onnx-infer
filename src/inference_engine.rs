@@ -83,6 +83,9 @@ impl InferenceEngine {
                 PlanNode::Loop(loop_layer) => {
                     loop_layer.execute(&mut self.values)?;
                 }
+                PlanNode::Split(split_layer) => {
+                    split_layer.execute(&mut self.values)?;
+                }
             }
         }
 

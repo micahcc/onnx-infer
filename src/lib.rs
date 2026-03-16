@@ -321,6 +321,14 @@ mod tests {
         run_fixture(&fixture("tinyyolov2-8"), "model.onnx", 0);
     }
 
+    // --- YOLOv4 models ---
+
+    #[test]
+    fn test_yolov4_11_set_0() {
+        let _t = setup_tracing("yolov4_11_set_0");
+        run_multi_io_fixture(&fixture("yolov4-11"), "yolov4.onnx", 0);
+    }
+
     // --- Tiny YOLOv3 models ---
 
     #[test]

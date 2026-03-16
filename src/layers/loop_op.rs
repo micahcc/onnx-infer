@@ -298,6 +298,9 @@ impl Loop {
                     PlanNode::Loop(loop_layer) => {
                         loop_layer.execute(values)?;
                     }
+                    PlanNode::Split(split_layer) => {
+                        split_layer.execute(values)?;
+                    }
                 }
             }
 

@@ -30,6 +30,7 @@ use crate::layers::gemm;
 use crate::layers::global_avg_pool;
 use crate::layers::identity;
 use crate::layers::leaky_relu;
+use crate::layers::log;
 use crate::layers::loop_op;
 use crate::layers::matmul;
 use crate::layers::maxpool;
@@ -49,8 +50,10 @@ use crate::layers::shape_op;
 use crate::layers::sigmoid;
 use crate::layers::slice;
 use crate::layers::softmax;
+use crate::layers::split;
 use crate::layers::squeeze;
 use crate::layers::sub;
+use crate::layers::tanh;
 use crate::layers::tile;
 use crate::layers::transpose;
 use crate::layers::unsqueeze;
@@ -62,6 +65,7 @@ pub enum PlanNode {
         layer: Box<dyn Layer>,
     },
     Loop(Box<loop_op::Loop>),
+    Split(Box<split::Split>),
 }
 
 pub struct Plan {
@@ -193,6 +197,47 @@ impl Plan {
                 shape_map.insert(out_name.clone(), shape);
             }
 
+            // For Split, infer types and shapes for all outputs
+            if op == OpType::Split {
+                let in_dtype = input_types.first().copied().unwrap_or(DType::Float);
+                for out_name in &node.output {
+                    if !out_name.is_empty() {
+                        type_map.insert(out_name.clone(), in_dtype);
+                    }
+                }
+                if let Some(in_shape) = node
+                    .input
+                    .first()
+                    .filter(|s| !s.is_empty())
+                    .and_then(|n| shape_map.get(n))
+                    .cloned()
+                {
+                    let axis_attr = get_attr_int(node, "axis").unwrap_or(0);
+                    let rank = in_shape.len() as i64;
+                    let axis = if axis_attr < 0 {
+                        (rank + axis_attr) as usize
+                    } else {
+                        axis_attr as usize
+                    };
+                    let split_sizes = get_attr_ints(node, "split");
+                    let num_outputs = node.output.len();
+                    for (i, out_name) in node.output.iter().enumerate() {
+                        if out_name.is_empty() {
+                            continue;
+                        }
+                        let mut out_shape = in_shape.clone();
+                        out_shape[axis] = if let Some(ref sizes) = split_sizes {
+                            sizes[i] as usize
+                        } else {
+                            let base = in_shape[axis] / num_outputs;
+                            let rem = in_shape[axis] % num_outputs;
+                            base + if i < rem { 1 } else { 0 }
+                        };
+                        shape_map.insert(out_name.clone(), out_shape);
+                    }
+                }
+            }
+
             nodes.push(build_node(op, node, modified_inputs)?);
         }
 
@@ -293,6 +338,17 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
         ))));
     }
 
+    if op == OpType::Split {
+        let axis = get_attr_int(node, "axis").unwrap_or(0);
+        let split_sizes = get_attr_ints(node, "split").unwrap_or_default();
+        return Ok(PlanNode::Split(Box::new(split::Split::new(
+            inputs,
+            node.output.clone(),
+            axis,
+            split_sizes,
+        ))));
+    }
+
     let output = if node.output.is_empty() || node.output[0].is_empty() {
         String::new()
     } else {
@@ -316,6 +372,8 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
         )),
         OpType::Sigmoid => Box::new(sigmoid::Sigmoid::new(inputs)),
         OpType::Exp => Box::new(exp::Exp::new(inputs)),
+        OpType::Log => Box::new(log::Log::new(inputs)),
+        OpType::Tanh => Box::new(tanh::Tanh::new(inputs)),
         OpType::Ceil => Box::new(ceil::Ceil::new(inputs)),
         OpType::Round => Box::new(round::Round::new(inputs)),
         OpType::Softmax => Box::new(softmax::Softmax::new(
@@ -444,7 +502,7 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
                 inputs, inner,
             ))
         }
-        OpType::Loop => unreachable!(),
+        OpType::Loop | OpType::Split => unreachable!(),
     };
 
     Ok(PlanNode::Single { output, layer })
@@ -465,6 +523,14 @@ pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
             .clone();
         let mut loop_layer = loop_op::Loop::new(node.input.clone(), node.output.clone(), body);
         return loop_layer.execute(values);
+    }
+
+    if op == OpType::Split {
+        let axis = get_attr_int(node, "axis").unwrap_or(0);
+        let split_sizes = get_attr_ints(node, "split").unwrap_or_default();
+        let mut split_layer =
+            split::Split::new(node.input.clone(), node.output.clone(), axis, split_sizes);
+        return split_layer.execute(values);
     }
 
     if node.output.is_empty() || node.output[0].is_empty() {
@@ -504,5 +570,6 @@ pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
             result
         }
         PlanNode::Loop(loop_layer) => loop_layer.execute(values),
+        PlanNode::Split(split_layer) => split_layer.execute(values),
     }
 }
