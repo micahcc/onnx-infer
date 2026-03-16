@@ -86,6 +86,12 @@ impl InferenceEngine {
                 PlanNode::Split(split_layer) => {
                     split_layer.execute(&mut self.values)?;
                 }
+                PlanNode::If(if_layer) => {
+                    if_layer.execute(&mut self.values)?;
+                }
+                PlanNode::TopK(topk_layer) => {
+                    topk_layer.execute(&mut self.values)?;
+                }
             }
         }
 

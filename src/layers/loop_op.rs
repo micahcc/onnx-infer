@@ -301,6 +301,12 @@ impl Loop {
                     PlanNode::Split(split_layer) => {
                         split_layer.execute(values)?;
                     }
+                    PlanNode::If(if_layer) => {
+                        if_layer.execute(values)?;
+                    }
+                    PlanNode::TopK(topk_layer) => {
+                        topk_layer.execute(values)?;
+                    }
                 }
             }
 

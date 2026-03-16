@@ -19,41 +19,56 @@ pub enum OpType {
     Clip,
     Concat,
     Constant,
+    ConstantOfShape,
     Conv,
     DequantizeLinear,
     Div,
+    Equal,
+    Expand,
     Exp,
     Flatten,
+    Floor,
     Gather,
     Gemm,
     GlobalAveragePool,
+    Greater,
     Identity,
+    If,
     LeakyRelu,
+    Less,
     Log,
     Loop,
     MatMul,
+    Max,
     MaxPool,
+    Min,
     Mul,
     NonMaxSuppression,
+    NonZero,
     QLinearAdd,
     QLinearConv,
     QLinearGlobalAveragePool,
     QLinearMatMul,
     QuantizeLinear,
+    Range,
     ReduceMin,
     Relu,
     Reshape,
     Resize,
+    RoiAlign,
     Round,
+    ScatterElements,
     Shape,
     Sigmoid,
     Slice,
     Softmax,
     Split,
+    Sqrt,
     Squeeze,
     Sub,
     Tanh,
     Tile,
+    TopK,
     Transpose,
     Unsqueeze,
 }
@@ -68,41 +83,56 @@ impl OpType {
             "Clip" => Ok(Self::Clip),
             "Concat" => Ok(Self::Concat),
             "Constant" => Ok(Self::Constant),
+            "ConstantOfShape" => Ok(Self::ConstantOfShape),
             "Conv" => Ok(Self::Conv),
             "DequantizeLinear" => Ok(Self::DequantizeLinear),
             "Div" => Ok(Self::Div),
+            "Equal" => Ok(Self::Equal),
+            "Expand" => Ok(Self::Expand),
             "Exp" => Ok(Self::Exp),
             "Flatten" => Ok(Self::Flatten),
+            "Floor" => Ok(Self::Floor),
             "Gather" => Ok(Self::Gather),
             "Gemm" => Ok(Self::Gemm),
             "GlobalAveragePool" => Ok(Self::GlobalAveragePool),
+            "Greater" => Ok(Self::Greater),
             "Identity" => Ok(Self::Identity),
+            "If" => Ok(Self::If),
             "LeakyRelu" => Ok(Self::LeakyRelu),
+            "Less" => Ok(Self::Less),
             "Log" => Ok(Self::Log),
             "Loop" => Ok(Self::Loop),
             "MatMul" => Ok(Self::MatMul),
+            "Max" => Ok(Self::Max),
             "MaxPool" => Ok(Self::MaxPool),
+            "Min" => Ok(Self::Min),
             "Mul" => Ok(Self::Mul),
             "NonMaxSuppression" => Ok(Self::NonMaxSuppression),
+            "NonZero" => Ok(Self::NonZero),
             "QLinearAdd" => Ok(Self::QLinearAdd),
             "QLinearConv" => Ok(Self::QLinearConv),
             "QLinearGlobalAveragePool" => Ok(Self::QLinearGlobalAveragePool),
             "QLinearMatMul" => Ok(Self::QLinearMatMul),
             "QuantizeLinear" => Ok(Self::QuantizeLinear),
+            "Range" => Ok(Self::Range),
             "ReduceMin" => Ok(Self::ReduceMin),
             "Relu" => Ok(Self::Relu),
             "Reshape" => Ok(Self::Reshape),
             "Resize" => Ok(Self::Resize),
+            "RoiAlign" => Ok(Self::RoiAlign),
             "Round" => Ok(Self::Round),
+            "ScatterElements" => Ok(Self::ScatterElements),
             "Shape" => Ok(Self::Shape),
             "Sigmoid" => Ok(Self::Sigmoid),
             "Slice" => Ok(Self::Slice),
             "Softmax" => Ok(Self::Softmax),
             "Split" => Ok(Self::Split),
+            "Sqrt" => Ok(Self::Sqrt),
             "Squeeze" => Ok(Self::Squeeze),
             "Sub" => Ok(Self::Sub),
             "Tanh" => Ok(Self::Tanh),
             "Tile" => Ok(Self::Tile),
+            "TopK" => Ok(Self::TopK),
             "Transpose" => Ok(Self::Transpose),
             "Unsqueeze" => Ok(Self::Unsqueeze),
             other => Err(other.to_string()),
@@ -123,7 +153,9 @@ impl OpType {
             | Self::Round
             | Self::Softmax
             | Self::Log
-            | Self::Tanh => &[F],
+            | Self::Tanh
+            | Self::Floor
+            | Self::Sqrt => &[F],
             Self::Conv => &[F, F, F],
             Self::MatMul => &[F, F],
             Self::Gemm => &[F, F, F],
@@ -139,7 +171,7 @@ impl OpType {
 
     pub fn infer_output_dtype(self, node: &NodeProto, input_types: &[DType]) -> DType {
         match self {
-            Self::Shape => DType::Int64,
+            Self::Shape | Self::Less | Self::Equal | Self::Greater | Self::NonZero => DType::Int64,
             Self::Constant => node
                 .attribute
                 .iter()
@@ -172,7 +204,10 @@ impl OpType {
             | Self::Tile
             | Self::Gather
             | Self::Concat
-            | Self::ReduceMin => input_types.first().copied().unwrap_or(DType::Float),
+            | Self::ReduceMin
+            | Self::Expand
+            | Self::Range
+            | Self::ScatterElements => input_types.first().copied().unwrap_or(DType::Float),
             _ => DType::Float,
         }
     }
@@ -208,16 +243,35 @@ impl OpType {
             | Self::Softmax
             | Self::Log
             | Self::Tanh
+            | Self::Floor
+            | Self::Sqrt
             | Self::BatchNormalization
             | Self::Identity
             | Self::Cast
             | Self::DequantizeLinear
-            | Self::QuantizeLinear => get_shape(0).cloned(),
+            | Self::QuantizeLinear
+            | Self::ScatterElements => get_shape(0).cloned(),
 
-            Self::Add | Self::Sub | Self::Mul | Self::Div => {
+            Self::Add
+            | Self::Sub
+            | Self::Mul
+            | Self::Div
+            | Self::Less
+            | Self::Equal
+            | Self::Greater => {
                 let a = get_shape(0)?;
                 let b = get_shape(1)?;
                 Some(broadcast_shape(a, b))
+            }
+
+            Self::Expand => {
+                let x = get_shape(0)?;
+                let shape = get_value(1)?;
+                let target: Vec<usize> = match shape.dtype() {
+                    DType::Int64 => shape.ints().iter().map(|&v| v as usize).collect(),
+                    DType::Float => shape.floats().iter().map(|&v| v as usize).collect(),
+                };
+                Some(broadcast_shape(x, &target))
             }
 
             Self::Conv => {
@@ -673,7 +727,17 @@ impl OpType {
                 Some(t.dims.iter().map(|&d| d as usize).collect())
             }
 
-            Self::NonMaxSuppression | Self::Loop | Self::Split => None,
+            Self::NonMaxSuppression
+            | Self::Loop
+            | Self::Split
+            | Self::If
+            | Self::NonZero
+            | Self::TopK
+            | Self::Range
+            | Self::Max
+            | Self::Min
+            | Self::ConstantOfShape
+            | Self::RoiAlign => None,
 
             Self::QLinearConv
             | Self::QLinearAdd

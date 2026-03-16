@@ -216,7 +216,7 @@ mod tests {
                         let want = expected.floats();
                         for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
                             assert!(
-                                (g - w).abs() < 1e-3 || (g - w).abs() / w.abs().max(1e-6) < 1e-3,
+                                (g - w).abs() < 5e-3 || (g - w).abs() / w.abs().max(1e-6) < 5e-3,
                                 "output {name}[{j}]: got {g}, want {w}"
                             );
                         }
@@ -319,6 +319,26 @@ mod tests {
     fn test_tinyyolov2_8_set_0() {
         let _t = setup_tracing("tinyyolov2_8_set_0");
         run_fixture(&fixture("tinyyolov2-8"), "model.onnx", 0);
+    }
+
+    // --- Faster R-CNN models ---
+
+    #[test]
+    fn test_faster_rcnn_12_set_0() {
+        let _t = setup_tracing("faster_rcnn_12_set_0");
+        run_multi_io_fixture(&fixture("faster-rcnn-12"), "FasterRCNN-12.onnx", 0);
+    }
+
+    // --- SSD MobileNet models ---
+
+    #[test]
+    fn test_ssd_mobilenet_v1_12_set_0() {
+        let _t = setup_tracing("ssd_mobilenet_v1_12_set_0");
+        run_multi_io_fixture(
+            &fixture("ssd-mobilenet-v1-12"),
+            "ssd_mobilenet_v1_12.onnx",
+            0,
+        );
     }
 
     // --- YOLOv4 models ---

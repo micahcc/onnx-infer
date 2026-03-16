@@ -20,41 +20,56 @@ use crate::layers::ceil;
 use crate::layers::clip;
 use crate::layers::concat;
 use crate::layers::constant;
+use crate::layers::constant_of_shape;
 use crate::layers::conv;
 use crate::layers::dequantize_linear;
 use crate::layers::div;
+use crate::layers::equal;
 use crate::layers::exp;
+use crate::layers::expand;
 use crate::layers::flatten;
+use crate::layers::floor;
 use crate::layers::gather;
 use crate::layers::gemm;
 use crate::layers::global_avg_pool;
+use crate::layers::greater;
 use crate::layers::identity;
+use crate::layers::if_op;
 use crate::layers::leaky_relu;
+use crate::layers::less;
 use crate::layers::log;
 use crate::layers::loop_op;
 use crate::layers::matmul;
+use crate::layers::max_op;
 use crate::layers::maxpool;
+use crate::layers::min_op;
 use crate::layers::mul;
 use crate::layers::nms;
+use crate::layers::nonzero;
 use crate::layers::qlinear_add;
 use crate::layers::qlinear_conv;
 use crate::layers::qlinear_global_avg_pool;
 use crate::layers::qlinear_matmul;
 use crate::layers::quantize_linear;
+use crate::layers::range;
 use crate::layers::reduce_min;
 use crate::layers::relu;
 use crate::layers::reshape;
 use crate::layers::resize;
+use crate::layers::roi_align;
 use crate::layers::round;
+use crate::layers::scatter_elements;
 use crate::layers::shape_op;
 use crate::layers::sigmoid;
 use crate::layers::slice;
 use crate::layers::softmax;
 use crate::layers::split;
+use crate::layers::sqrt;
 use crate::layers::squeeze;
 use crate::layers::sub;
 use crate::layers::tanh;
 use crate::layers::tile;
+use crate::layers::topk;
 use crate::layers::transpose;
 use crate::layers::unsqueeze;
 use crate::onnx::NodeProto;
@@ -66,6 +81,8 @@ pub enum PlanNode {
     },
     Loop(Box<loop_op::Loop>),
     Split(Box<split::Split>),
+    If(Box<if_op::If>),
+    TopK(Box<topk::TopK>),
 }
 
 pub struct Plan {
@@ -349,6 +366,40 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
         ))));
     }
 
+    if op == OpType::If {
+        let then_branch = node
+            .attribute
+            .iter()
+            .find(|a| a.name == "then_branch")
+            .and_then(|a| a.g.as_ref())
+            .ok_or_else(|| InferenceError::InvalidModel("If: no then_branch".into()))?
+            .clone();
+        let else_branch = node
+            .attribute
+            .iter()
+            .find(|a| a.name == "else_branch")
+            .and_then(|a| a.g.as_ref())
+            .ok_or_else(|| InferenceError::InvalidModel("If: no else_branch".into()))?
+            .clone();
+        return Ok(PlanNode::If(Box::new(if_op::If::new(
+            inputs,
+            node.output.clone(),
+            then_branch,
+            else_branch,
+        ))));
+    }
+
+    if op == OpType::TopK {
+        let axis = get_attr_int(node, "axis").unwrap_or(-1);
+        let largest = get_attr_int(node, "largest").unwrap_or(1) != 0;
+        return Ok(PlanNode::TopK(Box::new(topk::TopK::new(
+            inputs,
+            node.output.clone(),
+            axis,
+            largest,
+        ))));
+    }
+
     let output = if node.output.is_empty() || node.output[0].is_empty() {
         String::new()
     } else {
@@ -374,6 +425,62 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
         OpType::Exp => Box::new(exp::Exp::new(inputs)),
         OpType::Log => Box::new(log::Log::new(inputs)),
         OpType::Tanh => Box::new(tanh::Tanh::new(inputs)),
+        OpType::Expand => Box::new(expand::Expand::new(inputs)),
+        OpType::Less => Box::new(less::Less::new(inputs)),
+        OpType::Equal => Box::new(equal::Equal::new(inputs)),
+        OpType::Greater => Box::new(greater::Greater::new(inputs)),
+        OpType::Max => Box::new(max_op::Max::new(inputs)),
+        OpType::Min => Box::new(min_op::Min::new(inputs)),
+        OpType::NonZero => Box::new(nonzero::NonZero::new(inputs)),
+        OpType::Range => Box::new(range::Range::new(inputs)),
+        OpType::Floor => Box::new(floor::Floor::new(inputs)),
+        OpType::Sqrt => Box::new(sqrt::Sqrt::new(inputs)),
+        OpType::ScatterElements => Box::new(scatter_elements::ScatterElements::new(
+            inputs,
+            get_attr_int(node, "axis").unwrap_or(0),
+        )),
+        OpType::RoiAlign => {
+            let mode = get_attr_string(node, "mode").unwrap_or_else(|| "avg".to_string());
+            let oh = get_attr_int(node, "output_height").unwrap_or(1) as usize;
+            let ow = get_attr_int(node, "output_width").unwrap_or(1) as usize;
+            let sr = get_attr_int(node, "sampling_ratio").unwrap_or(0) as usize;
+            let ss = get_attr_float(node, "spatial_scale").unwrap_or(1.0);
+            Box::new(roi_align::RoiAlign::new(inputs, mode, oh, ow, sr, ss))
+        }
+        OpType::ConstantOfShape => {
+            let (fill_f32, fill_i64, dtype) = node
+                .attribute
+                .iter()
+                .find(|a| a.name == "value")
+                .and_then(|a| a.t.as_ref())
+                .map(|t| {
+                    if t.data_type == ONNX_INT32 || t.data_type == ONNX_INT64 {
+                        let v = if !t.int64_data.is_empty() {
+                            t.int64_data[0]
+                        } else if !t.raw_data.is_empty() && t.data_type == ONNX_INT64 {
+                            i64::from_le_bytes(t.raw_data[..8].try_into().unwrap_or([0; 8]))
+                        } else if !t.raw_data.is_empty() && t.data_type == ONNX_INT32 {
+                            i32::from_le_bytes(t.raw_data[..4].try_into().unwrap_or([0; 4])) as i64
+                        } else {
+                            0
+                        };
+                        (0.0, v, DType::Int64)
+                    } else {
+                        let v = if !t.float_data.is_empty() {
+                            t.float_data[0]
+                        } else if !t.raw_data.is_empty() {
+                            f32::from_le_bytes(t.raw_data[..4].try_into().unwrap_or([0; 4]))
+                        } else {
+                            0.0
+                        };
+                        (v, 0, DType::Float)
+                    }
+                })
+                .unwrap_or((0.0, 0, DType::Float));
+            Box::new(constant_of_shape::ConstantOfShape::new(
+                inputs, fill_f32, fill_i64, dtype,
+            ))
+        }
         OpType::Ceil => Box::new(ceil::Ceil::new(inputs)),
         OpType::Round => Box::new(round::Round::new(inputs)),
         OpType::Softmax => Box::new(softmax::Softmax::new(
@@ -451,7 +558,11 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
         OpType::Squeeze => Box::new(squeeze::Squeeze::new(inputs, node)),
         OpType::Slice => Box::new(slice::Slice::new(inputs)),
         OpType::Tile => Box::new(tile::Tile::new(inputs)),
-        OpType::Resize => Box::new(resize::Resize::new(inputs)),
+        OpType::Resize => {
+            let ct = get_attr_string(node, "coordinate_transformation_mode").unwrap_or_default();
+            let nm = get_attr_string(node, "nearest_mode").unwrap_or_default();
+            Box::new(resize::Resize::new(inputs, &ct, &nm))
+        }
         OpType::Reshape => Box::new(reshape::Reshape::new(inputs, node)),
         OpType::Constant => {
             let attr = node
@@ -502,7 +613,7 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
                 inputs, inner,
             ))
         }
-        OpType::Loop | OpType::Split => unreachable!(),
+        OpType::Loop | OpType::Split | OpType::If | OpType::TopK => unreachable!(),
     };
 
     Ok(PlanNode::Single { output, layer })
@@ -531,6 +642,38 @@ pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
         let mut split_layer =
             split::Split::new(node.input.clone(), node.output.clone(), axis, split_sizes);
         return split_layer.execute(values);
+    }
+
+    if op == OpType::If {
+        let then_branch = node
+            .attribute
+            .iter()
+            .find(|a| a.name == "then_branch")
+            .and_then(|a| a.g.as_ref())
+            .ok_or_else(|| InferenceError::InvalidModel("If: no then_branch".into()))?
+            .clone();
+        let else_branch = node
+            .attribute
+            .iter()
+            .find(|a| a.name == "else_branch")
+            .and_then(|a| a.g.as_ref())
+            .ok_or_else(|| InferenceError::InvalidModel("If: no else_branch".into()))?
+            .clone();
+        let mut if_layer = if_op::If::new(
+            node.input.clone(),
+            node.output.clone(),
+            then_branch,
+            else_branch,
+        );
+        return if_layer.execute(values);
+    }
+
+    if op == OpType::TopK {
+        let axis = get_attr_int(node, "axis").unwrap_or(-1);
+        let largest = get_attr_int(node, "largest").unwrap_or(1) != 0;
+        let mut topk_layer =
+            topk::TopK::new(node.input.clone(), node.output.clone(), axis, largest);
+        return topk_layer.execute(values);
     }
 
     if node.output.is_empty() || node.output[0].is_empty() {
@@ -571,5 +714,7 @@ pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
         }
         PlanNode::Loop(loop_layer) => loop_layer.execute(values),
         PlanNode::Split(split_layer) => split_layer.execute(values),
+        PlanNode::If(if_layer) => if_layer.execute(values),
+        PlanNode::TopK(topk_layer) => topk_layer.execute(values),
     }
 }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::DType;
 use crate::Result;
 use crate::Tensor;
 use crate::get_attr_ints;
@@ -76,8 +77,6 @@ impl Layer for ReduceMin {
         }
 
         let out_numel: usize = out_dims[..out_rank].iter().product();
-        let buf = output.as_mut_f32(out_numel);
-        buf.fill(f32::INFINITY);
 
         let mut in_strides = [1usize; 8];
         for i in (0..in_rank - 1).rev() {
@@ -91,9 +90,7 @@ impl Layer for ReduceMin {
             }
         }
 
-        let input_f = input.floats();
-        #[allow(clippy::needless_range_loop)]
-        for in_flat in 0..input.numel() {
+        let calc_out_flat = |in_flat: usize| -> usize {
             let mut remaining = in_flat;
             let mut out_flat = 0;
             let mut out_idx = 0;
@@ -107,7 +104,28 @@ impl Layer for ReduceMin {
                     out_idx += 1;
                 }
             }
-            buf[out_flat] = buf[out_flat].min(input_f[in_flat]);
+            out_flat
+        };
+
+        match input.dtype() {
+            DType::Float => {
+                let buf = output.as_mut_f32(out_numel);
+                buf.fill(f32::INFINITY);
+                let input_f = input.floats();
+                for (in_flat, &val) in input_f.iter().enumerate() {
+                    let of = calc_out_flat(in_flat);
+                    buf[of] = buf[of].min(val);
+                }
+            }
+            DType::Int64 => {
+                let buf = output.as_mut_i64(out_numel);
+                buf.fill(i64::MAX);
+                let input_i = input.ints();
+                for (in_flat, &val) in input_i.iter().enumerate() {
+                    let of = calc_out_flat(in_flat);
+                    buf[of] = buf[of].min(val);
+                }
+            }
         }
 
         output.set_dims(&out_dims[..out_rank]);

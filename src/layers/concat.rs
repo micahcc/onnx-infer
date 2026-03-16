@@ -38,7 +38,6 @@ impl Layer for Concat {
         for (i, &d) in first.dims.iter().enumerate() {
             out_dims[i] = d;
         }
-        // Sum the axis dimension across all inputs
         let mut axis_sum = 0usize;
         for name in &self.inputs {
             if !name.is_empty() {
@@ -50,49 +49,79 @@ impl Layer for Concat {
 
         let outer: usize = out_dims[..axis].iter().product();
         let inner: usize = out_dims[axis + 1..rank].iter().product();
+        let dtype = first.dtype();
 
-        let is_int = first.dtype() == DType::Int64;
-        if is_int {
-            let total = out_dims[..rank].iter().product::<usize>();
-            let buf = output.as_mut_i64(total);
-            let mut axis_offset = 0;
-            for name in &self.inputs {
-                if name.is_empty() {
-                    continue;
-                }
-                let t = get_tensor(values, name)?;
-                let t_data = t.ints();
-                let t_axis = t.dims[axis];
-                for o in 0..outer {
-                    for a in 0..t_axis {
-                        let src_base = (o * t_axis + a) * inner;
-                        let dst_base = (o * out_dims[axis] + axis_offset + a) * inner;
-                        buf[dst_base..dst_base + inner]
-                            .copy_from_slice(&t_data[src_base..src_base + inner]);
+        match dtype {
+            DType::Int64 => {
+                let total = out_dims[..rank].iter().product::<usize>();
+                let buf = output.as_mut_i64(total);
+                let mut axis_offset = 0;
+                for name in &self.inputs {
+                    if name.is_empty() {
+                        continue;
                     }
+                    let t = get_tensor(values, name)?;
+                    let t_axis = t.dims[axis];
+                    if t.dtype() == DType::Float {
+                        let floats = t.floats();
+                        for o in 0..outer {
+                            for a in 0..t_axis {
+                                let src_base = (o * t_axis + a) * inner;
+                                let dst_base = (o * out_dims[axis] + axis_offset + a) * inner;
+                                for k in 0..inner {
+                                    buf[dst_base + k] = floats[src_base + k] as i64;
+                                }
+                            }
+                        }
+                    } else {
+                        let t_data = t.ints();
+                        for o in 0..outer {
+                            for a in 0..t_axis {
+                                let src_base = (o * t_axis + a) * inner;
+                                let dst_base = (o * out_dims[axis] + axis_offset + a) * inner;
+                                buf[dst_base..dst_base + inner]
+                                    .copy_from_slice(&t_data[src_base..src_base + inner]);
+                            }
+                        }
+                    }
+                    axis_offset += t_axis;
                 }
-                axis_offset += t_axis;
             }
-        } else {
-            let total = out_dims[..rank].iter().product::<usize>();
-            let buf = output.as_mut_f32(total);
-            let mut axis_offset = 0;
-            for name in &self.inputs {
-                if name.is_empty() {
-                    continue;
-                }
-                let t = get_tensor(values, name)?;
-                let t_data = t.floats();
-                let t_axis = t.dims[axis];
-                for o in 0..outer {
-                    for a in 0..t_axis {
-                        let src_base = (o * t_axis + a) * inner;
-                        let dst_base = (o * out_dims[axis] + axis_offset + a) * inner;
-                        buf[dst_base..dst_base + inner]
-                            .copy_from_slice(&t_data[src_base..src_base + inner]);
+            DType::Float => {
+                let total = out_dims[..rank].iter().product::<usize>();
+                let buf = output.as_mut_f32(total);
+                let mut axis_offset = 0;
+                for name in &self.inputs {
+                    if name.is_empty() {
+                        continue;
                     }
+                    let t = get_tensor(values, name)?;
+                    let t_axis = t.dims[axis];
+                    // Handle Int64 inputs by casting to float
+                    if t.dtype() == DType::Int64 {
+                        let ints = t.ints();
+                        for o in 0..outer {
+                            for a in 0..t_axis {
+                                let src_base = (o * t_axis + a) * inner;
+                                let dst_base = (o * out_dims[axis] + axis_offset + a) * inner;
+                                for k in 0..inner {
+                                    buf[dst_base + k] = ints[src_base + k] as f32;
+                                }
+                            }
+                        }
+                    } else {
+                        let t_data = t.floats();
+                        for o in 0..outer {
+                            for a in 0..t_axis {
+                                let src_base = (o * t_axis + a) * inner;
+                                let dst_base = (o * out_dims[axis] + axis_offset + a) * inner;
+                                buf[dst_base..dst_base + inner]
+                                    .copy_from_slice(&t_data[src_base..src_base + inner]);
+                            }
+                        }
+                    }
+                    axis_offset += t_axis;
                 }
-                axis_offset += t_axis;
             }
         }
         output.set_dims(&out_dims[..rank]);

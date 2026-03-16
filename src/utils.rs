@@ -59,7 +59,7 @@ pub fn broadcast_shape_into(a: &[usize], b: &[usize], out: &mut [usize]) {
         } else {
             b[i - (max_len - b.len())]
         };
-        out[i] = da.max(db);
+        out[i] = if da == 0 || db == 0 { 0 } else { da.max(db) };
     }
 }
 

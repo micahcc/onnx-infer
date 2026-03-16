@@ -6,6 +6,13 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+fn to_i64_slice(t: &Tensor) -> Vec<i64> {
+    match t.dtype() {
+        DType::Int64 => t.ints().to_vec(),
+        DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
+    }
+}
+
 pub struct Slice {
     pub inputs: Vec<String>,
 }
@@ -40,15 +47,15 @@ impl Layer for Slice {
             *e = input.dims[ax] as i64;
         }
 
-        let starts_ints = starts_t.ints();
-        let ends_ints = ends_t.ints();
+        let starts_vals = to_i64_slice(starts_t);
+        let ends_vals = to_i64_slice(ends_t);
 
         let mut axes_buf = [0usize; 8];
         let axes_len;
         if let Some(at) = axes_t {
-            let at_ints = at.ints();
-            axes_len = at_ints.len();
-            for (i, &a) in at_ints.iter().enumerate() {
+            let at_vals = to_i64_slice(at);
+            axes_len = at_vals.len();
+            for (i, &a) in at_vals.iter().enumerate() {
                 axes_buf[i] = if a < 0 {
                     (rank as i64 + a) as usize
                 } else {
@@ -56,7 +63,7 @@ impl Layer for Slice {
                 };
             }
         } else {
-            axes_len = starts_ints.len();
+            axes_len = starts_vals.len();
             for (i, ab) in axes_buf.iter_mut().enumerate().take(axes_len) {
                 *ab = i;
             }
@@ -64,10 +71,11 @@ impl Layer for Slice {
 
         for i in 0..axes_len {
             let ax = axes_buf[i];
-            starts[ax] = starts_ints[i];
-            ends[ax] = ends_ints[i];
+            starts[ax] = starts_vals[i];
+            ends[ax] = ends_vals[i];
             if let Some(st) = steps_t {
-                steps[ax] = st.ints()[i];
+                let sv = to_i64_slice(st);
+                steps[ax] = sv[i];
             }
         }
 

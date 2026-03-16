@@ -13,7 +13,12 @@ pub struct Split {
 }
 
 impl Split {
-    pub fn new(inputs: Vec<String>, outputs: Vec<String>, axis: i64, split_sizes: Vec<i64>) -> Self {
+    pub fn new(
+        inputs: Vec<String>,
+        outputs: Vec<String>,
+        axis: i64,
+        split_sizes: Vec<i64>,
+    ) -> Self {
         Self {
             inputs,
             outputs,
@@ -47,8 +52,8 @@ impl Split {
             let dim = in_dims[axis];
             let base = dim / num_outputs;
             let remainder = dim % num_outputs;
-            for i in 0..num_outputs {
-                sizes[i] = base + if i < remainder { 1 } else { 0 };
+            for (i, s) in sizes.iter_mut().take(num_outputs).enumerate() {
+                *s = base + if i < remainder { 1 } else { 0 };
             }
         }
 
