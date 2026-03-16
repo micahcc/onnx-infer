@@ -50,7 +50,7 @@ impl Layer for DequantizeLinear {
             for i in 0..numel {
                 buf[i] = (input_f[i] - z) * s;
             }
-            output.dims.clone_from(&input.dims);
+            output.set_dims(&input.dims);
         } else {
             let outer: usize = input.dims[..axis].iter().product();
             let ch = input.dims[axis];
@@ -66,7 +66,7 @@ impl Layer for DequantizeLinear {
                     }
                 }
             }
-            output.dims.clone_from(&input.dims);
+            output.set_dims(&input.dims);
         }
         Ok(())
     }

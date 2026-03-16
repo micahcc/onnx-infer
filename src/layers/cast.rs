@@ -35,7 +35,7 @@ impl Layer for Cast {
                         }
                     }
                 }
-                output.dims.clone_from(&input.dims);
+                output.set_dims(&input.dims);
             }
             false => {
                 let buf = output.as_mut_f32(numel);
@@ -47,7 +47,7 @@ impl Layer for Cast {
                         }
                     }
                 }
-                output.dims.clone_from(&input.dims);
+                output.set_dims(&input.dims);
             }
         }
         Ok(())

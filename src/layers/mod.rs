@@ -60,20 +60,10 @@ pub trait Layer {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()>;
 }
 
-pub fn dequantize(data: &[f32], scale: f32, zero_point: f32) -> Vec<f32> {
-    data.iter().map(|&v| (v - zero_point) * scale).collect()
-}
-
 pub fn dequantize_into(data: &[f32], scale: f32, zero_point: f32, out: &mut [f32]) {
     for (o, &v) in out.iter_mut().zip(data.iter()) {
         *o = (v - zero_point) * scale;
     }
-}
-
-pub fn quantize_u8(data: &[f32], scale: f32, zero_point: f32) -> Vec<f32> {
-    data.iter()
-        .map(|&v| (v / scale + zero_point).round().clamp(0.0, 255.0))
-        .collect()
 }
 
 pub fn quantize_u8_into(data: &[f32], scale: f32, zero_point: f32, out: &mut [f32]) {

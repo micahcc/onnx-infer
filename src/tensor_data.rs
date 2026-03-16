@@ -132,10 +132,6 @@ impl Tensor {
         }
     }
 
-    pub fn data_replace_f32(&mut self, data: Vec<f32>) {
-        self.data = TensorData::F32(data);
-    }
-
     pub fn set_dims(&mut self, dims: &[usize]) {
         self.dims.clear();
         self.dims.extend_from_slice(dims);

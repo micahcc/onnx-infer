@@ -23,7 +23,7 @@ impl Layer for Exp {
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
             *o = v.exp();
         }
-        output.dims.clone_from(&input.dims);
+        output.set_dims(&input.dims);
         Ok(())
     }
 }

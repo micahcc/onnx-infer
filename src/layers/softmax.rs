@@ -54,7 +54,7 @@ impl Layer for Softmax {
             }
         }
 
-        output.dims.clone_from(&input.dims);
+        output.set_dims(&input.dims);
         Ok(())
     }
 }

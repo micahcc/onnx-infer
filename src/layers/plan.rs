@@ -70,6 +70,7 @@ pub struct Plan {
     pub initializers: HashMap<String, Tensor>,
     pub output_names: Vec<String>,
     pub shape_map: HashMap<String, Vec<usize>>,
+    pub type_map: HashMap<String, DType>,
     pub tensor_pool: HashMap<String, Tensor>,
 }
 
@@ -77,6 +78,14 @@ impl Plan {
     pub fn build(
         graph: &crate::onnx::GraphProto,
         input_sizes: &HashMap<String, Vec<usize>>,
+    ) -> Result<Self> {
+        Self::build_with_types(graph, input_sizes, &HashMap::new())
+    }
+
+    pub fn build_with_types(
+        graph: &crate::onnx::GraphProto,
+        input_sizes: &HashMap<String, Vec<usize>>,
+        type_hints: &HashMap<String, DType>,
     ) -> Result<Self> {
         let mut initializers = HashMap::new();
         for init in &graph.initializer {
@@ -90,6 +99,9 @@ impl Plan {
         let mut type_map: HashMap<String, DType> = HashMap::new();
         for (name, tensor) in &initializers {
             type_map.insert(name.clone(), tensor.dtype());
+        }
+        for (name, &dtype) in type_hints {
+            type_map.insert(name.clone(), dtype);
         }
         for input in &graph.input {
             if !type_map.contains_key(&input.name) {
@@ -210,6 +222,7 @@ impl Plan {
             initializers,
             output_names,
             shape_map,
+            type_map,
             tensor_pool,
         })
     }
@@ -451,7 +464,7 @@ pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
             .and_then(|a| a.g.as_ref())
             .ok_or_else(|| InferenceError::InvalidModel("Loop: no body graph".into()))?
             .clone();
-        let loop_layer = loop_op::Loop::new(node.input.clone(), node.output.clone(), body);
+        let mut loop_layer = loop_op::Loop::new(node.input.clone(), node.output.clone(), body);
         return loop_layer.execute(values);
     }
 

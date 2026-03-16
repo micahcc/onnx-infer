@@ -23,7 +23,7 @@ impl Layer for Relu {
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
             *o = v.max(0.0);
         }
-        output.dims.clone_from(&input.dims);
+        output.set_dims(&input.dims);
         Ok(())
     }
 }

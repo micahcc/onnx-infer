@@ -24,7 +24,7 @@ impl Layer for LeakyRelu {
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
             *o = if v >= 0.0 { v } else { self.alpha * v };
         }
-        output.dims.clone_from(&input.dims);
+        output.set_dims(&input.dims);
         Ok(())
     }
 }

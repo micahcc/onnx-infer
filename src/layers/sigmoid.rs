@@ -23,7 +23,7 @@ impl Layer for Sigmoid {
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
             *o = 1.0 / (1.0 + (-v).exp());
         }
-        output.dims.clone_from(&input.dims);
+        output.set_dims(&input.dims);
         Ok(())
     }
 }

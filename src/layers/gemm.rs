@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::Result;
 use crate::Tensor;
 use crate::broadcast_index;
-use crate::broadcast_shape;
+use crate::broadcast_shape_into;
 use crate::get_tensor;
 use crate::layers::Layer;
 
@@ -75,11 +75,13 @@ impl Layer for Gemm {
 
         if let Some(c_tensor) = c_tensor {
             let c_f = c_tensor.floats();
-            let c_shape = broadcast_shape(&[m, n], &c_tensor.dims);
+            let ndim = 2.max(c_tensor.dims.len());
+            let mut c_shape = [0usize; 8];
+            broadcast_shape_into(&[m, n], &c_tensor.dims, &mut c_shape[..ndim]);
             for i in 0..m {
                 for j in 0..n {
                     let idx = [i, j];
-                    let ci = broadcast_index(&idx, &c_tensor.dims, &c_shape);
+                    let ci = broadcast_index(&idx, &c_tensor.dims, &c_shape[..ndim]);
                     buf[i * n + j] += self.beta * c_f[ci];
                 }
             }

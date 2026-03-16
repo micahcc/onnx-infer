@@ -23,7 +23,7 @@ impl Layer for Ceil {
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
             *o = v.ceil();
         }
-        output.dims.clone_from(&input.dims);
+        output.set_dims(&input.dims);
         Ok(())
     }
 }

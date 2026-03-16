@@ -41,7 +41,7 @@ impl Layer for Clip {
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
             *o = v.clamp(min_val, max_val);
         }
-        output.dims.clone_from(&input.dims);
+        output.set_dims(&input.dims);
         Ok(())
     }
 }

@@ -52,7 +52,7 @@ impl Layer for BatchNorm {
             }
         }
 
-        output.dims.clone_from(&input.dims);
+        output.set_dims(&input.dims);
         Ok(())
     }
 }
