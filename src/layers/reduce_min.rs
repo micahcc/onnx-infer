@@ -158,6 +158,7 @@ impl Layer for ReduceMin {
                         buf[of] = buf[of].min(val);
                     }
                 }
+                DType::String => unreachable!("strings not supported"),
             }
 
             output.set_dims(&p.out_dims[..p.out_rank]);
@@ -266,6 +267,7 @@ impl Layer for ReduceMin {
                     buf[of] = buf[of].min(val);
                 }
             }
+            DType::String => unreachable!("strings not supported"),
         }
 
         output.set_dims(&out_dims[..out_rank]);

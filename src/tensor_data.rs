@@ -7,6 +7,7 @@ use crate::ONNX_DOUBLE;
 use crate::ONNX_INT8;
 use crate::ONNX_INT32;
 use crate::ONNX_INT64;
+use crate::ONNX_STRING;
 use crate::ONNX_UINT8;
 use crate::Result;
 use crate::onnx::TensorProto;
@@ -23,6 +24,7 @@ macro_rules! dims {
 pub enum TensorData {
     F32(Vec<f32>),
     I64(Vec<i64>),
+    Strings(Vec<Vec<u8>>),
 }
 
 #[derive(Debug, Clone)]
@@ -46,24 +48,39 @@ impl Tensor {
         }
     }
 
+    pub fn new_strings(dims: Dims, data: Vec<Vec<u8>>) -> Self {
+        Self {
+            dims,
+            data: TensorData::Strings(data),
+        }
+    }
+
     pub fn dtype(&self) -> DType {
         match &self.data {
             TensorData::F32(_) => DType::Float,
             TensorData::I64(_) => DType::Int64,
+            TensorData::Strings(_) => DType::String,
         }
     }
 
     pub fn floats(&self) -> &[f32] {
         match &self.data {
             TensorData::F32(buf) => buf,
-            TensorData::I64(_) => panic!("expected float tensor, got int64"),
+            _ => panic!("expected float tensor, got {:?}", self.dtype()),
         }
     }
 
     pub fn ints(&self) -> &[i64] {
         match &self.data {
             TensorData::I64(buf) => buf,
-            TensorData::F32(_) => panic!("expected int64 tensor, got float"),
+            _ => panic!("expected int64 tensor, got {:?}", self.dtype()),
+        }
+    }
+
+    pub fn strings(&self) -> &[Vec<u8>] {
+        match &self.data {
+            TensorData::Strings(buf) => buf,
+            _ => panic!("expected string tensor, got {:?}", self.dtype()),
         }
     }
 
@@ -71,6 +88,7 @@ impl Tensor {
         match self.data {
             TensorData::F32(buf) => buf,
             TensorData::I64(buf) => buf.iter().map(|&v| v as f32).collect(),
+            TensorData::Strings(_) => panic!("string tensor not supported here"),
         }
     }
 
@@ -78,6 +96,7 @@ impl Tensor {
         match self.data {
             TensorData::F32(buf) => buf.iter().map(|&v| v as i64).collect(),
             TensorData::I64(buf) => buf,
+            TensorData::Strings(_) => panic!("string tensor not supported here"),
         }
     }
 
@@ -85,6 +104,7 @@ impl Tensor {
         match &self.data {
             TensorData::F32(buf) => buf[idx],
             TensorData::I64(buf) => buf[idx] as f32,
+            TensorData::Strings(_) => panic!("string tensor not supported here"),
         }
     }
 
@@ -92,12 +112,16 @@ impl Tensor {
         match &self.data {
             TensorData::F32(buf) => buf[idx] as i64,
             TensorData::I64(buf) => buf[idx],
+            TensorData::Strings(_) => panic!("string tensor not supported here"),
         }
     }
 
     pub fn from_proto(proto: &TensorProto) -> Result<Self> {
         let dims: Dims = proto.dims.iter().map(|&d| d as usize).collect();
-        if proto.data_type == ONNX_INT32 || proto.data_type == ONNX_INT64 {
+        if proto.data_type == ONNX_STRING {
+            let data: Vec<Vec<u8>> = proto.string_data.iter().map(|s| s.to_vec()).collect();
+            Ok(Self::new_strings(dims, data))
+        } else if proto.data_type == ONNX_INT32 || proto.data_type == ONNX_INT64 {
             let data = extract_int_data(proto)?;
             Ok(Self::new_i64(dims, data))
         } else {
@@ -157,6 +181,9 @@ impl Tensor {
                 let dst = self.as_mut_i64(src.len());
                 dst.copy_from_slice(src);
             }
+            TensorData::Strings(src) => {
+                self.data = TensorData::Strings(src.clone());
+            }
         }
     }
 
@@ -173,6 +200,7 @@ impl Tensor {
                     buf[i] = s[i] as f32;
                 }
             }
+            TensorData::Strings(_) => panic!("string tensor not supported here"),
         }
     }
 }

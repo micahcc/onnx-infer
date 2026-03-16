@@ -26,6 +26,7 @@ impl Layer for NonZero {
             match input.dtype() {
                 DType::Float => input.floats()[i] != 0.0,
                 DType::Int64 => input.ints()[i] != 0,
+                DType::String => unreachable!("strings not supported"),
             }
         };
 

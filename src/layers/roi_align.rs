@@ -93,6 +93,7 @@ impl Layer for RoiAlign {
                     self.batch_idx_buf.push(v as usize);
                 }
             }
+            DType::String => unreachable!("strings not supported"),
         }
 
         let buf = output.as_mut_f32(numel);

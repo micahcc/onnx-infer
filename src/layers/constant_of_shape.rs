@@ -40,6 +40,7 @@ impl Layer for ConstantOfShape {
                     shape[i] = v as usize;
                 }
             }
+            DType::String => unreachable!("strings not supported"),
         }
         let numel: usize = shape[..shape_len].iter().product();
 
@@ -52,6 +53,7 @@ impl Layer for ConstantOfShape {
                 let buf = output.as_mut_i64(numel);
                 buf.fill(self.fill_i64);
             }
+            DType::String => unreachable!("strings not supported"),
         }
         output.set_dims(&shape[..shape_len]);
         Ok(())

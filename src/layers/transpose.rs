@@ -140,6 +140,7 @@ impl Layer for Transpose {
                     buf[out_flat] = in_data[in_flat];
                 }
             }
+            DType::String => unreachable!("strings not supported"),
         }
         output.set_dims(&self.pre_out_dims[..rank]);
         Ok(())

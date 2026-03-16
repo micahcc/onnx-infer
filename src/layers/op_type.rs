@@ -14,17 +14,22 @@ use crate::onnx::NodeProto;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpType {
+    Abs,
     Add,
+    ArgMax,
     BatchNormalization,
     Cast,
+    CategoryMapper,
     Ceil,
     Clip,
+    Compress,
     Concat,
     Constant,
     ConstantOfShape,
     Conv,
     DequantizeLinear,
     Div,
+    Dropout,
     Equal,
     Expand,
     Exp,
@@ -34,8 +39,10 @@ pub enum OpType {
     Gemm,
     GlobalAveragePool,
     Greater,
+    Hardmax,
     Identity,
     If,
+    Lstm,
     LeakyRelu,
     Less,
     Log,
@@ -53,12 +60,15 @@ pub enum OpType {
     QLinearMatMul,
     QuantizeLinear,
     Range,
+    ReduceMax,
     ReduceMin,
+    ReduceSum,
     Relu,
     Reshape,
     Resize,
     RoiAlign,
     Round,
+    Scan,
     ScatterElements,
     Shape,
     Sigmoid,
@@ -68,27 +78,34 @@ pub enum OpType {
     Sqrt,
     Squeeze,
     Sub,
+    Sum,
     Tanh,
     Tile,
     TopK,
     Transpose,
     Unsqueeze,
+    Where,
 }
 
 impl OpType {
     pub fn parse(s: &str) -> std::result::Result<Self, String> {
         match s {
+            "Abs" => Ok(Self::Abs),
             "Add" => Ok(Self::Add),
+            "ArgMax" => Ok(Self::ArgMax),
             "BatchNormalization" => Ok(Self::BatchNormalization),
             "Cast" => Ok(Self::Cast),
+            "CategoryMapper" => Ok(Self::CategoryMapper),
             "Ceil" => Ok(Self::Ceil),
             "Clip" => Ok(Self::Clip),
+            "Compress" => Ok(Self::Compress),
             "Concat" => Ok(Self::Concat),
             "Constant" => Ok(Self::Constant),
             "ConstantOfShape" => Ok(Self::ConstantOfShape),
             "Conv" => Ok(Self::Conv),
             "DequantizeLinear" => Ok(Self::DequantizeLinear),
             "Div" => Ok(Self::Div),
+            "Dropout" => Ok(Self::Dropout),
             "Equal" => Ok(Self::Equal),
             "Expand" => Ok(Self::Expand),
             "Exp" => Ok(Self::Exp),
@@ -98,8 +115,10 @@ impl OpType {
             "Gemm" => Ok(Self::Gemm),
             "GlobalAveragePool" => Ok(Self::GlobalAveragePool),
             "Greater" => Ok(Self::Greater),
+            "Hardmax" => Ok(Self::Hardmax),
             "Identity" => Ok(Self::Identity),
             "If" => Ok(Self::If),
+            "LSTM" => Ok(Self::Lstm),
             "LeakyRelu" => Ok(Self::LeakyRelu),
             "Less" => Ok(Self::Less),
             "Log" => Ok(Self::Log),
@@ -117,12 +136,15 @@ impl OpType {
             "QLinearMatMul" => Ok(Self::QLinearMatMul),
             "QuantizeLinear" => Ok(Self::QuantizeLinear),
             "Range" => Ok(Self::Range),
+            "ReduceMax" => Ok(Self::ReduceMax),
             "ReduceMin" => Ok(Self::ReduceMin),
+            "ReduceSum" => Ok(Self::ReduceSum),
             "Relu" => Ok(Self::Relu),
             "Reshape" => Ok(Self::Reshape),
             "Resize" => Ok(Self::Resize),
             "RoiAlign" => Ok(Self::RoiAlign),
             "Round" => Ok(Self::Round),
+            "Scan" => Ok(Self::Scan),
             "ScatterElements" => Ok(Self::ScatterElements),
             "Shape" => Ok(Self::Shape),
             "Sigmoid" => Ok(Self::Sigmoid),
@@ -132,11 +154,13 @@ impl OpType {
             "Sqrt" => Ok(Self::Sqrt),
             "Squeeze" => Ok(Self::Squeeze),
             "Sub" => Ok(Self::Sub),
+            "Sum" => Ok(Self::Sum),
             "Tanh" => Ok(Self::Tanh),
             "Tile" => Ok(Self::Tile),
             "TopK" => Ok(Self::TopK),
             "Transpose" => Ok(Self::Transpose),
             "Unsqueeze" => Ok(Self::Unsqueeze),
+            "Where" => Ok(Self::Where),
             other => Err(other.to_string()),
         }
     }
@@ -157,7 +181,9 @@ impl OpType {
             | Self::Log
             | Self::Tanh
             | Self::Floor
-            | Self::Sqrt => &[F],
+            | Self::Sqrt
+            | Self::Abs
+            | Self::Hardmax => &[F],
             Self::Conv => &[F, F, F],
             Self::MatMul => &[F, F],
             Self::Gemm => &[F, F, F],
@@ -173,7 +199,13 @@ impl OpType {
 
     pub fn infer_output_dtype(self, node: &NodeProto, input_types: &[DType]) -> DType {
         match self {
-            Self::Shape | Self::Less | Self::Equal | Self::Greater | Self::NonZero => DType::Int64,
+            Self::Shape
+            | Self::Less
+            | Self::Equal
+            | Self::Greater
+            | Self::NonZero
+            | Self::ArgMax
+            | Self::CategoryMapper => DType::Int64,
             Self::Constant => node
                 .attribute
                 .iter()
@@ -207,6 +239,10 @@ impl OpType {
             | Self::Gather
             | Self::Concat
             | Self::ReduceMin
+            | Self::ReduceMax
+            | Self::ReduceSum
+            | Self::Compress
+            | Self::Where
             | Self::Expand
             | Self::Range
             | Self::ScatterElements => input_types.first().copied().unwrap_or(DType::Float),
@@ -247,6 +283,9 @@ impl OpType {
             | Self::Tanh
             | Self::Floor
             | Self::Sqrt
+            | Self::Abs
+            | Self::Dropout
+            | Self::Hardmax
             | Self::BatchNormalization
             | Self::Identity
             | Self::Cast
@@ -272,6 +311,7 @@ impl OpType {
                 let target: Vec<usize> = match shape.dtype() {
                     DType::Int64 => shape.ints().iter().map(|&v| v as usize).collect(),
                     DType::Float => shape.floats().iter().map(|&v| v as usize).collect(),
+                    DType::String => return None,
                 };
                 Some(broadcast_shape(x, &target))
             }
@@ -455,6 +495,7 @@ impl OpType {
                     match t.dtype() {
                         DType::Int64 => t.ints().to_vec(),
                         DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
+                        DType::String => return None,
                     }
                 } else if let Some(attr) = get_attr_ints(node, "shape") {
                     attr
@@ -495,6 +536,7 @@ impl OpType {
                     Some(match t.dtype() {
                         DType::Int64 => t.ints().to_vec(),
                         DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
+                        DType::String => return None,
                     })
                 });
                 match axes {
@@ -529,6 +571,7 @@ impl OpType {
                     Some(match t.dtype() {
                         DType::Int64 => t.ints().to_vec(),
                         DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
+                        DType::String => return None,
                     })
                 })?;
                 let out_rank = x.len() + axes.len();
@@ -564,10 +607,12 @@ impl OpType {
                 let starts_ints: Vec<i64> = match starts_t.dtype() {
                     DType::Int64 => starts_t.ints().to_vec(),
                     DType::Float => starts_t.floats().iter().map(|&v| v as i64).collect(),
+                    DType::String => return None,
                 };
                 let ends_ints: Vec<i64> = match ends_t.dtype() {
                     DType::Int64 => ends_t.ints().to_vec(),
                     DType::Float => ends_t.floats().iter().map(|&v| v as i64).collect(),
+                    DType::String => return None,
                 };
 
                 let axes: Vec<usize> = if let Some(t) = get_value(3) {
@@ -595,6 +640,7 @@ impl OpType {
                                 }
                             })
                             .collect(),
+                        DType::String => return None,
                     }
                 } else {
                     (0..starts_ints.len()).collect()
@@ -604,6 +650,7 @@ impl OpType {
                     match t.dtype() {
                         DType::Int64 => t.ints().to_vec(),
                         DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
+                        DType::String => return None,
                     }
                 } else {
                     vec![1; axes.len()]
@@ -656,6 +703,7 @@ impl OpType {
                 let reps: Vec<usize> = match repeats.dtype() {
                     DType::Int64 => repeats.ints().iter().map(|&v| v as usize).collect(),
                     DType::Float => repeats.floats().iter().map(|&v| v as usize).collect(),
+                    DType::String => return None,
                 };
                 Some(x.iter().zip(reps.iter()).map(|(&d, &r)| d * r).collect())
             }
@@ -668,6 +716,7 @@ impl OpType {
                     return Some(match sizes.dtype() {
                         DType::Int64 => sizes.ints().iter().map(|&v| v as usize).collect(),
                         DType::Float => sizes.floats().iter().map(|&v| v as usize).collect(),
+                        DType::String => return None,
                     });
                 }
                 if let Some(scales) = get_value(2)
@@ -692,6 +741,7 @@ impl OpType {
                     Some(match t.dtype() {
                         DType::Int64 => t.ints().to_vec(),
                         DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
+                        DType::String => return None,
                     })
                 })?;
                 let rank = x.len() as i64;
@@ -729,6 +779,78 @@ impl OpType {
                 Some(t.dims.iter().map(|&d| d as usize).collect())
             }
 
+            Self::ArgMax => {
+                let x = get_shape(0)?;
+                let axis_raw = get_attr_int(node, "axis").unwrap_or(0);
+                let axis = if axis_raw < 0 {
+                    (x.len() as i64 + axis_raw) as usize
+                } else {
+                    axis_raw as usize
+                };
+                let keepdims = get_attr_int(node, "keepdims").unwrap_or(1) != 0;
+                let mut out = Dims::new();
+                for (i, &d) in x.iter().enumerate() {
+                    if i == axis {
+                        if keepdims {
+                            out.push(1);
+                        }
+                    } else {
+                        out.push(d);
+                    }
+                }
+                if out.is_empty() {
+                    out.push(1);
+                }
+                Some(out)
+            }
+
+            Self::CategoryMapper => get_shape(0).cloned(),
+
+            Self::Sum => get_shape(0).cloned(),
+
+            Self::Where => {
+                let x = get_shape(1)?;
+                let y = get_shape(2)?;
+                Some(broadcast_shape(x, y))
+            }
+
+            Self::ReduceMax | Self::ReduceSum => {
+                let x = get_shape(0)?;
+                let keepdims = get_attr_int(node, "keepdims").unwrap_or(1) != 0;
+                let axes: Option<Vec<i64>> = get_attr_ints(node, "axes");
+                if let Some(axes) = axes {
+                    let rank = x.len() as i64;
+                    let axes: Vec<usize> = axes
+                        .iter()
+                        .map(|&a| {
+                            if a < 0 {
+                                (rank + a) as usize
+                            } else {
+                                a as usize
+                            }
+                        })
+                        .collect();
+                    if keepdims {
+                        Some(
+                            x.iter()
+                                .enumerate()
+                                .map(|(i, &d)| if axes.contains(&i) { 1 } else { d })
+                                .collect(),
+                        )
+                    } else {
+                        Some(
+                            x.iter()
+                                .enumerate()
+                                .filter(|(i, _)| !axes.contains(i))
+                                .map(|(_, &d)| d)
+                                .collect(),
+                        )
+                    }
+                } else {
+                    None
+                }
+            }
+
             Self::NonMaxSuppression
             | Self::Loop
             | Self::Split
@@ -739,7 +861,10 @@ impl OpType {
             | Self::Max
             | Self::Min
             | Self::ConstantOfShape
-            | Self::RoiAlign => None,
+            | Self::RoiAlign
+            | Self::Lstm
+            | Self::Scan
+            | Self::Compress => None,
 
             Self::QLinearConv
             | Self::QLinearAdd

@@ -18,6 +18,7 @@ pub use dtype::ONNX_FLOAT;
 pub use dtype::ONNX_INT8;
 pub use dtype::ONNX_INT32;
 pub use dtype::ONNX_INT64;
+pub use dtype::ONNX_STRING;
 pub use dtype::ONNX_UINT8;
 pub use inference_engine::InferenceEngine;
 pub use inference_error::InferenceError;
@@ -50,6 +51,7 @@ mod tests {
     use crate::InferenceEngine;
     use crate::Tensor;
     use crate::onnx::ModelProto;
+    use crate::onnx::TensorProto;
 
     fn fixture(name: &str) -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -91,9 +93,14 @@ mod tests {
         for i in 0..graph.input.len() {
             let pb_path = test_dir.join(format!("input_{i}.pb"));
             if pb_path.exists() {
-                let input = Tensor::from_proto_bytes(&fs::read(&pb_path).expect("read input"))
-                    .expect("parse input");
-                let name = graph.input[i].name.clone();
+                let pb_bytes = fs::read(&pb_path).expect("read input");
+                let proto = TensorProto::decode(&pb_bytes[..]).unwrap();
+                let name = if proto.name.is_empty() {
+                    graph.input[i].name.clone()
+                } else {
+                    proto.name.clone()
+                };
+                let input = Tensor::from_proto(&proto).expect("parse input");
                 input_sizes.insert(name.clone(), input.dims.clone());
                 inputs.insert(name, input);
             }
@@ -229,6 +236,7 @@ mod tests {
                             assert_eq!(g, w, "output {name}[{j}]: got {g}, want {w}");
                         }
                     }
+                    DType::String => panic!("string output not expected"),
                 }
             }
         }
@@ -356,5 +364,13 @@ mod tests {
     fn test_tinyyolov3_11_set_0() {
         let _t = setup_tracing("tinyyolov3_11_set_0");
         run_multi_io_fixture(&fixture("tiny-yolov3-11"), "yolov3-tiny.onnx", 0);
+    }
+
+    // --- BiDAF models ---
+
+    #[test]
+    fn test_bidaf_9_set_0() {
+        let _t = setup_tracing("bidaf_9_set_0");
+        run_multi_io_fixture(&fixture("bidaf-9"), "bidaf.onnx", 0);
     }
 }

@@ -148,6 +148,7 @@ impl Layer for ScatterElements {
                     buf[data_flat] = upd[flat];
                 }
             }
+            DType::String => unreachable!("strings not supported"),
         }
 
         output.set_dims(&data.dims);

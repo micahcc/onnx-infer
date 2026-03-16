@@ -78,41 +78,31 @@ impl Layer for Gather {
         let input = get_tensor(values, &self.inputs[0])?;
         let indices = get_tensor(values, &self.inputs[1])?;
 
-        let (axis, outer, axis_size, inner, out_dims, out_rank) = if let Some(p) = &self.precomp {
-            (
-                p.axis,
-                p.outer,
-                p.axis_size,
-                p.inner,
-                p.out_dims,
-                p.out_rank,
-            )
+        let rank = input.dims.len() as i64;
+        let axis = if let Some(p) = &self.precomp {
+            p.axis
+        } else if self.axis < 0 {
+            (rank + self.axis) as usize
         } else {
-            let rank = input.dims.len() as i64;
-            let axis = if self.axis < 0 {
-                (rank + self.axis) as usize
-            } else {
-                self.axis as usize
-            };
-            let outer: usize = input.dims[..axis].iter().product();
-            let axis_size = input.dims[axis];
-            let inner: usize = input.dims[axis + 1..].iter().product();
-            let mut out_dims = [0usize; 8];
-            let mut out_rank = 0;
-            for &d in &input.dims[..axis] {
-                out_dims[out_rank] = d;
-                out_rank += 1;
-            }
-            for &d in &indices.dims {
-                out_dims[out_rank] = d;
-                out_rank += 1;
-            }
-            for &d in &input.dims[axis + 1..] {
-                out_dims[out_rank] = d;
-                out_rank += 1;
-            }
-            (axis, outer, axis_size, inner, out_dims, out_rank)
+            self.axis as usize
         };
+        let outer: usize = input.dims[..axis].iter().product();
+        let axis_size = input.dims[axis];
+        let inner: usize = input.dims[axis + 1..].iter().product();
+        let mut out_dims = [0usize; 8];
+        let mut out_rank = 0;
+        for &d in &input.dims[..axis] {
+            out_dims[out_rank] = d;
+            out_rank += 1;
+        }
+        for &d in &indices.dims {
+            out_dims[out_rank] = d;
+            out_rank += 1;
+        }
+        for &d in &input.dims[axis + 1..] {
+            out_dims[out_rank] = d;
+            out_rank += 1;
+        }
 
         let num_indices = indices.numel();
         let numel = outer * num_indices * inner;
@@ -163,6 +153,7 @@ impl Layer for Gather {
                     }
                 }
             }
+            DType::String => unreachable!("strings not supported"),
         }
         let _ = axis; // suppress unused warning (used in precomp path)
         output.set_dims(&out_dims[..out_rank]);

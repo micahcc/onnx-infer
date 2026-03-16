@@ -69,6 +69,7 @@ impl Layer for Tile {
                     buf[out_flat] = in_data[in_flat];
                 }
             }
+            DType::String => unreachable!("strings not supported"),
         }
         output.set_dims(&out_dims[..rank]);
         Ok(())

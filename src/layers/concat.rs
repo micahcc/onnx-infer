@@ -53,8 +53,27 @@ impl Layer for Concat {
             .ok_or_else(|| InferenceError::InvalidModel("Concat with no inputs".into()))?;
         let first = get_tensor(values, first_name)?;
 
-        let (axis, rank, outer, inner) = if self.pre_rank > 0 {
-            (self.pre_axis, self.pre_rank, self.pre_outer, self.pre_inner)
+        let (axis, rank, outer, inner) = if self.pre_rank > 0 && self.pre_rank == first.dims.len() {
+            // Verify pre-computed values match runtime
+            let rt_outer: usize = first.dims[..self.pre_axis].iter().product();
+            let rt_inner: usize = first.dims[self.pre_axis + 1..].iter().product();
+            if rt_outer != self.pre_outer || rt_inner != self.pre_inner {
+                // Dynamic shape: fall back to runtime computation
+                (self.pre_axis, self.pre_rank, rt_outer, rt_inner)
+            } else {
+                (self.pre_axis, self.pre_rank, self.pre_outer, self.pre_inner)
+            }
+        } else if self.pre_rank > 0 {
+            // Rank mismatch: fall back
+            let rank = first.dims.len();
+            let axis = if self.axis < 0 {
+                (rank as i64 + self.axis) as usize
+            } else {
+                self.axis as usize
+            };
+            let outer: usize = first.dims[..axis].iter().product();
+            let inner: usize = first.dims[axis + 1..].iter().product();
+            (axis, rank, outer, inner)
         } else {
             let rank = first.dims.len();
             let axis = if self.axis < 0 {
@@ -153,6 +172,7 @@ impl Layer for Concat {
                     axis_offset += t_axis;
                 }
             }
+            DType::String => unreachable!("strings not supported"),
         }
         output.set_dims(&out_dims[..rank]);
         Ok(())

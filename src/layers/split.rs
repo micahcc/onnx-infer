@@ -110,6 +110,7 @@ impl Split {
                         }
                     }
                 }
+                DType::String => unreachable!("strings not supported"),
             }
 
             out.set_dims(&out_dims[..out_rank]);

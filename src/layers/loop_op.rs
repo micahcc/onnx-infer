@@ -309,6 +309,9 @@ impl Loop {
                     PlanNode::TopK(topk_layer) => {
                         topk_layer.execute(values)?;
                     }
+                    PlanNode::Scan(scan_layer) => {
+                        scan_layer.execute(values)?;
+                    }
                 }
             }
 
@@ -317,6 +320,7 @@ impl Loop {
                 match cond.dtype() {
                     DType::Float => cond.floats().first().copied().unwrap_or(0.0) != 0.0,
                     DType::Int64 => cond.ints().first().copied().unwrap_or(0) != 0,
+                    DType::String => unreachable!("strings not supported"),
                 }
             } else {
                 true
@@ -368,6 +372,7 @@ impl Loop {
                     match t.dtype() {
                         DType::Float => scan_f32[j].extend_from_slice(t.floats()),
                         DType::Int64 => scan_i64[j].extend_from_slice(t.ints()),
+                        DType::String => unreachable!("strings not supported"),
                     }
                 }
             }
@@ -417,6 +422,7 @@ impl Loop {
                             let buf = outer.as_mut_i64(scan_i64[j].len());
                             buf.copy_from_slice(&scan_i64[j]);
                         }
+                        DType::String => unreachable!("strings not supported"),
                     }
                     outer.set_dims(&dims_buf[..rank]);
                 }

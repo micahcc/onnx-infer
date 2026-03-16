@@ -44,10 +44,12 @@ impl Layer for Greater {
             let va: f64 = match a.dtype() {
                 DType::Float => a.floats()[ai] as f64,
                 DType::Int64 => a.ints()[ai] as f64,
+                DType::String => unreachable!("strings not supported"),
             };
             let vb: f64 = match b.dtype() {
                 DType::Float => b.floats()[bi] as f64,
                 DType::Int64 => b.ints()[bi] as f64,
+                DType::String => unreachable!("strings not supported"),
             };
             *val = if va > vb { 1 } else { 0 };
 

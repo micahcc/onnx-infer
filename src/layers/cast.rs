@@ -37,6 +37,7 @@ impl Layer for Cast {
                             *o = v as i64;
                         }
                     }
+                    DType::String => unreachable!("strings not supported"),
                 }
                 output.set_dims(&input.dims);
             }
@@ -49,6 +50,7 @@ impl Layer for Cast {
                             *o = v as f32;
                         }
                     }
+                    DType::String => unreachable!("strings not supported"),
                 }
                 output.set_dims(&input.dims);
             }

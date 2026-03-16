@@ -36,6 +36,7 @@ impl Layer for Expand {
                     target[i] = v as usize;
                 }
             }
+            DType::String => unreachable!("strings not supported"),
         }
 
         let ndim = input.dims.len().max(target_len);
@@ -76,6 +77,7 @@ impl Layer for Expand {
                     }
                 }
             }
+            DType::String => unreachable!("strings not supported"),
         }
 
         output.set_dims(out_dims);

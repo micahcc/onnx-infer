@@ -47,6 +47,7 @@ impl Layer for Min {
                     }
                 }
             }
+            DType::String => unreachable!("strings not supported"),
         }
 
         output.set_dims(&dims[..rank]);

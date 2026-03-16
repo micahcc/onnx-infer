@@ -6,13 +6,15 @@ description = "Pure Rust ONNX inference engine for computer vision models"
 license = "BSD-3-Clause"
 
 [features]
-cli = ["dep:clap", "dep:image"]
+cli = ["dep:clap", "dep:image", "dep:prost-reflect", "dep:serde_json"]
 
 [dependencies]
 prost = "0"
 smallvec = "1"
 clap = { version = "4", features = ["derive"], optional = true }
 image = { version = "0.25", optional = true }
+prost-reflect = { version = "0.16", features = ["serde"], optional = true }
+serde_json = { version = "1", optional = true }
 tracing = "0.1"
 
 [dev-dependencies]
@@ -26,6 +28,7 @@ name = "inference"
 harness = false
 
 [build-dependencies]
+prost = "0"
 prost-build = "0"
 protox = "0.9"
 

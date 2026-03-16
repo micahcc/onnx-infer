@@ -19,36 +19,47 @@ fn read_i64_into(t: &Tensor, buf: &mut [i64; 8]) -> usize {
                 buf[i] = v as i64;
             }
         }
+        DType::String => unreachable!("strings not supported"),
     }
     len
 }
 
 pub struct Slice {
     pub inputs: Vec<String>,
+    // For opset < 10: starts/ends/axes as attributes
+    pub attr_starts: Option<Vec<i64>>,
+    pub attr_ends: Option<Vec<i64>>,
+    pub attr_axes: Option<Vec<i64>>,
 }
 
 impl Slice {
     pub fn new(inputs: Vec<String>) -> Self {
-        Self { inputs }
+        Self {
+            inputs,
+            attr_starts: None,
+            attr_ends: None,
+            attr_axes: None,
+        }
+    }
+
+    pub fn new_v1(
+        inputs: Vec<String>,
+        starts: Vec<i64>,
+        ends: Vec<i64>,
+        axes: Option<Vec<i64>>,
+    ) -> Self {
+        Self {
+            inputs,
+            attr_starts: Some(starts),
+            attr_ends: Some(ends),
+            attr_axes: axes,
+        }
     }
 }
 
 impl Layer for Slice {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
-        let starts_t = get_tensor(values, &self.inputs[1])?;
-        let ends_t = get_tensor(values, &self.inputs[2])?;
-        let axes_t = if self.inputs.len() > 3 && !self.inputs[3].is_empty() {
-            Some(get_tensor(values, &self.inputs[3])?)
-        } else {
-            None
-        };
-        let steps_t = if self.inputs.len() > 4 && !self.inputs[4].is_empty() {
-            Some(get_tensor(values, &self.inputs[4])?)
-        } else {
-            None
-        };
-
         let rank = input.dims.len();
         let mut starts = [0i64; 8];
         let mut ends = [0i64; 8];
@@ -57,40 +68,90 @@ impl Layer for Slice {
             *e = input.dims[ax] as i64;
         }
 
-        let mut starts_buf = [0i64; 8];
-        let starts_len = read_i64_into(starts_t, &mut starts_buf);
-        let mut ends_buf = [0i64; 8];
-        read_i64_into(ends_t, &mut ends_buf);
-
-        let mut axes_buf = [0usize; 8];
-        let axes_len;
-        if let Some(at) = axes_t {
-            let mut at_buf = [0i64; 8];
-            axes_len = read_i64_into(at, &mut at_buf);
+        if let Some(attr_starts) = &self.attr_starts {
+            // Opset < 10: attribute-based slice
+            let attr_ends = self.attr_ends.as_ref().unwrap();
+            let starts_len = attr_starts.len();
+            let mut starts_buf = [0i64; 8];
+            let mut ends_buf = [0i64; 8];
+            for (i, &v) in attr_starts.iter().enumerate() {
+                starts_buf[i] = v;
+            }
+            for (i, &v) in attr_ends.iter().enumerate() {
+                ends_buf[i] = v;
+            }
+            let mut axes_buf = [0usize; 8];
+            let axes_len;
+            if let Some(attr_axes) = &self.attr_axes {
+                axes_len = attr_axes.len();
+                for (i, &v) in attr_axes.iter().enumerate() {
+                    axes_buf[i] = if v < 0 {
+                        (rank as i64 + v) as usize
+                    } else {
+                        v as usize
+                    };
+                }
+            } else {
+                axes_len = starts_len;
+                for (i, ab) in axes_buf.iter_mut().enumerate().take(axes_len) {
+                    *ab = i;
+                }
+            }
             for i in 0..axes_len {
-                axes_buf[i] = if at_buf[i] < 0 {
-                    (rank as i64 + at_buf[i]) as usize
-                } else {
-                    at_buf[i] as usize
-                };
+                let ax = axes_buf[i];
+                starts[ax] = starts_buf[i];
+                ends[ax] = ends_buf[i];
             }
         } else {
-            axes_len = starts_len;
-            for (i, ab) in axes_buf.iter_mut().enumerate().take(axes_len) {
-                *ab = i;
+            // Opset >= 10: input-based slice
+            let starts_t = get_tensor(values, &self.inputs[1])?;
+            let ends_t = get_tensor(values, &self.inputs[2])?;
+            let axes_t = if self.inputs.len() > 3 && !self.inputs[3].is_empty() {
+                Some(get_tensor(values, &self.inputs[3])?)
+            } else {
+                None
+            };
+            let steps_t = if self.inputs.len() > 4 && !self.inputs[4].is_empty() {
+                Some(get_tensor(values, &self.inputs[4])?)
+            } else {
+                None
+            };
+
+            let mut starts_buf = [0i64; 8];
+            let starts_len = read_i64_into(starts_t, &mut starts_buf);
+            let mut ends_buf = [0i64; 8];
+            read_i64_into(ends_t, &mut ends_buf);
+
+            let mut axes_buf = [0usize; 8];
+            let axes_len;
+            if let Some(at) = axes_t {
+                let mut at_buf = [0i64; 8];
+                axes_len = read_i64_into(at, &mut at_buf);
+                for i in 0..axes_len {
+                    axes_buf[i] = if at_buf[i] < 0 {
+                        (rank as i64 + at_buf[i]) as usize
+                    } else {
+                        at_buf[i] as usize
+                    };
+                }
+            } else {
+                axes_len = starts_len;
+                for (i, ab) in axes_buf.iter_mut().enumerate().take(axes_len) {
+                    *ab = i;
+                }
             }
-        }
 
-        let mut steps_buf = [1i64; 8];
-        if let Some(st) = steps_t {
-            read_i64_into(st, &mut steps_buf);
-        }
+            let mut steps_buf = [1i64; 8];
+            if let Some(st) = steps_t {
+                read_i64_into(st, &mut steps_buf);
+            }
 
-        for i in 0..axes_len {
-            let ax = axes_buf[i];
-            starts[ax] = starts_buf[i];
-            ends[ax] = ends_buf[i];
-            steps[ax] = steps_buf[i];
+            for i in 0..axes_len {
+                let ax = axes_buf[i];
+                starts[ax] = starts_buf[i];
+                ends[ax] = ends_buf[i];
+                steps[ax] = steps_buf[i];
+            }
         }
 
         for ax in 0..rank {
@@ -176,6 +237,7 @@ impl Layer for Slice {
                     buf[out_flat] = in_data[in_flat];
                 }
             }
+            DType::String => unreachable!("strings not supported"),
         }
         output.set_dims(&out_dims[..rank]);
         Ok(())

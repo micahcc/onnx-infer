@@ -34,6 +34,7 @@ impl If {
         let is_true = match cond.dtype() {
             DType::Float => cond.floats().first().copied().unwrap_or(0.0) != 0.0,
             DType::Int64 => cond.ints().first().copied().unwrap_or(0) != 0,
+            DType::String => unreachable!("strings not supported"),
         };
 
         let branch = if is_true {

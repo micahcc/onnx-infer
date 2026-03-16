@@ -5,6 +5,7 @@ use crate::Dims;
 use crate::InferenceError;
 use crate::ONNX_INT32;
 use crate::ONNX_INT64;
+use crate::ONNX_STRING;
 use crate::Result;
 use crate::Tensor;
 use crate::dims;
@@ -14,18 +15,23 @@ use crate::get_attr_ints;
 use crate::get_attr_string;
 use crate::layers::Layer;
 use crate::layers::OpType;
+use crate::layers::abs;
 use crate::layers::add;
+use crate::layers::argmax;
 use crate::layers::auto_cast;
 use crate::layers::batch_norm;
 use crate::layers::cast;
+use crate::layers::category_mapper;
 use crate::layers::ceil;
 use crate::layers::clip;
+use crate::layers::compress;
 use crate::layers::concat;
 use crate::layers::constant;
 use crate::layers::constant_of_shape;
 use crate::layers::conv;
 use crate::layers::dequantize_linear;
 use crate::layers::div;
+use crate::layers::dropout;
 use crate::layers::equal;
 use crate::layers::exp;
 use crate::layers::expand;
@@ -35,12 +41,14 @@ use crate::layers::gather;
 use crate::layers::gemm;
 use crate::layers::global_avg_pool;
 use crate::layers::greater;
+use crate::layers::hardmax;
 use crate::layers::identity;
 use crate::layers::if_op;
 use crate::layers::leaky_relu;
 use crate::layers::less;
 use crate::layers::log;
 use crate::layers::loop_op;
+use crate::layers::lstm;
 use crate::layers::matmul;
 use crate::layers::max_op;
 use crate::layers::maxpool;
@@ -54,12 +62,15 @@ use crate::layers::qlinear_global_avg_pool;
 use crate::layers::qlinear_matmul;
 use crate::layers::quantize_linear;
 use crate::layers::range;
+use crate::layers::reduce_max;
 use crate::layers::reduce_min;
+use crate::layers::reduce_sum;
 use crate::layers::relu;
 use crate::layers::reshape;
 use crate::layers::resize;
 use crate::layers::roi_align;
 use crate::layers::round;
+use crate::layers::scan;
 use crate::layers::scatter_elements;
 use crate::layers::shape_op;
 use crate::layers::sigmoid;
@@ -69,11 +80,13 @@ use crate::layers::split;
 use crate::layers::sqrt;
 use crate::layers::squeeze;
 use crate::layers::sub;
+use crate::layers::sum;
 use crate::layers::tanh;
 use crate::layers::tile;
 use crate::layers::topk;
 use crate::layers::transpose;
 use crate::layers::unsqueeze;
+use crate::layers::where_op;
 use crate::onnx::NodeProto;
 
 pub enum PlanNode {
@@ -85,6 +98,7 @@ pub enum PlanNode {
     Split(Box<split::Split>),
     If(Box<if_op::If>),
     TopK(Box<topk::TopK>),
+    Scan(Box<scan::Scan>),
 }
 
 pub struct Plan {
@@ -135,6 +149,8 @@ impl Plan {
                         crate::onnx::type_proto::Value::TensorType(tt) => {
                             if tt.elem_type == ONNX_INT32 || tt.elem_type == ONNX_INT64 {
                                 DType::Int64
+                            } else if tt.elem_type == ONNX_STRING {
+                                DType::String
                             } else {
                                 DType::Float
                             }
@@ -271,6 +287,7 @@ impl Plan {
             let tensor = match dtype {
                 DType::Float => Tensor::new(shape.clone(), vec![0.0; numel]),
                 DType::Int64 => Tensor::new_i64(shape.clone(), vec![0; numel]),
+                DType::String => Tensor::new_strings(shape.clone(), vec![vec![]; numel]),
             };
             tensor_pool.insert(name.clone(), tensor);
         }
@@ -404,6 +421,29 @@ pub fn build_node(
             node.output.clone(),
             axis,
             largest,
+        ))));
+    }
+
+    if op == OpType::Scan {
+        let body = node
+            .attribute
+            .iter()
+            .find(|a| a.name == "body")
+            .and_then(|a| a.g.as_ref())
+            .ok_or_else(|| InferenceError::InvalidModel("Scan: no body graph".into()))?
+            .clone();
+        let num_scan_inputs = get_attr_int(node, "num_scan_inputs").unwrap_or(0) as usize;
+        let scan_input_directions =
+            get_attr_ints(node, "scan_input_directions").unwrap_or_default();
+        let scan_output_directions =
+            get_attr_ints(node, "scan_output_directions").unwrap_or_default();
+        return Ok(PlanNode::Scan(Box::new(scan::Scan::new(
+            inputs,
+            node.output.clone(),
+            body,
+            num_scan_inputs,
+            scan_input_directions,
+            scan_output_directions,
         ))));
     }
 
@@ -607,7 +647,20 @@ pub fn build_node(
             Box::new(transpose::Transpose::new(inputs, perm, input_shapes[0]))
         }
         OpType::Squeeze => Box::new(squeeze::Squeeze::new(inputs, node)),
-        OpType::Slice => Box::new(slice::Slice::new(inputs)),
+        OpType::Slice => {
+            if let Some(attr_starts) = get_attr_ints(node, "starts") {
+                let attr_ends = get_attr_ints(node, "ends").unwrap_or_default();
+                let attr_axes = get_attr_ints(node, "axes");
+                Box::new(slice::Slice::new_v1(
+                    inputs,
+                    attr_starts,
+                    attr_ends,
+                    attr_axes,
+                ))
+            } else {
+                Box::new(slice::Slice::new(inputs))
+            }
+        }
         OpType::Tile => Box::new(tile::Tile::new(inputs)),
         OpType::Resize => {
             let ct = get_attr_string(node, "coordinate_transformation_mode").unwrap_or_default();
@@ -686,7 +739,68 @@ pub fn build_node(
                 inputs, inner,
             ))
         }
-        OpType::Loop | OpType::Split | OpType::If | OpType::TopK => unreachable!(),
+        OpType::Abs => Box::new(abs::Abs::new(inputs)),
+        OpType::ArgMax => Box::new(argmax::ArgMax::new(
+            inputs,
+            get_attr_int(node, "axis").unwrap_or(0),
+            get_attr_int(node, "keepdims").unwrap_or(1) != 0,
+            get_attr_int(node, "select_last_index").unwrap_or(0) != 0,
+        )),
+        OpType::CategoryMapper => {
+            let cats_strings: Vec<Vec<u8>> = node
+                .attribute
+                .iter()
+                .find(|a| a.name == "cats_strings")
+                .map(|a| a.strings.iter().map(|s| s.to_vec()).collect())
+                .unwrap_or_default();
+            let cats_int64s: Vec<i64> = node
+                .attribute
+                .iter()
+                .find(|a| a.name == "cats_int64s")
+                .map(|a| a.ints.clone())
+                .unwrap_or_default();
+            let default_int64 = get_attr_int(node, "default_int64").unwrap_or(-1);
+            Box::new(category_mapper::CategoryMapper::new(
+                inputs,
+                cats_strings,
+                cats_int64s,
+                default_int64,
+            ))
+        }
+        OpType::Compress => {
+            let axis = get_attr_int(node, "axis");
+            Box::new(compress::Compress::new(inputs, axis))
+        }
+        OpType::Dropout => Box::new(dropout::Dropout::new(inputs)),
+        OpType::Hardmax => Box::new(hardmax::Hardmax::new(
+            inputs,
+            get_attr_int(node, "axis").unwrap_or(-1),
+        )),
+        OpType::Lstm => {
+            let hs = get_attr_int(node, "hidden_size").unwrap_or(1) as usize;
+            let dir_str = get_attr_string(node, "direction").unwrap_or_default();
+            let direction = match dir_str.as_str() {
+                "reverse" => lstm::LstmDirection::Reverse,
+                "bidirectional" => lstm::LstmDirection::Bidirectional,
+                _ => lstm::LstmDirection::Forward,
+            };
+            Box::new(lstm::Lstm::new(inputs, node.output.clone(), hs, direction))
+        }
+        OpType::ReduceMax => Box::new(reduce_max::ReduceMax::new(
+            inputs,
+            get_attr_int(node, "keepdims").unwrap_or(1) != 0,
+            node,
+        )),
+        OpType::ReduceSum => Box::new(reduce_sum::ReduceSum::new(
+            inputs,
+            get_attr_int(node, "keepdims").unwrap_or(1) != 0,
+            node,
+        )),
+        OpType::Sum => Box::new(sum::Sum::new(inputs)),
+        OpType::Where => Box::new(where_op::Where::new(inputs)),
+        OpType::Loop | OpType::Split | OpType::If | OpType::TopK | OpType::Scan => {
+            unreachable!()
+        }
     };
 
     Ok(PlanNode::Single { output, layer })
@@ -749,6 +863,30 @@ pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
         return topk_layer.execute(values);
     }
 
+    if op == OpType::Scan {
+        let body = node
+            .attribute
+            .iter()
+            .find(|a| a.name == "body")
+            .and_then(|a| a.g.as_ref())
+            .ok_or_else(|| InferenceError::InvalidModel("Scan: no body graph".into()))?
+            .clone();
+        let num_scan_inputs = get_attr_int(node, "num_scan_inputs").unwrap_or(0) as usize;
+        let scan_input_directions =
+            get_attr_ints(node, "scan_input_directions").unwrap_or_default();
+        let scan_output_directions =
+            get_attr_ints(node, "scan_output_directions").unwrap_or_default();
+        let mut scan_layer = scan::Scan::new(
+            node.input.clone(),
+            node.output.clone(),
+            body,
+            num_scan_inputs,
+            scan_input_directions,
+            scan_output_directions,
+        );
+        return scan_layer.execute(values);
+    }
+
     if node.output.is_empty() || node.output[0].is_empty() {
         return Ok(());
     }
@@ -793,5 +931,6 @@ pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
         PlanNode::Split(split_layer) => split_layer.execute(values),
         PlanNode::If(if_layer) => if_layer.execute(values),
         PlanNode::TopK(topk_layer) => topk_layer.execute(values),
+        PlanNode::Scan(scan_layer) => scan_layer.execute(values),
     }
 }

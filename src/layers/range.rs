@@ -51,6 +51,7 @@ impl Layer for Range {
                 }
                 output.set_dims(&[n]);
             }
+            DType::String => unreachable!("strings not supported"),
         }
 
         Ok(())

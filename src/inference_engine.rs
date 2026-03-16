@@ -72,14 +72,13 @@ impl InferenceEngine {
                     if output.is_empty() {
                         continue;
                     }
-                    let _span = tracing::trace_span!("op").entered();
+                    let _span = tracing::trace_span!("op", output = %output).entered();
                     let (key, mut out) = self
                         .values
                         .remove_entry(output.as_str())
                         .unwrap_or_else(|| (output.clone(), Tensor::default()));
-                    let result = layer.execute(&self.values, &mut out);
+                    layer.execute(&self.values, &mut out)?;
                     self.values.insert(key, out);
-                    result?;
                 }
                 PlanNode::Loop(loop_layer) => {
                     loop_layer.execute(&mut self.values)?;
@@ -92,6 +91,9 @@ impl InferenceEngine {
                 }
                 PlanNode::TopK(topk_layer) => {
                     topk_layer.execute(&mut self.values)?;
+                }
+                PlanNode::Scan(scan_layer) => {
+                    scan_layer.execute(&mut self.values)?;
                 }
             }
         }

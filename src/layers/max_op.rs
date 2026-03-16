@@ -47,6 +47,7 @@ impl Layer for Max {
                     }
                 }
             }
+            DType::String => unreachable!("strings not supported"),
         }
 
         output.set_dims(&dims[..rank]);
