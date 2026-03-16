@@ -1,3 +1,69 @@
+//! # onnx-infer
+//!
+//! Pure Rust ONNX inference engine targeting computer vision models. Zero heap
+//! allocations after warmup — all tensor buffers, intermediate values, and output
+//! maps are pre-allocated and reused across forward passes.
+//!
+//! ## Quick start
+//!
+//! ```no_run
+//! use std::collections::HashMap;
+//! use onnx_infer::{InferenceEngine, Tensor, dims};
+//!
+//! let model_bytes = std::fs::read("model.onnx").unwrap();
+//! let mut input_sizes = HashMap::new();
+//! input_sizes.insert("Input3".to_string(), dims![1, 1, 28, 28]);
+//! let mut engine = InferenceEngine::new(&model_bytes, input_sizes).unwrap();
+//!
+//! let input = Tensor::new(dims![1, 1, 28, 28], vec![0.0; 784]);
+//! let mut inputs = HashMap::new();
+//! inputs.insert("Input3".to_string(), input);
+//!
+//! engine.run(inputs).unwrap();
+//!
+//! let output = &engine.outputs["Plus214_Output_0"];
+//! println!("dims: {:?}", output.dims);
+//! println!("data: {:?}", &output.floats()[..10]);
+//! ```
+//!
+//! ## Running inference with external output buffers
+//!
+//! If you need to control the output buffer (e.g. to avoid copying), use
+//! [`InferenceEngine::run_for`] directly:
+//!
+//! ```no_run
+//! # use std::collections::HashMap;
+//! # use onnx_infer::{InferenceEngine, Tensor, dims};
+//! # let model_bytes = std::fs::read("model.onnx").unwrap();
+//! # let mut input_sizes = HashMap::new();
+//! # input_sizes.insert("Input3".to_string(), dims![1, 1, 28, 28]);
+//! # let mut engine = InferenceEngine::new(&model_bytes, input_sizes).unwrap();
+//! let mut outputs = HashMap::new();
+//! let output_names = vec!["Plus214_Output_0".to_string()];
+//!
+//! let input = Tensor::new(dims![1, 1, 28, 28], vec![0.0; 784]);
+//! let mut inputs = HashMap::new();
+//! inputs.insert("Input3".to_string(), input);
+//!
+//! engine.run_for(inputs, &output_names, &mut outputs).unwrap();
+//! ```
+//!
+//! ## Inspecting model shapes
+//!
+//! After constructing an engine you can query the expected input sizes and
+//! the inferred shape map for all intermediate tensors:
+//!
+//! ```no_run
+//! # use std::collections::HashMap;
+//! # use onnx_infer::{InferenceEngine, dims};
+//! # let model_bytes = std::fs::read("model.onnx").unwrap();
+//! # let mut input_sizes = HashMap::new();
+//! # input_sizes.insert("Input3".to_string(), dims![1, 1, 28, 28]);
+//! # let engine = InferenceEngine::new(&model_bytes, input_sizes).unwrap();
+//! println!("inputs: {:?}", engine.input_sizes());
+//! println!("shapes: {:?}", engine.shape_map());
+//! ```
+
 #![allow(clippy::too_many_arguments)]
 
 pub mod onnx {
