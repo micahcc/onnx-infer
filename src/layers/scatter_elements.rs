@@ -38,11 +38,6 @@ impl Layer for ScatterElements {
             strides[i] = strides[i + 1] * data.dims[i + 1];
         }
 
-        let idx_vals: Vec<i64> = match indices.dtype() {
-            DType::Int64 => indices.ints().to_vec(),
-            DType::Float => indices.floats().iter().map(|&v| v as i64).collect(),
-        };
-
         // Compute strides for indices
         let mut idx_strides = [1usize; 8];
         for i in (0..rank - 1).rev() {
@@ -50,7 +45,17 @@ impl Layer for ScatterElements {
         }
 
         let idx_numel = indices.numel();
+        let idx_is_int = indices.dtype() == DType::Int64;
 
+        let resolve_idx = |flat: usize| -> i64 {
+            if idx_is_int {
+                indices.ints()[flat]
+            } else {
+                indices.floats()[flat] as i64
+            }
+        };
+
+        #[allow(clippy::needless_range_loop)]
         match data.dtype() {
             DType::Float => {
                 let buf = output.as_mut_f32(numel);
@@ -58,14 +63,13 @@ impl Layer for ScatterElements {
                 let upd = updates.floats();
 
                 for flat in 0..idx_numel {
-                    // Convert flat index to multi-dim coords in indices tensor
                     let mut remaining = flat;
                     let mut data_flat = 0;
                     for d in 0..rank {
                         let coord = remaining / idx_strides[d];
                         remaining %= idx_strides[d];
                         if d == axis {
-                            let mut idx = idx_vals[flat];
+                            let mut idx = resolve_idx(flat);
                             if idx < 0 {
                                 idx += data.dims[axis] as i64;
                             }
@@ -89,7 +93,7 @@ impl Layer for ScatterElements {
                         let coord = remaining / idx_strides[d];
                         remaining %= idx_strides[d];
                         if d == axis {
-                            let mut idx = idx_vals[flat];
+                            let mut idx = resolve_idx(flat);
                             if idx < 0 {
                                 idx += data.dims[axis] as i64;
                             }

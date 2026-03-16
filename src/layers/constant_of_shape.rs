@@ -27,11 +27,21 @@ impl ConstantOfShape {
 impl Layer for ConstantOfShape {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let shape_tensor = get_tensor(values, &self.inputs[0])?;
-        let shape: Vec<usize> = match shape_tensor.dtype() {
-            DType::Int64 => shape_tensor.ints().iter().map(|&v| v as usize).collect(),
-            DType::Float => shape_tensor.floats().iter().map(|&v| v as usize).collect(),
-        };
-        let numel: usize = shape.iter().product();
+        let mut shape = [0usize; 8];
+        let shape_len = shape_tensor.numel();
+        match shape_tensor.dtype() {
+            DType::Int64 => {
+                for (i, &v) in shape_tensor.ints().iter().enumerate() {
+                    shape[i] = v as usize;
+                }
+            }
+            DType::Float => {
+                for (i, &v) in shape_tensor.floats().iter().enumerate() {
+                    shape[i] = v as usize;
+                }
+            }
+        }
+        let numel: usize = shape[..shape_len].iter().product();
 
         match self.dtype {
             DType::Float => {
@@ -43,7 +53,7 @@ impl Layer for ConstantOfShape {
                 buf.fill(self.fill_i64);
             }
         }
-        output.set_dims(&shape);
+        output.set_dims(&shape[..shape_len]);
         Ok(())
     }
 }

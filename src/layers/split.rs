@@ -38,7 +38,9 @@ impl Split {
 
         let outer: usize = input.dims[..axis].iter().product();
         let inner: usize = input.dims[axis + 1..].iter().product();
-        let in_dims = input.dims.clone();
+        let in_rank = input.dims.len();
+        let mut in_dims = [0usize; 8];
+        in_dims[..in_rank].copy_from_slice(&input.dims);
         let dtype = input.dtype();
 
         // Compute split sizes
@@ -67,11 +69,9 @@ impl Split {
             let numel = outer * chunk * inner;
 
             let mut out_dims = [0usize; 8];
-            for (d, &s) in out_dims.iter_mut().zip(in_dims.iter()) {
-                *d = s;
-            }
+            out_dims[..in_rank].copy_from_slice(&in_dims[..in_rank]);
             out_dims[axis] = chunk;
-            let out_rank = in_dims.len();
+            let out_rank = in_rank;
 
             let (key, mut out) = values
                 .remove_entry(out_name.as_str())

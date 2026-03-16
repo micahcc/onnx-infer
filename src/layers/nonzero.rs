@@ -20,9 +20,6 @@ impl Layer for NonZero {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
         let rank = input.dims.len();
-
-        // Collect indices of non-zero elements
-        let mut coords: Vec<Vec<i64>> = vec![Vec::new(); rank];
         let numel = input.numel();
 
         let is_nonzero = |i: usize| -> bool {
@@ -32,22 +29,29 @@ impl Layer for NonZero {
             }
         };
 
+        // Pass 1: count non-zero elements
+        let mut nnz = 0usize;
+        for flat in 0..numel {
+            if is_nonzero(flat) {
+                nnz += 1;
+            }
+        }
+
+        let total = rank * nnz;
+        let buf = output.as_mut_i64(total);
+
+        // Pass 2: fill coordinates directly into output buffer
+        // Layout is [rank, nnz] — row r contains axis-r coords for all non-zero elements
+        let mut col = 0;
         for flat in 0..numel {
             if is_nonzero(flat) {
                 let mut remaining = flat;
                 for ax in (0..rank).rev() {
-                    coords[ax].push((remaining % input.dims[ax]) as i64);
+                    buf[ax * nnz + col] = (remaining % input.dims[ax]) as i64;
                     remaining /= input.dims[ax];
                 }
+                col += 1;
             }
-        }
-
-        let nnz = coords.first().map(|c| c.len()).unwrap_or(0);
-        let total = rank * nnz;
-        let buf = output.as_mut_i64(total);
-
-        for (r, coord_row) in coords.iter().enumerate() {
-            buf[r * nnz..(r + 1) * nnz].copy_from_slice(coord_row);
         }
 
         output.set_dims(&[rank, nnz]);

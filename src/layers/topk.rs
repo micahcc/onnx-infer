@@ -38,18 +38,18 @@ impl TopK {
         let outer: usize = input.dims[..axis].iter().product();
         let axis_size = input.dims[axis];
         let inner: usize = input.dims[axis + 1..].iter().product();
-        let in_dims = input.dims.clone();
+        let in_rank = input.dims.len();
+        let mut in_dims = [0usize; 8];
+        in_dims[..in_rank].copy_from_slice(&input.dims);
 
         // Copy input data to local buffer to release borrow on values
         self.in_buf.clear();
         self.in_buf.extend_from_slice(input.floats());
 
         let mut out_dims = [0usize; 8];
-        for (i, &d) in in_dims.iter().enumerate() {
-            out_dims[i] = d;
-        }
+        out_dims[..in_rank].copy_from_slice(&in_dims[..in_rank]);
         out_dims[axis] = k;
-        let out_rank = in_dims.len();
+        let out_rank = in_rank;
         let numel = outer * k * inner;
 
         // Values output

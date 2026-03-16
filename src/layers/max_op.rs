@@ -20,7 +20,9 @@ impl Layer for Max {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let first = get_tensor(values, &self.inputs[0])?;
         let numel = first.numel();
-        let dims = first.dims.clone();
+        let rank = first.dims.len();
+        let mut dims = [0usize; 8];
+        dims[..rank].copy_from_slice(&first.dims);
 
         match first.dtype() {
             DType::Float => {
@@ -47,7 +49,7 @@ impl Layer for Max {
             }
         }
 
-        output.set_dims(&dims);
+        output.set_dims(&dims[..rank]);
         Ok(())
     }
 }

@@ -23,14 +23,24 @@ impl Layer for Expand {
         let input = get_tensor(values, &self.inputs[0])?;
         let shape_tensor = get_tensor(values, &self.inputs[1])?;
 
-        let target: Vec<usize> = match shape_tensor.dtype() {
-            DType::Int64 => shape_tensor.ints().iter().map(|&v| v as usize).collect(),
-            DType::Float => shape_tensor.floats().iter().map(|&v| v as usize).collect(),
-        };
+        let mut target = [0usize; 8];
+        let target_len = shape_tensor.numel();
+        match shape_tensor.dtype() {
+            DType::Int64 => {
+                for (i, &v) in shape_tensor.ints().iter().enumerate() {
+                    target[i] = v as usize;
+                }
+            }
+            DType::Float => {
+                for (i, &v) in shape_tensor.floats().iter().enumerate() {
+                    target[i] = v as usize;
+                }
+            }
+        }
 
-        let ndim = input.dims.len().max(target.len());
+        let ndim = input.dims.len().max(target_len);
         let mut out_shape = [0usize; 8];
-        broadcast_shape_into(&input.dims, &target, &mut out_shape[..ndim]);
+        broadcast_shape_into(&input.dims, &target[..target_len], &mut out_shape[..ndim]);
         let out_dims = &out_shape[..ndim];
         let numel: usize = out_dims.iter().product();
 

@@ -13,6 +13,7 @@ pub struct RoiAlign {
     pub output_width: usize,
     pub sampling_ratio: usize,
     pub spatial_scale: f32,
+    batch_idx_buf: Vec<usize>,
 }
 
 impl RoiAlign {
@@ -31,6 +32,7 @@ impl RoiAlign {
             output_width,
             sampling_ratio,
             spatial_scale,
+            batch_idx_buf: Vec::new(),
         }
     }
 }
@@ -79,23 +81,24 @@ impl Layer for RoiAlign {
 
         let x_data = x.floats();
         let rois_data = rois.floats();
-        let batch_idx = match batch_indices.dtype() {
-            DType::Int64 => batch_indices
-                .ints()
-                .iter()
-                .map(|&v| v as usize)
-                .collect::<Vec<_>>(),
-            DType::Float => batch_indices
-                .floats()
-                .iter()
-                .map(|&v| v as usize)
-                .collect::<Vec<_>>(),
-        };
+        self.batch_idx_buf.clear();
+        match batch_indices.dtype() {
+            DType::Int64 => {
+                for &v in batch_indices.ints() {
+                    self.batch_idx_buf.push(v as usize);
+                }
+            }
+            DType::Float => {
+                for &v in batch_indices.floats() {
+                    self.batch_idx_buf.push(v as usize);
+                }
+            }
+        }
 
         let buf = output.as_mut_f32(numel);
         let is_avg = self.mode != "max";
 
-        for (n, &batch) in batch_idx.iter().enumerate() {
+        for (n, &batch) in self.batch_idx_buf.iter().enumerate() {
             let roi_base = n * 4;
             let x1 = rois_data[roi_base] * self.spatial_scale;
             let y1 = rois_data[roi_base + 1] * self.spatial_scale;

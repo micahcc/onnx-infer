@@ -6,11 +6,21 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
-fn to_i64_slice(t: &Tensor) -> Vec<i64> {
+fn read_i64_into(t: &Tensor, buf: &mut [i64; 8]) -> usize {
+    let len = t.numel();
     match t.dtype() {
-        DType::Int64 => t.ints().to_vec(),
-        DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
+        DType::Int64 => {
+            for (i, &v) in t.ints().iter().enumerate() {
+                buf[i] = v;
+            }
+        }
+        DType::Float => {
+            for (i, &v) in t.floats().iter().enumerate() {
+                buf[i] = v as i64;
+            }
+        }
     }
+    len
 }
 
 pub struct Slice {
@@ -47,36 +57,40 @@ impl Layer for Slice {
             *e = input.dims[ax] as i64;
         }
 
-        let starts_vals = to_i64_slice(starts_t);
-        let ends_vals = to_i64_slice(ends_t);
+        let mut starts_buf = [0i64; 8];
+        let starts_len = read_i64_into(starts_t, &mut starts_buf);
+        let mut ends_buf = [0i64; 8];
+        read_i64_into(ends_t, &mut ends_buf);
 
         let mut axes_buf = [0usize; 8];
         let axes_len;
         if let Some(at) = axes_t {
-            let at_vals = to_i64_slice(at);
-            axes_len = at_vals.len();
-            for (i, &a) in at_vals.iter().enumerate() {
-                axes_buf[i] = if a < 0 {
-                    (rank as i64 + a) as usize
+            let mut at_buf = [0i64; 8];
+            axes_len = read_i64_into(at, &mut at_buf);
+            for i in 0..axes_len {
+                axes_buf[i] = if at_buf[i] < 0 {
+                    (rank as i64 + at_buf[i]) as usize
                 } else {
-                    a as usize
+                    at_buf[i] as usize
                 };
             }
         } else {
-            axes_len = starts_vals.len();
+            axes_len = starts_len;
             for (i, ab) in axes_buf.iter_mut().enumerate().take(axes_len) {
                 *ab = i;
             }
         }
 
+        let mut steps_buf = [1i64; 8];
+        if let Some(st) = steps_t {
+            read_i64_into(st, &mut steps_buf);
+        }
+
         for i in 0..axes_len {
             let ax = axes_buf[i];
-            starts[ax] = starts_vals[i];
-            ends[ax] = ends_vals[i];
-            if let Some(st) = steps_t {
-                let sv = to_i64_slice(st);
-                steps[ax] = sv[i];
-            }
+            starts[ax] = starts_buf[i];
+            ends[ax] = ends_buf[i];
+            steps[ax] = steps_buf[i];
         }
 
         for ax in 0..rank {

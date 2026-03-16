@@ -51,16 +51,14 @@ impl Layer for Gather {
 
         let numel = outer * num_indices * inner;
 
-        // Resolve indices (handle negatives)
-        let idx_vals: &[i64];
-        let idx_converted: Vec<i64>;
-        match indices.dtype() {
-            DType::Int64 => idx_vals = indices.ints(),
-            DType::Float => {
-                idx_converted = indices.floats().iter().map(|&v| v as i64).collect();
-                idx_vals = &idx_converted;
+        let idx_is_int = indices.dtype() == DType::Int64;
+        let resolve_idx = |i: usize| -> i64 {
+            if idx_is_int {
+                indices.ints()[i]
+            } else {
+                indices.floats()[i] as i64
             }
-        }
+        };
 
         match input.dtype() {
             DType::Float => {
@@ -68,7 +66,8 @@ impl Layer for Gather {
                 let buf = output.as_mut_f32(numel);
                 let mut dst = 0;
                 for o in 0..outer {
-                    for &raw_idx in idx_vals {
+                    for j in 0..num_indices {
+                        let raw_idx = resolve_idx(j);
                         let idx = if raw_idx < 0 {
                             (axis_size as i64 + raw_idx) as usize
                         } else {
@@ -85,7 +84,8 @@ impl Layer for Gather {
                 let buf = output.as_mut_i64(numel);
                 let mut dst = 0;
                 for o in 0..outer {
-                    for &raw_idx in idx_vals {
+                    for j in 0..num_indices {
+                        let raw_idx = resolve_idx(j);
                         let idx = if raw_idx < 0 {
                             (axis_size as i64 + raw_idx) as usize
                         } else {
