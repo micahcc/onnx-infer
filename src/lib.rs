@@ -11,9 +11,7 @@
 //! use onnx_infer::{InferenceEngine, Tensor, dims};
 //!
 //! let model_bytes = std::fs::read("model.onnx").unwrap();
-//! let mut input_sizes = HashMap::new();
-//! input_sizes.insert("Input3".to_string(), dims![1, 1, 28, 28]);
-//! let mut engine = InferenceEngine::new(&model_bytes, input_sizes).unwrap();
+//! let mut engine = InferenceEngine::new(&model_bytes).unwrap();
 //!
 //! let input = Tensor::new(dims![1, 1, 28, 28], vec![0.0; 784]);
 //! let mut inputs = HashMap::new();
@@ -35,9 +33,7 @@
 //! # use std::collections::HashMap;
 //! # use onnx_infer::{InferenceEngine, Tensor, dims};
 //! # let model_bytes = std::fs::read("model.onnx").unwrap();
-//! # let mut input_sizes = HashMap::new();
-//! # input_sizes.insert("Input3".to_string(), dims![1, 1, 28, 28]);
-//! # let mut engine = InferenceEngine::new(&model_bytes, input_sizes).unwrap();
+//! # let mut engine = InferenceEngine::new(&model_bytes).unwrap();
 //! let mut outputs = HashMap::new();
 //! let output_names = vec!["Plus214_Output_0".to_string()];
 //!
@@ -57,10 +53,7 @@
 //! # use std::collections::HashMap;
 //! # use onnx_infer::{InferenceEngine, dims};
 //! # let model_bytes = std::fs::read("model.onnx").unwrap();
-//! # let mut input_sizes = HashMap::new();
-//! # input_sizes.insert("Input3".to_string(), dims![1, 1, 28, 28]);
-//! # let engine = InferenceEngine::new(&model_bytes, input_sizes).unwrap();
-//! println!("inputs: {:?}", engine.input_sizes());
+//! # let engine = InferenceEngine::new(&model_bytes).unwrap();
 //! println!("shapes: {:?}", engine.shape_map());
 //! ```
 
@@ -113,7 +106,6 @@ mod tests {
     use tracing_subscriber::prelude::*;
 
     use crate::DType;
-    use crate::Dims;
     use crate::InferenceEngine;
     use crate::Tensor;
     use crate::onnx::ModelProto;
@@ -147,7 +139,7 @@ mod tests {
         base: &Path,
         model_file: &str,
         test_set: usize,
-    ) -> (Vec<u8>, HashMap<String, Tensor>, HashMap<String, Dims>) {
+    ) -> (Vec<u8>, HashMap<String, Tensor>) {
         let model_bytes = fs::read(base.join(model_file)).expect("read model");
         let model = ModelProto::decode(&model_bytes[..]).unwrap();
         let graph = model.graph.as_ref().unwrap();
@@ -155,7 +147,6 @@ mod tests {
         let test_dir = base.join(format!("test_data_set_{test_set}"));
 
         let mut inputs = HashMap::new();
-        let mut input_sizes = HashMap::new();
         for i in 0..graph.input.len() {
             let pb_path = test_dir.join(format!("input_{i}.pb"));
             if pb_path.exists() {
@@ -167,17 +158,16 @@ mod tests {
                     proto.name.clone()
                 };
                 let input = Tensor::from_proto(&proto).expect("parse input");
-                input_sizes.insert(name.clone(), input.dims.clone());
                 inputs.insert(name, input);
             }
         }
 
-        (model_bytes, inputs, input_sizes)
+        (model_bytes, inputs)
     }
 
     fn run_fixture(base: &Path, model_file: &str, test_set: usize) {
-        let (model_bytes, inputs, input_sizes) = load_model_and_inputs(base, model_file, test_set);
-        let mut engine = InferenceEngine::new(&model_bytes, input_sizes).expect("load model");
+        let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
+        let mut engine = InferenceEngine::new(&model_bytes).expect("load model");
 
         let model = ModelProto::decode(&model_bytes[..]).unwrap();
         let graph = model.graph.as_ref().unwrap();
@@ -214,8 +204,8 @@ mod tests {
     }
 
     fn run_quantized_fixture(base: &Path, model_file: &str, test_set: usize) {
-        let (model_bytes, inputs, input_sizes) = load_model_and_inputs(base, model_file, test_set);
-        let mut engine = InferenceEngine::new(&model_bytes, input_sizes).expect("load model");
+        let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
+        let mut engine = InferenceEngine::new(&model_bytes).expect("load model");
 
         let model = ModelProto::decode(&model_bytes[..]).unwrap();
         let graph = model.graph.as_ref().unwrap();
@@ -263,8 +253,8 @@ mod tests {
     }
 
     fn run_multi_io_fixture(base: &Path, model_file: &str, test_set: usize) {
-        let (model_bytes, inputs, input_sizes) = load_model_and_inputs(base, model_file, test_set);
-        let mut engine = InferenceEngine::new(&model_bytes, input_sizes).expect("load model");
+        let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
+        let mut engine = InferenceEngine::new(&model_bytes).expect("load model");
 
         let model = ModelProto::decode(&model_bytes[..]).unwrap();
         let graph = model.graph.as_ref().unwrap();

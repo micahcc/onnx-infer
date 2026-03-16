@@ -36,9 +36,7 @@ use std::collections::HashMap;
 use onnx_infer::{InferenceEngine, Tensor, dims};
 
 let model_bytes = std::fs::read("model.onnx").unwrap();
-let mut input_sizes = HashMap::new();
-input_sizes.insert("Input3".to_string(), dims![1, 1, 28, 28]);
-let mut engine = InferenceEngine::new(&model_bytes, input_sizes).unwrap();
+let mut engine = InferenceEngine::new(&model_bytes).unwrap();
 
 let input = Tensor::new(dims![1, 1, 28, 28], vec![0.0; 784]);
 let mut inputs = HashMap::new();

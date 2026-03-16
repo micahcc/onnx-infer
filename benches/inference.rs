@@ -26,10 +26,7 @@ fn load_single_input(base: &Path, model_file: &str) -> (InferenceEngine, HashMap
     let input_bytes = fs::read(test_dir.join("input_0.pb")).expect("read input");
     let input = Tensor::from_proto_bytes(&input_bytes).expect("parse input");
 
-    let mut input_sizes = HashMap::new();
-    input_sizes.insert(input_name.clone(), input.dims.clone());
-
-    let engine = InferenceEngine::new(&model_bytes, input_sizes).expect("load model");
+    let engine = InferenceEngine::new(&model_bytes).expect("load model");
 
     let mut inputs = HashMap::new();
     inputs.insert(input_name, input);
@@ -44,18 +41,16 @@ fn load_multi_input(base: &Path, model_file: &str) -> (InferenceEngine, HashMap<
 
     let test_dir = base.join("test_data_set_0");
     let mut inputs = HashMap::new();
-    let mut input_sizes = HashMap::new();
     for i in 0..graph.input.len() {
         let pb_path = test_dir.join(format!("input_{i}.pb"));
         if pb_path.exists() {
             let input = Tensor::from_proto_bytes(&fs::read(&pb_path).expect("read input"))
                 .expect("parse input");
-            input_sizes.insert(graph.input[i].name.clone(), input.dims.clone());
             inputs.insert(graph.input[i].name.clone(), input);
         }
     }
 
-    let engine = InferenceEngine::new(&model_bytes, input_sizes).expect("load model");
+    let engine = InferenceEngine::new(&model_bytes).expect("load model");
     (engine, inputs)
 }
 

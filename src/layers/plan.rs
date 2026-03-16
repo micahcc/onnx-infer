@@ -118,6 +118,49 @@ impl Plan {
         Self::build_with_types(graph, input_sizes, &HashMap::new())
     }
 
+    /// Extract input shapes from the graph's input type information.
+    /// Only includes non-initializer inputs with fully concrete dimensions.
+    pub fn infer_input_sizes(graph: &crate::onnx::GraphProto) -> HashMap<String, Dims> {
+        let initializer_names: std::collections::HashSet<&str> = graph
+            .initializer
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect();
+        let mut sizes = HashMap::new();
+        for input in &graph.input {
+            if input.name.is_empty() || initializer_names.contains(input.name.as_str()) {
+                continue;
+            }
+            if let Some(shape) = Self::extract_shape(input) {
+                sizes.insert(input.name.clone(), shape);
+            }
+        }
+        sizes
+    }
+
+    fn extract_shape(
+        input: &crate::onnx::ValueInfoProto,
+    ) -> Option<Dims> {
+        let tt = match input.r#type.as_ref()?.value.as_ref()? {
+            crate::onnx::type_proto::Value::TensorType(tt) => tt,
+            _ => return None,
+        };
+        let shape_proto = tt.shape.as_ref()?;
+        let mut dims = Dims::new();
+        for d in &shape_proto.dim {
+            match &d.value {
+                Some(crate::onnx::tensor_shape_proto::dimension::Value::DimValue(v)) if *v > 0 => {
+                    dims.push(*v as usize);
+                }
+                _ => return None, // symbolic or missing dimension
+            }
+        }
+        if dims.is_empty() {
+            return None;
+        }
+        Some(dims)
+    }
+
     pub fn build_with_types(
         graph: &crate::onnx::GraphProto,
         input_sizes: &HashMap<String, Dims>,
@@ -165,6 +208,11 @@ impl Plan {
         let mut shape_map: HashMap<String, Dims> = HashMap::new();
         for (name, tensor) in &initializers {
             shape_map.insert(name.clone(), tensor.dims.clone());
+        }
+        // Merge graph-inferred input sizes first, then override with explicit ones
+        let inferred = Self::infer_input_sizes(graph);
+        for (name, dims) in &inferred {
+            shape_map.insert(name.clone(), dims.clone());
         }
         for (name, dims) in input_sizes {
             shape_map.insert(name.clone(), dims.clone());

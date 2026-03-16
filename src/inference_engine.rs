@@ -13,12 +13,19 @@ use crate::onnx::ModelProto;
 pub struct InferenceEngine {
     plan: Plan,
     values: HashMap<String, Tensor>,
-    input_sizes: HashMap<String, Dims>,
+    input_names: Vec<String>,
     pub outputs: HashMap<String, Tensor>,
 }
 
 impl InferenceEngine {
-    pub fn new(model_bytes: &[u8], input_sizes: HashMap<String, Dims>) -> Result<Self> {
+    pub fn new(model_bytes: &[u8]) -> Result<Self> {
+        Self::with_input_sizes(model_bytes, HashMap::new())
+    }
+
+    pub fn with_input_sizes(
+        model_bytes: &[u8],
+        input_sizes: HashMap<String, Dims>,
+    ) -> Result<Self> {
         let model = ModelProto::decode(model_bytes).map_err(InferenceError::ParseError)?;
         let graph = model
             .graph
@@ -26,6 +33,18 @@ impl InferenceEngine {
             .ok_or_else(|| InferenceError::InvalidModel("Model has no graph".into()))?;
 
         let mut plan = Plan::build(graph, &input_sizes)?;
+
+        let initializer_names: std::collections::HashSet<&str> = graph
+            .initializer
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect();
+        let input_names: Vec<String> = graph
+            .input
+            .iter()
+            .filter(|i| !i.name.is_empty() && !initializer_names.contains(i.name.as_str()))
+            .map(|i| i.name.clone())
+            .collect();
 
         let mut values = HashMap::new();
         for (k, v) in std::mem::take(&mut plan.initializers) {
@@ -43,7 +62,7 @@ impl InferenceEngine {
         Ok(Self {
             plan,
             values,
-            input_sizes,
+            input_names,
             outputs,
         })
     }
@@ -114,8 +133,16 @@ impl InferenceEngine {
         Ok(())
     }
 
-    pub fn input_sizes(&self) -> &HashMap<String, Dims> {
-        &self.input_sizes
+    pub fn input_sizes(&self) -> HashMap<String, Dims> {
+        self.input_names
+            .iter()
+            .filter_map(|name| {
+                self.plan
+                    .shape_map
+                    .get(name)
+                    .map(|dims| (name.clone(), dims.clone()))
+            })
+            .collect()
     }
 
     pub fn shape_map(&self) -> &HashMap<String, Dims> {

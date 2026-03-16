@@ -86,7 +86,7 @@ use crate::Tensor;
 use crate::broadcast_index;
 use crate::broadcast_shape_into;
 
-pub trait Layer {
+pub trait Layer: Send {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()>;
 }
 
