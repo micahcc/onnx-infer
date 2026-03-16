@@ -4,6 +4,7 @@ version = "0.4.2"
 edition = "2024"
 description = "Pure Rust ONNX inference engine for computer vision models"
 license = "BSD-3-Clause"
+exclude = ["fixtures/", "traces/"]
 
 [features]
 cli = ["dep:clap", "dep:image", "dep:prost-reflect", "dep:serde_json"]
