@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::Dims;
 use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
@@ -39,9 +40,9 @@ pub fn get_tensor<'a>(values: &'a HashMap<String, Tensor>, name: &str) -> Result
         .ok_or_else(|| InferenceError::InvalidModel(format!("Tensor '{name}' not found")))
 }
 
-pub fn broadcast_shape(a: &[usize], b: &[usize]) -> Vec<usize> {
+pub fn broadcast_shape(a: &[usize], b: &[usize]) -> Dims {
     let max_len = a.len().max(b.len());
-    let mut result = vec![1usize; max_len];
+    let mut result = crate::dims![1usize; max_len];
     broadcast_shape_into(a, b, &mut result);
     result
 }

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use prost::Message;
 
+use crate::Dims;
 use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
@@ -12,12 +13,12 @@ use crate::onnx::ModelProto;
 pub struct InferenceEngine {
     plan: Plan,
     values: HashMap<String, Tensor>,
-    input_sizes: HashMap<String, Vec<usize>>,
+    input_sizes: HashMap<String, Dims>,
     pub outputs: HashMap<String, Tensor>,
 }
 
 impl InferenceEngine {
-    pub fn new(model_bytes: &[u8], input_sizes: HashMap<String, Vec<usize>>) -> Result<Self> {
+    pub fn new(model_bytes: &[u8], input_sizes: HashMap<String, Dims>) -> Result<Self> {
         let model = ModelProto::decode(model_bytes).map_err(InferenceError::ParseError)?;
         let graph = model
             .graph
@@ -107,11 +108,11 @@ impl InferenceEngine {
         Ok(())
     }
 
-    pub fn input_sizes(&self) -> &HashMap<String, Vec<usize>> {
+    pub fn input_sizes(&self) -> &HashMap<String, Dims> {
         &self.input_sizes
     }
 
-    pub fn shape_map(&self) -> &HashMap<String, Vec<usize>> {
+    pub fn shape_map(&self) -> &HashMap<String, Dims> {
         &self.plan.shape_map
     }
 }

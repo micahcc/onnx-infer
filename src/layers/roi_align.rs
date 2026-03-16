@@ -8,7 +8,7 @@ use crate::layers::Layer;
 
 pub struct RoiAlign {
     pub inputs: Vec<String>,
-    pub mode: String,
+    pub is_avg: bool,
     pub output_height: usize,
     pub output_width: usize,
     pub sampling_ratio: usize,
@@ -27,7 +27,7 @@ impl RoiAlign {
     ) -> Self {
         Self {
             inputs,
-            mode,
+            is_avg: mode != "max",
             output_height,
             output_width,
             sampling_ratio,
@@ -96,7 +96,7 @@ impl Layer for RoiAlign {
         }
 
         let buf = output.as_mut_f32(numel);
-        let is_avg = self.mode != "max";
+        let is_avg = self.is_avg;
 
         for (n, &batch) in self.batch_idx_buf.iter().enumerate() {
             let roi_base = n * 4;

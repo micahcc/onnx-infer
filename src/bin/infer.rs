@@ -84,7 +84,10 @@ fn load_input(
                 }
             }
 
-            Ok(onnx_infer::Tensor::new(vec![n, c, th, tw], data))
+            Ok(onnx_infer::Tensor::new(
+                onnx_infer::dims![n, c, th, tw],
+                data,
+            ))
         }
         _ => Err(format!("Unsupported input format: {ext}").into()),
     }
@@ -114,9 +117,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut engine = onnx_infer::InferenceEngine::new(&model_bytes, input_sizes)?;
-    let outputs = engine.run(inputs)?;
+    engine.run(inputs)?;
 
-    for (name, tensor) in &outputs {
+    for (name, tensor) in &engine.outputs {
         println!("Output '{name}': shape {:?}", tensor.dims);
         match tensor.dtype() {
             onnx_infer::DType::Float => {

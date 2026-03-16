@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
 use crate::DType;
+use crate::Dims;
 use crate::InferenceError;
 use crate::ONNX_INT32;
 use crate::ONNX_INT64;
 use crate::Result;
 use crate::Tensor;
+use crate::dims;
 use crate::get_attr_float;
 use crate::get_attr_int;
 use crate::get_attr_ints;
@@ -89,7 +91,7 @@ pub struct Plan {
     pub nodes: Vec<PlanNode>,
     pub initializers: HashMap<String, Tensor>,
     pub output_names: Vec<String>,
-    pub shape_map: HashMap<String, Vec<usize>>,
+    pub shape_map: HashMap<String, Dims>,
     pub type_map: HashMap<String, DType>,
     pub tensor_pool: HashMap<String, Tensor>,
 }
@@ -97,14 +99,14 @@ pub struct Plan {
 impl Plan {
     pub fn build(
         graph: &crate::onnx::GraphProto,
-        input_sizes: &HashMap<String, Vec<usize>>,
+        input_sizes: &HashMap<String, Dims>,
     ) -> Result<Self> {
         Self::build_with_types(graph, input_sizes, &HashMap::new())
     }
 
     pub fn build_with_types(
         graph: &crate::onnx::GraphProto,
-        input_sizes: &HashMap<String, Vec<usize>>,
+        input_sizes: &HashMap<String, Dims>,
         type_hints: &HashMap<String, DType>,
     ) -> Result<Self> {
         let mut initializers = HashMap::new();
@@ -144,7 +146,7 @@ impl Plan {
             }
         }
 
-        let mut shape_map: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut shape_map: HashMap<String, Dims> = HashMap::new();
         for (name, tensor) in &initializers {
             shape_map.insert(name.clone(), tensor.dims.clone());
         }
@@ -255,7 +257,7 @@ impl Plan {
                 }
             }
 
-            nodes.push(build_node(op, node, modified_inputs)?);
+            nodes.push(build_node(op, node, modified_inputs, &shape_map)?);
         }
 
         // Pre-allocate tensors for all known shapes/types
@@ -290,13 +292,13 @@ fn try_propagate_value(
     input_names: &[String],
     known_values: &HashMap<String, Tensor>,
     initializers: &HashMap<String, Tensor>,
-    shape_map: &HashMap<String, Vec<usize>>,
+    shape_map: &HashMap<String, Dims>,
 ) -> Option<Tensor> {
     if op == OpType::Shape {
         let name = input_names.first().filter(|s| !s.is_empty())?;
         let shape = shape_map.get(name)?;
         let dims: Vec<i64> = shape.iter().map(|&d| d as i64).collect();
-        return Some(Tensor::new_i64(vec![dims.len()], dims));
+        return Some(Tensor::new_i64(dims![dims.len()], dims));
     }
 
     if op == OpType::Constant {
@@ -329,7 +331,7 @@ fn try_propagate_value(
         }
     }
 
-    let plan_node = build_node(op, node, input_names.to_vec()).ok()?;
+    let plan_node = build_node(op, node, input_names.to_vec(), shape_map).ok()?;
     if let PlanNode::Single { mut layer, .. } = plan_node {
         let mut output = Tensor::default();
         layer.execute(&temp_values, &mut output).ok()?;
@@ -339,7 +341,12 @@ fn try_propagate_value(
     }
 }
 
-pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<PlanNode> {
+pub fn build_node(
+    op: OpType,
+    node: &NodeProto,
+    inputs: Vec<String>,
+    shape_map: &HashMap<String, Dims>,
+) -> Result<PlanNode> {
     if op == OpType::Loop {
         let body = node
             .attribute
@@ -406,6 +413,17 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
         node.output[0].clone()
     };
 
+    // Pre-resolve input shapes before moving inputs into constructors
+    let empty: &[usize] = &[];
+    let mut input_shapes: [&[usize]; 8] = [empty; 8];
+    for (i, name) in inputs.iter().enumerate().take(8) {
+        if !name.is_empty() {
+            if let Some(s) = shape_map.get(name) {
+                input_shapes[i] = s.as_slice();
+            }
+        }
+    }
+
     let layer: Box<dyn Layer> = match op {
         OpType::Relu => Box::new(relu::Relu::new(inputs)),
         OpType::LeakyRelu => Box::new(leaky_relu::LeakyRelu::new(
@@ -420,6 +438,7 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
         OpType::BatchNormalization => Box::new(batch_norm::BatchNorm::new(
             inputs,
             get_attr_float(node, "epsilon").unwrap_or(1e-5),
+            input_shapes[0],
         )),
         OpType::Sigmoid => Box::new(sigmoid::Sigmoid::new(inputs)),
         OpType::Exp => Box::new(exp::Exp::new(inputs)),
@@ -438,6 +457,8 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
         OpType::ScatterElements => Box::new(scatter_elements::ScatterElements::new(
             inputs,
             get_attr_int(node, "axis").unwrap_or(0),
+            input_shapes[0],
+            input_shapes[1],
         )),
         OpType::RoiAlign => {
             let mode = get_attr_string(node, "mode").unwrap_or_else(|| "avg".to_string());
@@ -486,6 +507,7 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
         OpType::Softmax => Box::new(softmax::Softmax::new(
             inputs,
             get_attr_int(node, "axis").unwrap_or(-1),
+            input_shapes[0],
         )),
         OpType::Add => {
             let lb = get_attr_int(node, "broadcast").unwrap_or(0) != 0;
@@ -514,37 +536,66 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
             let di = get_attr_ints(node, "dilations").unwrap_or_else(|| vec![1, 1]);
             let gr = get_attr_int(node, "group").unwrap_or(1) as usize;
             let ap = get_attr_string(node, "auto_pad").unwrap_or_default();
-            Box::new(conv::Conv::new(inputs, ks, st, pa, di, gr, ap))
+            Box::new(conv::Conv::new(
+                inputs,
+                ks,
+                st,
+                pa,
+                di,
+                gr,
+                ap,
+                input_shapes[0],
+                input_shapes[1],
+            ))
         }
-        OpType::MatMul => Box::new(matmul::MatMul::new(inputs)),
+        OpType::MatMul => Box::new(matmul::MatMul::new(
+            inputs,
+            input_shapes[0],
+            input_shapes[1],
+        )),
         OpType::Gemm => Box::new(gemm::Gemm::new(
             inputs,
             get_attr_float(node, "alpha").unwrap_or(1.0),
             get_attr_float(node, "beta").unwrap_or(1.0),
             get_attr_int(node, "transA").unwrap_or(0) != 0,
             get_attr_int(node, "transB").unwrap_or(0) != 0,
+            input_shapes[0],
+            input_shapes[1],
         )),
         OpType::MaxPool => {
             let ks = get_attr_ints(node, "kernel_shape").unwrap_or_default();
             let st = get_attr_ints(node, "strides").unwrap_or_else(|| vec![1, 1]);
             let pa = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
             let ap = get_attr_string(node, "auto_pad").unwrap_or_default();
-            Box::new(maxpool::MaxPool::new(inputs, ks, st, pa, ap)?)
+            Box::new(maxpool::MaxPool::new(
+                inputs,
+                ks,
+                st,
+                pa,
+                ap,
+                input_shapes[0],
+            )?)
         }
-        OpType::GlobalAveragePool => Box::new(global_avg_pool::GlobalAvgPool::new(inputs)),
+        OpType::GlobalAveragePool => {
+            Box::new(global_avg_pool::GlobalAvgPool::new(inputs, input_shapes[0]))
+        }
         OpType::Flatten => Box::new(flatten::Flatten::new(
             inputs,
             get_attr_int(node, "axis").unwrap_or(1) as usize,
+            input_shapes[0],
         )),
         OpType::Shape => Box::new(shape_op::Shape::new(inputs)),
         OpType::Gather => Box::new(gather::Gather::new(
             inputs,
             get_attr_int(node, "axis").unwrap_or(0),
+            input_shapes[0],
+            input_shapes[1],
         )),
         OpType::Unsqueeze => Box::new(unsqueeze::Unsqueeze::new(inputs, node)),
         OpType::Concat => Box::new(concat::Concat::new(
             inputs,
             get_attr_int(node, "axis").unwrap_or(0),
+            &input_shapes,
         )),
         OpType::Identity => Box::new(identity::Identity::new(inputs)),
         OpType::Cast => Box::new(cast::Cast::new(
@@ -553,7 +604,7 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
         )),
         OpType::Transpose => {
             let perm = get_attr_ints(node, "perm").map(|p| p.iter().map(|&v| v as usize).collect());
-            Box::new(transpose::Transpose::new(inputs, perm))
+            Box::new(transpose::Transpose::new(inputs, perm, input_shapes[0]))
         }
         OpType::Squeeze => Box::new(squeeze::Squeeze::new(inputs, node)),
         OpType::Slice => Box::new(slice::Slice::new(inputs)),
@@ -580,12 +631,14 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
             inputs,
             get_attr_int(node, "keepdims").unwrap_or(1) != 0,
             node,
+            input_shapes[0],
         )),
         OpType::NonMaxSuppression => Box::new(nms::Nms::new(inputs)),
         OpType::QuantizeLinear => Box::new(quantize_linear::QuantizeLinear::new(inputs)),
         OpType::DequantizeLinear => Box::new(dequantize_linear::DequantizeLinear::new(
             inputs,
             get_attr_int(node, "axis").unwrap_or(1),
+            input_shapes[0],
         )),
         OpType::QLinearConv => {
             let has_bias = inputs.len() > 8 && !inputs[8].is_empty();
@@ -599,16 +652,36 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
             let di = get_attr_ints(node, "dilations").unwrap_or_else(|| vec![1, 1]);
             let gr = get_attr_int(node, "group").unwrap_or(1) as usize;
             let ap = get_attr_string(node, "auto_pad").unwrap_or_default();
-            let inner = conv::Conv::new(conv_inputs, ks, st, pa, di, gr, ap);
+            // QLinearConv: quantized x is inputs[0], quantized w is inputs[3]
+            let inner = conv::Conv::new(
+                conv_inputs,
+                ks,
+                st,
+                pa,
+                di,
+                gr,
+                ap,
+                input_shapes[0],
+                input_shapes[3],
+            );
             Box::new(qlinear_conv::QLinearConv::new(inputs, inner))
         }
         OpType::QLinearAdd => Box::new(qlinear_add::QLinearAdd::new(inputs)),
         OpType::QLinearMatMul => {
-            let inner = matmul::MatMul::new(vec!["__qmm_a__".to_string(), "__qmm_b__".to_string()]);
+            // QLinearMatMul: quantized a is inputs[0], quantized b is inputs[3]
+            let inner = matmul::MatMul::new(
+                vec!["__qmm_a__".to_string(), "__qmm_b__".to_string()],
+                input_shapes[0],
+                input_shapes[3],
+            );
             Box::new(qlinear_matmul::QLinearMatMul::new(inputs, inner))
         }
         OpType::QLinearGlobalAveragePool => {
-            let inner = global_avg_pool::GlobalAvgPool::new(vec!["__qgap_x__".to_string()]);
+            // QLinearGlobalAvgPool: quantized x is inputs[0]
+            let inner = global_avg_pool::GlobalAvgPool::new(
+                vec!["__qgap_x__".to_string()],
+                input_shapes[0],
+            );
             Box::new(qlinear_global_avg_pool::QLinearGlobalAvgPool::new(
                 inputs, inner,
             ))
@@ -704,7 +777,11 @@ pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
         modified_inputs[i] = cast_name;
     }
 
-    let mut plan_node = build_node(op, node, modified_inputs)?;
+    let exec_shape_map: HashMap<String, Dims> = values
+        .iter()
+        .map(|(k, v)| (k.clone(), v.dims.clone()))
+        .collect();
+    let mut plan_node = build_node(op, node, modified_inputs, &exec_shape_map)?;
     match &mut plan_node {
         PlanNode::Single { output, layer } => {
             let mut out = values.remove(output.as_str()).unwrap_or_default();

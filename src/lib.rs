@@ -20,6 +20,7 @@ pub use dtype::ONNX_UINT8;
 pub use inference_engine::InferenceEngine;
 pub use inference_error::InferenceError;
 pub use inference_error::Result;
+pub use tensor_data::Dims;
 pub use tensor_data::Tensor;
 pub use tensor_data::TensorData;
 pub use utils::broadcast_index;
@@ -43,6 +44,7 @@ mod tests {
     use tracing_subscriber::prelude::*;
 
     use crate::DType;
+    use crate::Dims;
     use crate::InferenceEngine;
     use crate::Tensor;
     use crate::onnx::ModelProto;
@@ -75,11 +77,7 @@ mod tests {
         base: &Path,
         model_file: &str,
         test_set: usize,
-    ) -> (
-        Vec<u8>,
-        HashMap<String, Tensor>,
-        HashMap<String, Vec<usize>>,
-    ) {
+    ) -> (Vec<u8>, HashMap<String, Tensor>, HashMap<String, Dims>) {
         let model_bytes = fs::read(base.join(model_file)).expect("read model");
         let model = ModelProto::decode(&model_bytes[..]).unwrap();
         let graph = model.graph.as_ref().unwrap();

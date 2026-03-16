@@ -6,14 +6,57 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+pub struct ScatterPrecomp {
+    pub axis: usize,
+    pub rank: usize,
+    pub strides: [usize; 8],
+    pub idx_strides: [usize; 8],
+}
+
 pub struct ScatterElements {
     pub inputs: Vec<String>,
     pub axis: i64,
+    pub precomp: Option<ScatterPrecomp>,
 }
 
 impl ScatterElements {
-    pub fn new(inputs: Vec<String>, axis: i64) -> Self {
-        Self { inputs, axis }
+    pub fn new(
+        inputs: Vec<String>,
+        axis: i64,
+        data_shape: &[usize],
+        indices_shape: &[usize],
+    ) -> Self {
+        let precomp = if !data_shape.is_empty() && !indices_shape.is_empty() {
+            let (ds, is) = (data_shape, indices_shape);
+            let rank = ds.len();
+            let axis = if axis < 0 {
+                (rank as i64 + axis) as usize
+            } else {
+                axis as usize
+            };
+            let mut strides = [1usize; 8];
+            for i in (0..rank - 1).rev() {
+                strides[i] = strides[i + 1] * ds[i + 1];
+            }
+            let mut idx_strides = [1usize; 8];
+            for i in (0..rank - 1).rev() {
+                idx_strides[i] = idx_strides[i + 1] * is[i + 1];
+            }
+            Some(ScatterPrecomp {
+                axis,
+                rank,
+                strides,
+                idx_strides,
+            })
+        } else {
+            None
+        };
+
+        Self {
+            inputs,
+            axis,
+            precomp,
+        }
     }
 }
 
@@ -23,27 +66,27 @@ impl Layer for ScatterElements {
         let indices = get_tensor(values, &self.inputs[1])?;
         let updates = get_tensor(values, &self.inputs[2])?;
 
-        let rank = data.dims.len();
-        let axis = if self.axis < 0 {
-            (rank as i64 + self.axis) as usize
+        let (axis, rank, strides, idx_strides) = if let Some(p) = &self.precomp {
+            (p.axis, p.rank, p.strides, p.idx_strides)
         } else {
-            self.axis as usize
+            let rank = data.dims.len();
+            let axis = if self.axis < 0 {
+                (rank as i64 + self.axis) as usize
+            } else {
+                self.axis as usize
+            };
+            let mut strides = [1usize; 8];
+            for i in (0..rank - 1).rev() {
+                strides[i] = strides[i + 1] * data.dims[i + 1];
+            }
+            let mut idx_strides = [1usize; 8];
+            for i in (0..rank - 1).rev() {
+                idx_strides[i] = idx_strides[i + 1] * indices.dims[i + 1];
+            }
+            (axis, rank, strides, idx_strides)
         };
 
         let numel = data.numel();
-
-        // Compute strides for data
-        let mut strides = [1usize; 8];
-        for i in (0..rank - 1).rev() {
-            strides[i] = strides[i + 1] * data.dims[i + 1];
-        }
-
-        // Compute strides for indices
-        let mut idx_strides = [1usize; 8];
-        for i in (0..rank - 1).rev() {
-            idx_strides[i] = idx_strides[i + 1] * indices.dims[i + 1];
-        }
-
         let idx_numel = indices.numel();
         let idx_is_int = indices.dtype() == DType::Int64;
 

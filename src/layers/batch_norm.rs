@@ -8,11 +8,30 @@ use crate::layers::Layer;
 pub struct BatchNorm {
     pub inputs: Vec<String>,
     pub epsilon: f32,
+    // Precomputed (0 = not precomputed)
+    pub pre_n: usize,
+    pub pre_c: usize,
+    pub pre_spatial: usize,
 }
 
 impl BatchNorm {
-    pub fn new(inputs: Vec<String>, epsilon: f32) -> Self {
-        Self { inputs, epsilon }
+    pub fn new(inputs: Vec<String>, epsilon: f32, input_shape: &[usize]) -> Self {
+        let mut s = Self {
+            inputs,
+            epsilon,
+            pre_n: 0,
+            pre_c: 0,
+            pre_spatial: 0,
+        };
+        if !input_shape.is_empty() {
+            let shape = input_shape;
+            if shape.len() >= 2 {
+                s.pre_n = shape[0];
+                s.pre_c = shape[1];
+                s.pre_spatial = shape[2..].iter().product();
+            }
+        }
+        s
     }
 }
 
@@ -24,9 +43,15 @@ impl Layer for BatchNorm {
         let mean = get_tensor(values, &self.inputs[3])?;
         let var = get_tensor(values, &self.inputs[4])?;
 
-        let n = input.dims[0];
-        let c = input.dims[1];
-        let spatial: usize = input.dims[2..].iter().product();
+        let (n, c, spatial) = if self.pre_spatial > 0 {
+            (self.pre_n, self.pre_c, self.pre_spatial)
+        } else {
+            (
+                input.dims[0],
+                input.dims[1],
+                input.dims[2..].iter().product(),
+            )
+        };
 
         let input_f = input.floats();
         let scale_f = scale.floats();

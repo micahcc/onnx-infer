@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
 use crate::DType;
+use crate::Dims;
 use crate::ONNX_INT32;
 use crate::ONNX_INT64;
 use crate::Tensor;
 use crate::broadcast_shape;
+use crate::dims;
 use crate::get_attr_int;
 use crate::get_attr_ints;
 use crate::get_attr_string;
@@ -216,10 +218,10 @@ impl OpType {
         self,
         node: &NodeProto,
         input_names: &[String],
-        shape_map: &HashMap<String, Vec<usize>>,
+        shape_map: &HashMap<String, Dims>,
         known_values: &HashMap<String, Tensor>,
-    ) -> Option<Vec<usize>> {
-        let get_shape = |idx: usize| -> Option<&Vec<usize>> {
+    ) -> Option<Dims> {
+        let get_shape = |idx: usize| -> Option<&Dims> {
             input_names
                 .get(idx)
                 .filter(|s| !s.is_empty())
@@ -288,7 +290,7 @@ impl OpType {
                 let pads = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
                 let ks_attr = get_attr_ints(node, "kernel_shape");
 
-                let mut out_dims = vec![n, c_out];
+                let mut out_dims: Dims = dims![n, c_out];
                 for i in 0..2 {
                     let in_dim = x[2 + i];
                     let k = ks_attr
@@ -315,18 +317,18 @@ impl OpType {
                 let a = get_shape(0)?;
                 let b = get_shape(1)?;
                 match (a.len(), b.len()) {
-                    (2, 2) => Some(vec![a[0], b[1]]),
+                    (2, 2) => Some(dims![a[0], b[1]]),
                     (al, 2) if al >= 2 => {
-                        let mut out = a[..al - 1].to_vec();
+                        let mut out: Dims = a[..al - 1].iter().copied().collect();
                         out.push(b[1]);
                         Some(out)
                     }
                     (1, bl) if bl >= 2 => {
-                        let mut out = b[..bl - 2].to_vec();
+                        let mut out: Dims = b[..bl - 2].iter().copied().collect();
                         out.push(b[bl - 1]);
                         Some(out)
                     }
-                    (al, 1) if al >= 2 => Some(a[..al - 1].to_vec()),
+                    (al, 1) if al >= 2 => Some(a[..al - 1].iter().copied().collect()),
                     (al, bl) if al >= 2 && bl >= 2 => {
                         let mut out = broadcast_shape(&a[..al - 2], &b[..bl - 2]);
                         out.push(a[al - 2]);
@@ -347,7 +349,7 @@ impl OpType {
                 let trans_b = get_attr_int(node, "transB").unwrap_or(0) != 0;
                 let m = if trans_a { a[1] } else { a[0] };
                 let n = if trans_b { b[0] } else { b[1] };
-                Some(vec![m, n])
+                Some(dims![m, n])
             }
 
             Self::MaxPool => {
@@ -360,7 +362,7 @@ impl OpType {
                 let strides = get_attr_ints(node, "strides").unwrap_or_else(|| vec![1, 1]);
                 let pads = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
 
-                let mut out_dims = vec![x[0], x[1]];
+                let mut out_dims: Dims = dims![x[0], x[1]];
                 for i in 0..2 {
                     let in_dim = x[2 + i];
                     let k = ks[i] as usize;
@@ -383,7 +385,7 @@ impl OpType {
                 if x.len() < 2 {
                     return None;
                 }
-                let mut out = vec![x[0], x[1]];
+                let mut out: Dims = dims![x[0], x[1]];
                 out.resize(x.len(), 1);
                 Some(out)
             }
@@ -393,12 +395,12 @@ impl OpType {
                 let axis = get_attr_int(node, "axis").unwrap_or(1) as usize;
                 let outer: usize = x[..axis].iter().product();
                 let inner: usize = x[axis..].iter().product();
-                Some(vec![outer, inner])
+                Some(dims![outer, inner])
             }
 
             Self::Shape => {
                 let x = get_shape(0)?;
-                Some(vec![x.len()])
+                Some(dims![x.len()])
             }
 
             Self::Gather => {
@@ -410,7 +412,7 @@ impl OpType {
                 } else {
                     axis as usize
                 };
-                let mut out = Vec::new();
+                let mut out = Dims::new();
                 out.extend_from_slice(&data[..axis]);
                 out.extend_from_slice(indices);
                 out.extend_from_slice(&data[axis + 1..]);
@@ -460,7 +462,7 @@ impl OpType {
                     return None;
                 };
 
-                let mut dims: Vec<usize> = Vec::new();
+                let mut dims: Dims = Dims::new();
                 let mut infer_idx = None;
                 for (i, &s) in shape_vals.iter().enumerate() {
                     if s == -1 {
@@ -540,7 +542,7 @@ impl OpType {
                         }
                     })
                     .collect();
-                let mut out = Vec::with_capacity(out_rank);
+                let mut out = Dims::with_capacity(out_rank);
                 let mut xi = 0;
                 for i in 0..out_rank {
                     if axes_set.contains(&i) {

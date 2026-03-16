@@ -10,6 +10,7 @@ pub struct TopK {
     pub axis: i64,
     pub largest: bool,
     in_buf: Vec<f32>,
+    indices_scratch: Vec<usize>,
 }
 
 impl TopK {
@@ -20,6 +21,7 @@ impl TopK {
             axis,
             largest,
             in_buf: Vec::new(),
+            indices_scratch: Vec::new(),
         }
     }
 
@@ -67,28 +69,27 @@ impl TopK {
         let idx_buf = idx_out.as_mut_i64(numel);
 
         let in_data = &self.in_buf;
-        let mut indices: Vec<usize> = Vec::with_capacity(axis_size);
         let largest = self.largest;
 
         for o in 0..outer {
             for i in 0..inner {
-                indices.clear();
-                indices.extend(0..axis_size);
+                self.indices_scratch.clear();
+                self.indices_scratch.extend(0..axis_size);
                 if largest {
-                    indices.sort_by(|&a, &b| {
+                    self.indices_scratch.sort_by(|&a, &b| {
                         let va = in_data[o * axis_size * inner + a * inner + i];
                         let vb = in_data[o * axis_size * inner + b * inner + i];
                         vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
                     });
                 } else {
-                    indices.sort_by(|&a, &b| {
+                    self.indices_scratch.sort_by(|&a, &b| {
                         let va = in_data[o * axis_size * inner + a * inner + i];
                         let vb = in_data[o * axis_size * inner + b * inner + i];
                         va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
                     });
                 }
 
-                for (j, &src_idx) in indices.iter().take(k).enumerate() {
+                for (j, &src_idx) in self.indices_scratch.iter().take(k).enumerate() {
                     let dst = o * k * inner + j * inner + i;
                     val_buf[dst] = in_data[o * axis_size * inner + src_idx * inner + i];
                     idx_buf[dst] = src_idx as i64;

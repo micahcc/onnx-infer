@@ -10,12 +10,16 @@ use crate::layers::Layer;
 
 pub struct Cast {
     pub inputs: Vec<String>,
-    pub to: i64,
+    pub to_int: bool,
 }
 
 impl Cast {
     pub fn new(inputs: Vec<String>, to: i64) -> Self {
-        Self { inputs, to }
+        let to32 = to as i32;
+        Self {
+            inputs,
+            to_int: to32 == ONNX_INT32 || to32 == ONNX_INT64,
+        }
     }
 }
 
@@ -23,8 +27,7 @@ impl Layer for Cast {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
         let numel = input.numel();
-        let to32 = self.to as i32;
-        match to32 == ONNX_INT32 || to32 == ONNX_INT64 {
+        match self.to_int {
             true => {
                 let buf = output.as_mut_i64(numel);
                 match input.dtype() {

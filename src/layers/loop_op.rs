@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::DType;
+use crate::Dims;
 use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
+use crate::dims;
 use crate::get_tensor;
 use crate::layers::Plan;
 use crate::layers::PlanNode;
@@ -28,7 +30,7 @@ pub struct Loop {
     carried: Vec<Tensor>,
     scan_f32: Vec<Vec<f32>>,
     scan_i64: Vec<Vec<i64>>,
-    scan_elem_dims: Vec<Vec<usize>>,
+    scan_elem_dims: Vec<Dims>,
     scan_dtypes: Vec<Option<DType>>,
 }
 
@@ -162,11 +164,11 @@ impl Loop {
         // Ensure body inputs exist
         if !self.values.contains_key(&self.iter_name) {
             self.values
-                .insert(self.iter_name.clone(), Tensor::new_i64(vec![], vec![0]));
+                .insert(self.iter_name.clone(), Tensor::new_i64(dims![], vec![0]));
         }
         if !self.values.contains_key(&self.cond_name) {
             self.values
-                .insert(self.cond_name.clone(), Tensor::new(vec![], vec![1.0]));
+                .insert(self.cond_name.clone(), Tensor::new(dims![], vec![1.0]));
         }
         for (j, name) in self.carried_in_names.iter().enumerate() {
             if !self.values.contains_key(name) {
@@ -191,7 +193,7 @@ impl Loop {
         self.carried = (0..num_carried).map(|_| Tensor::default()).collect();
         self.scan_f32 = vec![Vec::new(); num_scan];
         self.scan_i64 = vec![Vec::new(); num_scan];
-        self.scan_elem_dims = vec![Vec::new(); num_scan];
+        self.scan_elem_dims = vec![Dims::new(); num_scan];
         self.scan_dtypes = vec![None; num_scan];
 
         Ok(())

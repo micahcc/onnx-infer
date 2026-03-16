@@ -7,22 +7,49 @@ use crate::broadcast_shape_into;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+pub struct GemmPrecomp {
+    pub m: usize,
+    pub k: usize,
+    pub n: usize,
+}
+
 pub struct Gemm {
     pub inputs: Vec<String>,
     pub alpha: f32,
     pub beta: f32,
     pub trans_a: bool,
     pub trans_b: bool,
+    pub precomp: Option<GemmPrecomp>,
 }
 
 impl Gemm {
-    pub fn new(inputs: Vec<String>, alpha: f32, beta: f32, trans_a: bool, trans_b: bool) -> Self {
+    pub fn new(
+        inputs: Vec<String>,
+        alpha: f32,
+        beta: f32,
+        trans_a: bool,
+        trans_b: bool,
+        a_shape: &[usize],
+        b_shape: &[usize],
+    ) -> Self {
+        let precomp = if a_shape.len() == 2 && b_shape.len() == 2 {
+            {
+                let (a, b) = (a_shape, b_shape);
+                let (m, k) = if trans_a { (a[1], a[0]) } else { (a[0], a[1]) };
+                let n = if trans_b { b[0] } else { b[1] };
+                Some(GemmPrecomp { m, k, n })
+            }
+        } else {
+            None
+        };
+
         Self {
             inputs,
             alpha,
             beta,
             trans_a,
             trans_b,
+            precomp,
         }
     }
 }
@@ -37,18 +64,17 @@ impl Layer for Gemm {
             None
         };
 
-        let (m, k_a) = if self.trans_a {
-            (a.dims[1], a.dims[0])
+        let (m, k, n) = if let Some(p) = &self.precomp {
+            (p.m, p.k, p.n)
         } else {
-            (a.dims[0], a.dims[1])
+            let (m, k) = if self.trans_a {
+                (a.dims[1], a.dims[0])
+            } else {
+                (a.dims[0], a.dims[1])
+            };
+            let n = if self.trans_b { b.dims[0] } else { b.dims[1] };
+            (m, k, n)
         };
-        let (k_b, n) = if self.trans_b {
-            (b.dims[1], b.dims[0])
-        } else {
-            (b.dims[0], b.dims[1])
-        };
-        debug_assert_eq!(k_a, k_b);
-        let k = k_a;
 
         let a_f = a.floats();
         let b_f = b.floats();

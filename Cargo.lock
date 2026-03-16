@@ -975,6 +975,7 @@ dependencies = [
  "prost",
  "prost-build",
  "protox",
+ "smallvec",
  "tracing",
  "tracing-chrome",
  "tracing-subscriber",

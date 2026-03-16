@@ -1,4 +1,5 @@
 use prost::Message;
+use smallvec::SmallVec;
 
 use crate::DType;
 use crate::InferenceError;
@@ -10,6 +11,14 @@ use crate::ONNX_UINT8;
 use crate::Result;
 use crate::onnx::TensorProto;
 
+pub type Dims = SmallVec<[usize; 8]>;
+
+#[macro_export]
+macro_rules! dims {
+    ($elem:expr; $n:expr) => { smallvec::smallvec![$elem; $n] };
+    ($($x:expr),* $(,)?) => { smallvec::smallvec![$($x),*] };
+}
+
 #[derive(Debug, Clone)]
 pub enum TensorData {
     F32(Vec<f32>),
@@ -18,19 +27,19 @@ pub enum TensorData {
 
 #[derive(Debug, Clone)]
 pub struct Tensor {
-    pub dims: Vec<usize>,
+    pub dims: Dims,
     pub data: TensorData,
 }
 
 impl Tensor {
-    pub fn new(dims: Vec<usize>, data: Vec<f32>) -> Self {
+    pub fn new(dims: Dims, data: Vec<f32>) -> Self {
         Self {
             dims,
             data: TensorData::F32(data),
         }
     }
 
-    pub fn new_i64(dims: Vec<usize>, data: Vec<i64>) -> Self {
+    pub fn new_i64(dims: Dims, data: Vec<i64>) -> Self {
         Self {
             dims,
             data: TensorData::I64(data),
@@ -87,7 +96,7 @@ impl Tensor {
     }
 
     pub fn from_proto(proto: &TensorProto) -> Result<Self> {
-        let dims: Vec<usize> = proto.dims.iter().map(|&d| d as usize).collect();
+        let dims: Dims = proto.dims.iter().map(|&d| d as usize).collect();
         if proto.data_type == ONNX_INT32 || proto.data_type == ONNX_INT64 {
             let data = extract_int_data(proto)?;
             Ok(Self::new_i64(dims, data))
@@ -171,7 +180,7 @@ impl Tensor {
 impl Default for Tensor {
     fn default() -> Self {
         Self {
-            dims: vec![],
+            dims: Dims::new(),
             data: TensorData::F32(vec![]),
         }
     }

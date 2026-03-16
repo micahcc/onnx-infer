@@ -8,27 +8,62 @@ use crate::layers::Layer;
 pub struct Softmax {
     pub inputs: Vec<String>,
     pub axis: i64,
+    // Precomputed (0 = not precomputed)
+    pub pre_axis: usize,
+    pub pre_outer: usize,
+    pub pre_dim: usize,
+    pub pre_inner: usize,
 }
 
 impl Softmax {
-    pub fn new(inputs: Vec<String>, axis: i64) -> Self {
-        Self { inputs, axis }
+    pub fn new(inputs: Vec<String>, axis: i64, input_shape: &[usize]) -> Self {
+        let mut s = Self {
+            inputs,
+            axis,
+            pre_axis: 0,
+            pre_outer: 0,
+            pre_dim: 0,
+            pre_inner: 0,
+        };
+        if !input_shape.is_empty() {
+            let shape = input_shape;
+            s.precompute(shape);
+        }
+        s
+    }
+
+    fn precompute(&mut self, shape: &[usize]) {
+        let rank = shape.len() as i64;
+        let axis = if self.axis < 0 {
+            (rank + self.axis) as usize
+        } else {
+            self.axis as usize
+        };
+        self.pre_axis = axis;
+        self.pre_outer = shape[..axis].iter().product();
+        self.pre_dim = shape[axis];
+        self.pre_inner = shape[axis + 1..].iter().product();
     }
 }
 
 impl Layer for Softmax {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
-        let rank = input.dims.len() as i64;
-        let axis = if self.axis < 0 {
-            (rank + self.axis) as usize
-        } else {
-            self.axis as usize
-        };
 
-        let outer: usize = input.dims[..axis].iter().product();
-        let dim = input.dims[axis];
-        let inner: usize = input.dims[axis + 1..].iter().product();
+        let (outer, dim, inner) = if self.pre_dim > 0 {
+            (self.pre_outer, self.pre_dim, self.pre_inner)
+        } else {
+            let rank = input.dims.len() as i64;
+            let axis = if self.axis < 0 {
+                (rank + self.axis) as usize
+            } else {
+                self.axis as usize
+            };
+            let outer: usize = input.dims[..axis].iter().product();
+            let dim = input.dims[axis];
+            let inner: usize = input.dims[axis + 1..].iter().product();
+            (outer, dim, inner)
+        };
 
         let inp = input.floats();
         let buf = output.as_mut_f32(inp.len());

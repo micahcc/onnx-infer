@@ -9,7 +9,8 @@ pub struct Split {
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
     pub axis: i64,
-    pub split_sizes: Vec<i64>,
+    pub split_sizes: [usize; 8],
+    pub split_sizes_len: usize,
 }
 
 impl Split {
@@ -19,11 +20,16 @@ impl Split {
         axis: i64,
         split_sizes: Vec<i64>,
     ) -> Self {
+        let mut sizes = [0usize; 8];
+        for (i, &s) in split_sizes.iter().enumerate() {
+            sizes[i] = s as usize;
+        }
         Self {
             inputs,
             outputs,
             axis,
-            split_sizes,
+            split_sizes: sizes,
+            split_sizes_len: split_sizes.len(),
         }
     }
 
@@ -46,10 +52,8 @@ impl Split {
         // Compute split sizes
         let num_outputs = self.outputs.len();
         let mut sizes = [0usize; 8];
-        if !self.split_sizes.is_empty() {
-            for (i, &s) in self.split_sizes.iter().enumerate().take(num_outputs) {
-                sizes[i] = s as usize;
-            }
+        if self.split_sizes_len > 0 {
+            sizes[..num_outputs].copy_from_slice(&self.split_sizes[..num_outputs]);
         } else {
             let dim = in_dims[axis];
             let base = dim / num_outputs;
