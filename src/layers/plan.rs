@@ -2,16 +2,14 @@ use std::collections::HashMap;
 
 use crate::DType;
 use crate::InferenceError;
-use crate::Result;
-use crate::Tensor;
 use crate::ONNX_INT32;
 use crate::ONNX_INT64;
+use crate::Result;
+use crate::Tensor;
 use crate::get_attr_float;
 use crate::get_attr_int;
 use crate::get_attr_ints;
 use crate::get_attr_string;
-use crate::onnx::NodeProto;
-
 use crate::layers::Layer;
 use crate::layers::OpType;
 use crate::layers::add;
@@ -56,6 +54,7 @@ use crate::layers::sub;
 use crate::layers::tile;
 use crate::layers::transpose;
 use crate::layers::unsqueeze;
+use crate::onnx::NodeProto;
 
 pub enum PlanNode {
     Single {
@@ -138,8 +137,7 @@ impl Plan {
         let mut cast_counter = 0usize;
 
         for node in &graph.node {
-            let op = OpType::parse(&node.op_type)
-                .map_err(|s| InferenceError::UnsupportedOperator(s))?;
+            let op = OpType::parse(&node.op_type).map_err(InferenceError::UnsupportedOperator)?;
 
             let expected = op.expected_input_dtypes();
             let mut modified_inputs = node.input.clone();
@@ -155,21 +153,18 @@ impl Plan {
                 if input_name.is_empty() {
                     continue;
                 }
-                if let Some(Some(expected_dt)) = expected.get(i) {
-                    if let Some(&actual_dt) = type_map.get(input_name) {
-                        if actual_dt != *expected_dt {
-                            let cast_name = format!("__auto_cast_{cast_counter}__");
-                            cast_counter += 1;
-                            nodes.push(PlanNode::Single {
-                                output: cast_name.clone(),
-                                layer: Box::new(auto_cast::AutoCastF32::new(
-                                    input_name.clone(),
-                                )),
-                            });
-                            type_map.insert(cast_name.clone(), DType::Float);
-                            modified_inputs[i] = cast_name;
-                        }
-                    }
+                if let Some(Some(expected_dt)) = expected.get(i)
+                    && let Some(&actual_dt) = type_map.get(input_name)
+                    && actual_dt != *expected_dt
+                {
+                    let cast_name = format!("__auto_cast_{cast_counter}__");
+                    cast_counter += 1;
+                    nodes.push(PlanNode::Single {
+                        output: cast_name.clone(),
+                        layer: Box::new(auto_cast::AutoCastF32::new(input_name.clone())),
+                    });
+                    type_map.insert(cast_name.clone(), DType::Float);
+                    modified_inputs[i] = cast_name;
                 }
             }
 
@@ -193,10 +188,9 @@ impl Plan {
                 }
             } else if let Some(shape) =
                 op.infer_output_shape(node, &node.input, &shape_map, &known_values)
+                && let Some(out_name) = out_name
             {
-                if let Some(out_name) = out_name {
-                    shape_map.insert(out_name.clone(), shape);
-                }
+                shape_map.insert(out_name.clone(), shape);
             }
 
             nodes.push(build_node(op, node, modified_inputs)?);
@@ -249,8 +243,15 @@ fn try_propagate_value(
     }
 
     match op {
-        OpType::Gather | OpType::Unsqueeze | OpType::Squeeze | OpType::Concat | OpType::Cast
-        | OpType::Identity | OpType::Reshape | OpType::Flatten | OpType::Slice => {}
+        OpType::Gather
+        | OpType::Unsqueeze
+        | OpType::Squeeze
+        | OpType::Concat
+        | OpType::Cast
+        | OpType::Identity
+        | OpType::Reshape
+        | OpType::Flatten
+        | OpType::Slice => {}
         _ => return None,
     }
 
@@ -434,8 +435,7 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
         }
         OpType::QLinearAdd => Box::new(qlinear_add::QLinearAdd::new(inputs)),
         OpType::QLinearMatMul => {
-            let inner =
-                matmul::MatMul::new(vec!["__qmm_a__".to_string(), "__qmm_b__".to_string()]);
+            let inner = matmul::MatMul::new(vec!["__qmm_a__".to_string(), "__qmm_b__".to_string()]);
             Box::new(qlinear_matmul::QLinearMatMul::new(inputs, inner))
         }
         OpType::QLinearGlobalAveragePool => {
@@ -451,8 +451,7 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
 }
 
 pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> Result<()> {
-    let op =
-        OpType::parse(&node.op_type).map_err(|s| InferenceError::UnsupportedOperator(s))?;
+    let op = OpType::parse(&node.op_type).map_err(InferenceError::UnsupportedOperator)?;
 
     let _span = tracing::trace_span!("op", op = %op, name = %node.name).entered();
 
@@ -478,12 +477,11 @@ pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
         if input_name.is_empty() {
             continue;
         }
-        if let Some(Some(expected_dt)) = expected.get(i) {
-            if let Some(tensor) = values.get(input_name) {
-                if tensor.dtype() != *expected_dt {
-                    to_cast.push((i, input_name.clone()));
-                }
-            }
+        if let Some(Some(expected_dt)) = expected.get(i)
+            && let Some(tensor) = values.get(input_name)
+            && tensor.dtype() != *expected_dt
+        {
+            to_cast.push((i, input_name.clone()));
         }
     }
 

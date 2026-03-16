@@ -7,7 +7,6 @@ use crate::get_tensor;
 use crate::layers::Layer;
 use crate::onnx::NodeProto;
 
-
 pub struct ReduceMin {
     pub inputs: Vec<String>,
     pub keepdims: bool,
@@ -36,12 +35,20 @@ impl Layer for ReduceMin {
         if self.inputs.len() > 1 && !self.inputs[1].is_empty() {
             let axes_t = get_tensor(values, &self.inputs[1])?;
             for &a in axes_t.ints() {
-                let idx = if a < 0 { (rank_i64 + a) as usize } else { a as usize };
+                let idx = if a < 0 {
+                    (rank_i64 + a) as usize
+                } else {
+                    a as usize
+                };
                 axes_mask[idx] = true;
             }
         } else if let Some(ref attr) = self.axes_attr {
             for &a in attr {
-                let idx = if a < 0 { (rank_i64 + a) as usize } else { a as usize };
+                let idx = if a < 0 {
+                    (rank_i64 + a) as usize
+                } else {
+                    a as usize
+                };
                 axes_mask[idx] = true;
             }
         } else {

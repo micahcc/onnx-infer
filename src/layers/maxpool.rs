@@ -62,7 +62,12 @@ impl Layer for MaxPool {
                 (pad_h - pad_h / 2, pad_w - pad_w / 2, pad_h / 2, pad_w / 2)
             }
         } else {
-            (self.pads[0] as usize, self.pads[1] as usize, self.pads[2] as usize, self.pads[3] as usize)
+            (
+                self.pads[0] as usize,
+                self.pads[1] as usize,
+                self.pads[2] as usize,
+                self.pads[3] as usize,
+            )
         };
 
         let h_out = (h_in + p0 + p2 - kh) / sh + 1;
@@ -82,11 +87,7 @@ impl Layer for MaxPool {
                             for fw in 0..kw {
                                 let ih = oh * sh + fh;
                                 let iw = ow * sw + fw;
-                                if ih >= p0
-                                    && iw >= p1
-                                    && ih - p0 < h_in
-                                    && iw - p1 < w_in
-                                {
+                                if ih >= p0 && iw >= p1 && ih - p0 < h_in && iw - p1 < w_in {
                                     let ih = ih - p0;
                                     let iw = iw - p1;
                                     let idx = ((batch * c + ch) * h_in + ih) * w_in + iw;

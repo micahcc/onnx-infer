@@ -42,7 +42,11 @@ impl Layer for Squeeze {
             }
         } else {
             for &a in axes {
-                let idx = if a < 0 { (rank as i64 + a) as usize } else { a as usize };
+                let idx = if a < 0 {
+                    (rank as i64 + a) as usize
+                } else {
+                    a as usize
+                };
                 squeeze_mask[idx] = true;
             }
         }

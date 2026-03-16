@@ -20,7 +20,10 @@ impl Concat {
 
 impl Layer for Concat {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
-        let first_name = self.inputs.iter().find(|n| !n.is_empty())
+        let first_name = self
+            .inputs
+            .iter()
+            .find(|n| !n.is_empty())
             .ok_or_else(|| InferenceError::InvalidModel("Concat with no inputs".into()))?;
         let first = get_tensor(values, first_name)?;
 
@@ -54,7 +57,9 @@ impl Layer for Concat {
             let buf = output.as_mut_i64(total);
             let mut axis_offset = 0;
             for name in &self.inputs {
-                if name.is_empty() { continue; }
+                if name.is_empty() {
+                    continue;
+                }
                 let t = get_tensor(values, name)?;
                 let t_data = t.ints();
                 let t_axis = t.dims[axis];
@@ -73,7 +78,9 @@ impl Layer for Concat {
             let buf = output.as_mut_f32(total);
             let mut axis_offset = 0;
             for name in &self.inputs {
-                if name.is_empty() { continue; }
+                if name.is_empty() {
+                    continue;
+                }
                 let t = get_tensor(values, name)?;
                 let t_data = t.floats();
                 let t_axis = t.dims[axis];

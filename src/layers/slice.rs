@@ -45,11 +45,15 @@ impl Layer for Slice {
 
         let mut axes_buf = [0usize; 8];
         let axes_len;
-        if let Some(ref at) = axes_t {
+        if let Some(at) = axes_t {
             let at_ints = at.ints();
             axes_len = at_ints.len();
             for (i, &a) in at_ints.iter().enumerate() {
-                axes_buf[i] = if a < 0 { (rank as i64 + a) as usize } else { a as usize };
+                axes_buf[i] = if a < 0 {
+                    (rank as i64 + a) as usize
+                } else {
+                    a as usize
+                };
             }
         } else {
             axes_len = starts_ints.len();
@@ -62,7 +66,7 @@ impl Layer for Slice {
             let ax = axes_buf[i];
             starts[ax] = starts_ints[i];
             ends[ax] = ends_ints[i];
-            if let Some(ref st) = steps_t {
+            if let Some(st) = steps_t {
                 steps[ax] = st.ints()[i];
             }
         }

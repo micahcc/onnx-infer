@@ -113,8 +113,8 @@ mod tests {
         let output_bytes = fs::read(test_dir.join("output_0.pb")).expect("read output");
         let expected = Tensor::from_proto_bytes(&output_bytes).expect("parse output");
 
-        let outputs = engine.run(inputs).expect("inference");
-        let output = &outputs[&output_name];
+        engine.run(inputs).expect("inference");
+        let output = &engine.outputs[&output_name];
 
         assert_eq!(output.dims, expected.dims);
 
@@ -151,8 +151,8 @@ mod tests {
         let output_bytes = fs::read(test_dir.join("output_0.pb")).expect("read output");
         let expected = Tensor::from_proto_bytes(&output_bytes).expect("parse output");
 
-        let outputs = engine.run(inputs).expect("inference");
-        let output = &outputs[&output_name];
+        engine.run(inputs).expect("inference");
+        let output = &engine.outputs[&output_name];
 
         assert_eq!(output.dims, expected.dims);
 
@@ -196,7 +196,7 @@ mod tests {
         let graph = model.graph.as_ref().unwrap();
 
         let test_dir = base.join(format!("test_data_set_{test_set}"));
-        let outputs = engine.run(inputs).expect("inference");
+        engine.run(inputs).expect("inference");
 
         for i in 0..graph.output.len() {
             let pb_path = test_dir.join(format!("output_{i}.pb"));
@@ -204,7 +204,8 @@ mod tests {
                 let expected = Tensor::from_proto_bytes(&fs::read(&pb_path).expect("read output"))
                     .expect("parse output");
                 let name = &graph.output[i].name;
-                let output = outputs
+                let output = engine
+                    .outputs
                     .get(name)
                     .unwrap_or_else(|| panic!("missing output {name}"));
                 assert_eq!(output.dims, expected.dims, "shape mismatch for {name}");

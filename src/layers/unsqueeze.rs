@@ -37,7 +37,11 @@ impl Layer for Unsqueeze {
         // Build set of axes to insert
         let mut insert_mask = [false; 8];
         for &a in axes {
-            let idx = if a < 0 { (out_rank as i64 + a) as usize } else { a as usize };
+            let idx = if a < 0 {
+                (out_rank as i64 + a) as usize
+            } else {
+                a as usize
+            };
             insert_mask[idx] = true;
         }
 

@@ -32,10 +32,11 @@ impl Layer for GlobalAvgPool {
             }
         }
 
-        output.dims.clear();
-        output.dims.push(n);
-        output.dims.push(c);
-        output.dims.resize(input.dims.len(), 1);
+        let rank = input.dims.len();
+        let mut dims_buf = [1usize; 8];
+        dims_buf[0] = n;
+        dims_buf[1] = c;
+        output.set_dims(&dims_buf[..rank]);
         Ok(())
     }
 }

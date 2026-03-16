@@ -45,16 +45,16 @@ pub mod unsqueeze;
 
 use std::collections::HashMap;
 
-use crate::Result;
-use crate::Tensor;
-use crate::broadcast_index;
-use crate::broadcast_shape_into;
-
 pub use op_type::OpType;
 pub use plan::Plan;
 pub use plan::PlanNode;
 pub use plan::build_node;
 pub use plan::execute_node;
+
+use crate::Result;
+use crate::Tensor;
+use crate::broadcast_index;
+use crate::broadcast_shape_into;
 
 pub trait Layer {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()>;

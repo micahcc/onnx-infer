@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use crate::DType;
+use crate::ONNX_INT32;
+use crate::ONNX_INT64;
 use crate::Tensor;
 use crate::broadcast_shape;
 use crate::get_attr_int;
 use crate::get_attr_ints;
 use crate::get_attr_string;
-use crate::ONNX_INT32;
-use crate::ONNX_INT64;
 use crate::onnx::NodeProto;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,8 +108,14 @@ impl OpType {
 
         match self {
             Self::Add | Self::Sub | Self::Mul | Self::Div => &[F, F],
-            Self::Relu | Self::LeakyRelu | Self::Clip | Self::Sigmoid | Self::Exp | Self::Ceil
-            | Self::Round | Self::Softmax => &[F],
+            Self::Relu
+            | Self::LeakyRelu
+            | Self::Clip
+            | Self::Sigmoid
+            | Self::Exp
+            | Self::Ceil
+            | Self::Round
+            | Self::Softmax => &[F],
             Self::Conv => &[F, F, F],
             Self::MatMul => &[F, F],
             Self::Gemm => &[F, F, F],
@@ -148,8 +154,16 @@ impl OpType {
                     DType::Float
                 }
             }
-            Self::Identity | Self::Reshape | Self::Squeeze | Self::Unsqueeze | Self::Flatten
-            | Self::Transpose | Self::Slice | Self::Tile | Self::Gather | Self::Concat
+            Self::Identity
+            | Self::Reshape
+            | Self::Squeeze
+            | Self::Unsqueeze
+            | Self::Flatten
+            | Self::Transpose
+            | Self::Slice
+            | Self::Tile
+            | Self::Gather
+            | Self::Concat
             | Self::ReduceMin => input_types.first().copied().unwrap_or(DType::Float),
             _ => DType::Float,
         }
@@ -176,9 +190,19 @@ impl OpType {
         };
 
         match self {
-            Self::Relu | Self::LeakyRelu | Self::Clip | Self::Sigmoid | Self::Exp | Self::Ceil
-            | Self::Round | Self::Softmax | Self::BatchNormalization | Self::Identity
-            | Self::Cast | Self::DequantizeLinear | Self::QuantizeLinear => get_shape(0).cloned(),
+            Self::Relu
+            | Self::LeakyRelu
+            | Self::Clip
+            | Self::Sigmoid
+            | Self::Exp
+            | Self::Ceil
+            | Self::Round
+            | Self::Softmax
+            | Self::BatchNormalization
+            | Self::Identity
+            | Self::Cast
+            | Self::DequantizeLinear
+            | Self::QuantizeLinear => get_shape(0).cloned(),
 
             Self::Add | Self::Sub | Self::Mul | Self::Div => {
                 let a = get_shape(0)?;
@@ -211,7 +235,7 @@ impl OpType {
                     let d = dilations[i] as usize;
                     let ek = d * (k - 1) + 1;
                     let out_dim = match auto_pad.as_str() {
-                        "SAME_UPPER" | "SAME_LOWER" => (in_dim + s - 1) / s,
+                        "SAME_UPPER" | "SAME_LOWER" => in_dim.div_ceil(s),
                         "VALID" => (in_dim.saturating_sub(ek)) / s + 1,
                         _ => {
                             let p = pads[i] as usize + pads[i + 2] as usize;
@@ -278,7 +302,7 @@ impl OpType {
                     let k = ks[i] as usize;
                     let s = strides[i] as usize;
                     let out_dim = match auto_pad.as_str() {
-                        "SAME_UPPER" | "SAME_LOWER" => (in_dim + s - 1) / s,
+                        "SAME_UPPER" | "SAME_LOWER" => in_dim.div_ceil(s),
                         "VALID" => (in_dim.saturating_sub(k)) / s + 1,
                         _ => {
                             let p = pads[i] as usize + pads[i + 2] as usize;
@@ -574,24 +598,24 @@ impl OpType {
 
             Self::Resize => {
                 let x = get_shape(0)?;
-                if let Some(sizes) = get_value(3) {
-                    if sizes.numel() > 0 {
-                        return Some(match sizes.dtype() {
-                            DType::Int64 => sizes.ints().iter().map(|&v| v as usize).collect(),
-                            DType::Float => sizes.floats().iter().map(|&v| v as usize).collect(),
-                        });
-                    }
+                if let Some(sizes) = get_value(3)
+                    && sizes.numel() > 0
+                {
+                    return Some(match sizes.dtype() {
+                        DType::Int64 => sizes.ints().iter().map(|&v| v as usize).collect(),
+                        DType::Float => sizes.floats().iter().map(|&v| v as usize).collect(),
+                    });
                 }
-                if let Some(scales) = get_value(2) {
-                    if scales.numel() > 0 {
-                        let sf = scales.floats();
-                        return Some(
-                            x.iter()
-                                .zip(sf.iter())
-                                .map(|(&d, &s)| (d as f32 * s) as usize)
-                                .collect(),
-                        );
-                    }
+                if let Some(scales) = get_value(2)
+                    && scales.numel() > 0
+                {
+                    let sf = scales.floats();
+                    return Some(
+                        x.iter()
+                            .zip(sf.iter())
+                            .map(|(&d, &s)| (d as f32 * s) as usize)
+                            .collect(),
+                    );
                 }
                 None
             }
@@ -643,7 +667,9 @@ impl OpType {
 
             Self::NonMaxSuppression | Self::Loop => None,
 
-            Self::QLinearConv | Self::QLinearAdd | Self::QLinearMatMul
+            Self::QLinearConv
+            | Self::QLinearAdd
+            | Self::QLinearMatMul
             | Self::QLinearGlobalAveragePool => None,
         }
     }

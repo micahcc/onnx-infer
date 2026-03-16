@@ -123,7 +123,11 @@ impl Loop {
         for j in 0..num_carried {
             let out_name = &self.carried_out_names[j];
             let in_name = &self.carried_in_names[j];
-            let out_dt = probe.type_map.get(out_name).copied().unwrap_or(DType::Float);
+            let out_dt = probe
+                .type_map
+                .get(out_name)
+                .copied()
+                .unwrap_or(DType::Float);
             let in_dt = type_hints.get(in_name).copied().unwrap_or(DType::Float);
             self.carried_types.push(out_dt);
             if out_dt != in_dt {
@@ -214,10 +218,10 @@ impl Loop {
 
         // Update outer references
         for name in &self.outer_refs {
-            if let Some(outer) = outer_values.get(name) {
-                if let Some(body) = self.values.get_mut(name) {
-                    body.copy_from(outer);
-                }
+            if let Some(outer) = outer_values.get(name)
+                && let Some(body) = self.values.get_mut(name)
+            {
+                body.copy_from(outer);
             }
         }
 
@@ -314,7 +318,10 @@ impl Loop {
                         return Err(InferenceError::InvalidModel(format!(
                             "Loop carried output '{}' changed type from {:?} to {:?} at iteration {}. \
                              Loop body outputs must have consistent types across iterations.",
-                            out_name, carried_types[j], t.dtype(), i
+                            out_name,
+                            carried_types[j],
+                            t.dtype(),
+                            i
                         )));
                     }
                     carried[j].copy_from(t);
@@ -329,7 +336,10 @@ impl Loop {
                             return Err(InferenceError::InvalidModel(format!(
                                 "Loop scan output '{}' changed type from {:?} to {:?} at iteration {}. \
                                  Loop body outputs must have consistent types across iterations.",
-                                scan_name, expected_dt, t.dtype(), i
+                                scan_name,
+                                expected_dt,
+                                t.dtype(),
+                                i
                             )));
                         }
                         if t.dims != scan_elem_dims[j] {

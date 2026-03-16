@@ -22,7 +22,13 @@ impl Transpose {
                 scratch_perm[i] = v;
             }
         }
-        Self { inputs, perm, scratch_perm, scratch_in_strides: [0; 8], scratch_out_strides: [0; 8] }
+        Self {
+            inputs,
+            perm,
+            scratch_perm,
+            scratch_in_strides: [0; 8],
+            scratch_out_strides: [0; 8],
+        }
     }
 }
 

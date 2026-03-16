@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use crate::DType;
+use crate::ONNX_INT32;
+use crate::ONNX_INT64;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
-use crate::ONNX_INT32;
-use crate::ONNX_INT64;
 use crate::layers::Layer;
 
 pub struct Cast {

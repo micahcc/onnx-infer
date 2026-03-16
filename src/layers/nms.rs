@@ -60,7 +60,8 @@ impl Layer for Nms {
                         self.candidates.push((b, score));
                     }
                 }
-                self.candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                self.candidates
+                    .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
                 self.kept.clear();
                 for &(box_idx, _) in &self.candidates {
@@ -81,7 +82,8 @@ impl Layer for Nms {
                     }
                     if !suppress {
                         self.kept.push(box_idx);
-                        self.selected.push([batch as i64, class as i64, box_idx as i64]);
+                        self.selected
+                            .push([batch as i64, class as i64, box_idx as i64]);
                     }
                 }
             }

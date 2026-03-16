@@ -54,8 +54,16 @@ impl Layer for Conv {
         let w_in = input.dims[3];
 
         let c_out = weight.dims[0];
-        let kh = if self.kernel_shape.is_empty() { weight.dims[2] } else { self.kernel_shape[0] as usize };
-        let kw = if self.kernel_shape.is_empty() { weight.dims[3] } else { self.kernel_shape[1] as usize };
+        let kh = if self.kernel_shape.is_empty() {
+            weight.dims[2]
+        } else {
+            self.kernel_shape[0] as usize
+        };
+        let kw = if self.kernel_shape.is_empty() {
+            weight.dims[3]
+        } else {
+            self.kernel_shape[1] as usize
+        };
         let sh = self.strides[0] as usize;
         let sw = self.strides[1] as usize;
         let dh = self.dilations[0] as usize;
@@ -72,7 +80,12 @@ impl Layer for Conv {
                 (pad_h - pad_h / 2, pad_w - pad_w / 2, pad_h / 2, pad_w / 2)
             }
         } else {
-            (self.pads[0] as usize, self.pads[1] as usize, self.pads[2] as usize, self.pads[3] as usize)
+            (
+                self.pads[0] as usize,
+                self.pads[1] as usize,
+                self.pads[2] as usize,
+                self.pads[3] as usize,
+            )
         };
 
         let h_out = (h_in + p0 + p2 - dh * (kh - 1) - 1) / sh + 1;
@@ -100,10 +113,7 @@ impl Layer for Conv {
                                     for fw in 0..kw {
                                         let ih = oh * sh + fh * dh;
                                         let iw = ow * sw + fw * dw;
-                                        if ih >= p0
-                                            && iw >= p1
-                                            && ih - p0 < h_in
-                                            && iw - p1 < w_in
+                                        if ih >= p0 && iw >= p1 && ih - p0 < h_in && iw - p1 < w_in
                                         {
                                             let ih = ih - p0;
                                             let iw = iw - p1;
@@ -117,7 +127,7 @@ impl Layer for Conv {
                                     }
                                 }
                             }
-                            if let Some(ref bias) = bias {
+                            if let Some(bias) = bias {
                                 sum += bias.floats()[abs_oc];
                             }
                             let out_idx = ((batch * c_out + abs_oc) * h_out + oh) * w_out + ow;

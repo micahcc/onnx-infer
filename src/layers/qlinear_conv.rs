@@ -62,8 +62,16 @@ impl Layer for QLinearConv {
         w_tensor.set_dims(&w_quant.dims);
         let w_buf = w_tensor.as_mut_f32(w_quant.numel());
         for oc in 0..c_out {
-            let scale = if per_channel { w_scale_f[oc] } else { w_scale_f[0] };
-            let zp = if per_channel { w_zp_t.f32_at(oc) } else { w_zp_t.f32_at(0) };
+            let scale = if per_channel {
+                w_scale_f[oc]
+            } else {
+                w_scale_f[0]
+            };
+            let zp = if per_channel {
+                w_zp_t.f32_at(oc)
+            } else {
+                w_zp_t.f32_at(0)
+            };
             let base = oc * elems_per_oc;
             for i in 0..elems_per_oc {
                 w_buf[base + i] = (w_quant_f[base + i] - zp) * scale;
@@ -77,12 +85,17 @@ impl Layer for QLinearConv {
             let b_buf = b_tensor.as_mut_f32(b.numel());
             for oc in 0..b.numel() {
                 let val = b.f32_at(oc);
-                let ws = if per_channel { w_scale_f[oc] } else { w_scale_f[0] };
+                let ws = if per_channel {
+                    w_scale_f[oc]
+                } else {
+                    w_scale_f[0]
+                };
                 b_buf[oc] = val * x_scale * ws;
             }
         }
 
-        self.inner.execute(&self.tmp_values, &mut self.conv_output)?;
+        self.inner
+            .execute(&self.tmp_values, &mut self.conv_output)?;
 
         let numel = self.conv_output.numel();
         output.set_dims(&self.conv_output.dims);
