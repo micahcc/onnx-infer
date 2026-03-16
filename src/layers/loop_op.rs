@@ -369,12 +369,12 @@ impl Loop {
 
         // Write carried outputs to outer values
         let mut out_idx = 0;
-        for j in 0..num_carried {
+        for c in carried.iter().take(num_carried) {
             if out_idx < outputs.len() && !outputs[out_idx].is_empty() {
                 let (key, mut outer) = outer_values
                     .remove_entry(outputs[out_idx].as_str())
                     .unwrap_or_else(|| (outputs[out_idx].clone(), Tensor::default()));
-                outer.copy_from(&carried[j]);
+                outer.copy_from(c);
                 outer_values.insert(key, outer);
             }
             out_idx += 1;

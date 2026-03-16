@@ -36,8 +36,8 @@ impl Layer for Slice {
         let mut starts = [0i64; 8];
         let mut ends = [0i64; 8];
         let mut steps = [1i64; 8];
-        for ax in 0..rank {
-            ends[ax] = input.dims[ax] as i64;
+        for (ax, e) in ends.iter_mut().enumerate().take(rank) {
+            *e = input.dims[ax] as i64;
         }
 
         let starts_ints = starts_t.ints();
@@ -57,8 +57,8 @@ impl Layer for Slice {
             }
         } else {
             axes_len = starts_ints.len();
-            for i in 0..axes_len {
-                axes_buf[i] = i;
+            for (i, ab) in axes_buf.iter_mut().enumerate().take(axes_len) {
+                *ab = i;
             }
         }
 
@@ -122,6 +122,7 @@ impl Layer for Slice {
             out_strides[i] = out_strides[i + 1] * out_dims[i + 1];
         }
 
+        #[allow(clippy::needless_range_loop)]
         match input.dtype() {
             DType::Float => {
                 let in_data = input.floats();

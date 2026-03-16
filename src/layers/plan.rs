@@ -61,7 +61,7 @@ pub enum PlanNode {
         output: String,
         layer: Box<dyn Layer>,
     },
-    Loop(loop_op::Loop),
+    Loop(Box<loop_op::Loop>),
 }
 
 pub struct Plan {
@@ -286,11 +286,11 @@ pub fn build_node(op: OpType, node: &NodeProto, inputs: Vec<String>) -> Result<P
             .and_then(|a| a.g.as_ref())
             .ok_or_else(|| InferenceError::InvalidModel("Loop: no body graph".into()))?
             .clone();
-        return Ok(PlanNode::Loop(loop_op::Loop::new(
+        return Ok(PlanNode::Loop(Box::new(loop_op::Loop::new(
             inputs,
             node.output.clone(),
             body,
-        )));
+        ))));
     }
 
     let output = if node.output.is_empty() || node.output[0].is_empty() {

@@ -52,8 +52,8 @@ impl Layer for ReduceMin {
                 axes_mask[idx] = true;
             }
         } else {
-            for i in 0..in_rank {
-                axes_mask[i] = true;
+            for m in axes_mask.iter_mut().take(in_rank) {
+                *m = true;
             }
         }
 
@@ -92,6 +92,7 @@ impl Layer for ReduceMin {
         }
 
         let input_f = input.floats();
+        #[allow(clippy::needless_range_loop)]
         for in_flat in 0..input.numel() {
             let mut remaining = in_flat;
             let mut out_flat = 0;

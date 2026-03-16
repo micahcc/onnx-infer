@@ -39,6 +39,7 @@ impl Layer for Tile {
             in_strides[i] = in_strides[i + 1] * input.dims[i + 1];
         }
 
+        #[allow(clippy::needless_range_loop)]
         match input.dtype() {
             DType::Float => {
                 let in_data = input.floats();

@@ -62,6 +62,7 @@ impl Layer for Transpose {
         }
         let out_strides = &self.scratch_out_strides;
 
+        #[allow(clippy::needless_range_loop)]
         match input.dtype() {
             DType::Float => {
                 let in_data = input.floats();

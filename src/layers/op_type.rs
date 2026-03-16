@@ -320,9 +320,7 @@ impl OpType {
                     return None;
                 }
                 let mut out = vec![x[0], x[1]];
-                for _ in 2..x.len() {
-                    out.push(1);
-                }
+                out.resize(x.len(), 1);
                 Some(out)
             }
 

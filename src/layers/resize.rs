@@ -52,6 +52,7 @@ impl Layer for Resize {
 
         let input_f = input.floats();
         let buf = output.as_mut_f32(numel);
+        #[allow(clippy::needless_range_loop)]
         for out_flat in 0..numel {
             let mut remaining = out_flat;
             let mut in_flat = 0;

@@ -54,6 +54,7 @@ impl Layer for QLinearMatMul {
             let n = *b_quant.dims.last().unwrap();
             let k = b_quant.numel() / n;
             for row in 0..k {
+                #[allow(clippy::needless_range_loop)]
                 for col in 0..n {
                     let idx = row * n + col;
                     b_buf[idx] = (b_quant_f[idx] - b_zp_t.f32_at(col)) * b_scale_f[col];
