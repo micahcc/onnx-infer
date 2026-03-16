@@ -1,4 +1,5 @@
 pub mod onnx {
+    #![allow(clippy::doc_overindented_list_items)]
     include!(concat!(env!("OUT_DIR"), "/onnx.rs"));
 }
 
