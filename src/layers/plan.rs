@@ -77,7 +77,6 @@ use crate::layers::sigmoid;
 use crate::layers::slice;
 use crate::layers::softmax;
 use crate::layers::softplus;
-use crate::layers::unary_ops;
 use crate::layers::split;
 use crate::layers::sqrt;
 use crate::layers::squeeze;
@@ -87,6 +86,7 @@ use crate::layers::tanh;
 use crate::layers::tile;
 use crate::layers::topk;
 use crate::layers::transpose;
+use crate::layers::unary_ops;
 use crate::layers::unsqueeze;
 use crate::layers::where_op;
 use crate::onnx::NodeProto;
@@ -885,8 +885,8 @@ pub fn build_node(
         )),
         OpType::Selu => Box::new(unary_ops::Selu::new(
             inputs,
-            get_attr_float(node, "alpha").unwrap_or(1.67326319),
-            get_attr_float(node, "gamma").unwrap_or(1.05070102),
+            get_attr_float(node, "alpha").unwrap_or(1.673_263_2),
+            get_attr_float(node, "gamma").unwrap_or(1.050_701),
         )),
         OpType::HardSigmoid => Box::new(unary_ops::HardSigmoid::new(
             inputs,

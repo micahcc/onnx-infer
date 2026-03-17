@@ -62,7 +62,6 @@ pub mod sigmoid;
 pub mod slice;
 pub mod softmax;
 pub mod softplus;
-pub mod unary_ops;
 pub mod split;
 pub mod sqrt;
 pub mod squeeze;
@@ -72,6 +71,7 @@ pub mod tanh;
 pub mod tile;
 pub mod topk;
 pub mod transpose;
+pub mod unary_ops;
 pub mod unsqueeze;
 pub mod where_op;
 

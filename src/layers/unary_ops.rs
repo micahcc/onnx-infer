@@ -54,11 +54,11 @@ unary_op!(Atanh, |v| v.atanh());
 // Math
 unary_op!(Erf, |v| {
     // Abramowitz & Stegun approximation (max error ~1.5e-7)
-    let a1: f32 = 0.254829592;
-    let a2: f32 = -0.284496736;
-    let a3: f32 = 1.421413741;
-    let a4: f32 = -1.453152027;
-    let a5: f32 = 1.061405429;
+    let a1: f32 = 0.254_829_6;
+    let a2: f32 = -0.284_496_72;
+    let a3: f32 = 1.421_413_8;
+    let a4: f32 = -1.453_152_1;
+    let a5: f32 = 1.061_405_4;
     let p: f32 = 0.3275911;
     let sign = v.signum();
     let x = v.abs();
@@ -92,7 +92,11 @@ impl Layer for Elu {
         let inp = input.floats();
         let buf = output.as_mut_f32(inp.len());
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
-            *o = if v >= 0.0 { v } else { self.alpha * (v.exp() - 1.0) };
+            *o = if v >= 0.0 {
+                v
+            } else {
+                self.alpha * (v.exp() - 1.0)
+            };
         }
         output.set_dims(&input.dims);
         Ok(())
@@ -132,7 +136,11 @@ pub struct Selu {
 
 impl Selu {
     pub fn new(inputs: Vec<String>, alpha: f32, gamma: f32) -> Self {
-        Self { inputs, alpha, gamma }
+        Self {
+            inputs,
+            alpha,
+            gamma,
+        }
     }
 }
 
@@ -142,7 +150,12 @@ impl Layer for Selu {
         let inp = input.floats();
         let buf = output.as_mut_f32(inp.len());
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
-            *o = self.gamma * if v > 0.0 { v } else { self.alpha * (v.exp() - 1.0) };
+            *o = self.gamma
+                * if v > 0.0 {
+                    v
+                } else {
+                    self.alpha * (v.exp() - 1.0)
+                };
         }
         output.set_dims(&input.dims);
         Ok(())
@@ -157,7 +170,11 @@ pub struct HardSigmoid {
 
 impl HardSigmoid {
     pub fn new(inputs: Vec<String>, alpha: f32, beta: f32) -> Self {
-        Self { inputs, alpha, beta }
+        Self {
+            inputs,
+            alpha,
+            beta,
+        }
     }
 }
 
