@@ -121,11 +121,8 @@ impl Plan {
     /// Extract input shapes from the graph's input type information.
     /// Only includes non-initializer inputs with fully concrete dimensions.
     pub fn infer_input_sizes(graph: &crate::onnx::GraphProto) -> HashMap<String, Dims> {
-        let initializer_names: std::collections::HashSet<&str> = graph
-            .initializer
-            .iter()
-            .map(|i| i.name.as_str())
-            .collect();
+        let initializer_names: std::collections::HashSet<&str> =
+            graph.initializer.iter().map(|i| i.name.as_str()).collect();
         let mut sizes = HashMap::new();
         for input in &graph.input {
             if input.name.is_empty() || initializer_names.contains(input.name.as_str()) {
@@ -138,9 +135,7 @@ impl Plan {
         sizes
     }
 
-    fn extract_shape(
-        input: &crate::onnx::ValueInfoProto,
-    ) -> Option<Dims> {
+    fn extract_shape(input: &crate::onnx::ValueInfoProto) -> Option<Dims> {
         let tt = match input.r#type.as_ref()?.value.as_ref()? {
             crate::onnx::type_proto::Value::TensorType(tt) => tt,
             _ => return None,
@@ -714,6 +709,18 @@ pub fn build_node(
             let ct = get_attr_string(node, "coordinate_transformation_mode").unwrap_or_default();
             let nm = get_attr_string(node, "nearest_mode").unwrap_or_default();
             Box::new(resize::Resize::new(inputs, &ct, &nm))
+        }
+        OpType::Upsample => {
+            // Upsample (opset 7-9): inputs are [X, scales].
+            // Remap to Resize layout [X, roi(empty), scales].
+            let mode = get_attr_string(node, "mode").unwrap_or_else(|| "nearest".to_string());
+            let nm = if mode == "nearest" { "floor" } else { "" };
+            let resize_inputs = vec![
+                inputs[0].clone(),
+                String::new(), // empty roi
+                inputs[1].clone(),
+            ];
+            Box::new(resize::Resize::new(resize_inputs, "asymmetric", nm))
         }
         OpType::Reshape => Box::new(reshape::Reshape::new(inputs, node)),
         OpType::Constant => {

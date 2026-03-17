@@ -34,11 +34,8 @@ impl InferenceEngine {
 
         let mut plan = Plan::build(graph, &input_sizes)?;
 
-        let initializer_names: std::collections::HashSet<&str> = graph
-            .initializer
-            .iter()
-            .map(|i| i.name.as_str())
-            .collect();
+        let initializer_names: std::collections::HashSet<&str> =
+            graph.initializer.iter().map(|i| i.name.as_str()).collect();
         let input_names: Vec<String> = graph
             .input
             .iter()
@@ -123,9 +120,7 @@ impl InferenceEngine {
         // Copy results into caller-provided output buffer
         for name in output_names {
             if let Some(src) = self.values.get(name) {
-                let dst = outputs
-                    .entry(name.clone())
-                    .or_default();
+                let dst = outputs.entry(name.clone()).or_default();
                 dst.copy_from(src);
             }
         }

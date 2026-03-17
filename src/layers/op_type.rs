@@ -84,6 +84,7 @@ pub enum OpType {
     TopK,
     Transpose,
     Unsqueeze,
+    Upsample,
     Where,
 }
 
@@ -160,6 +161,7 @@ impl OpType {
             "TopK" => Ok(Self::TopK),
             "Transpose" => Ok(Self::Transpose),
             "Unsqueeze" => Ok(Self::Unsqueeze),
+            "Upsample" => Ok(Self::Upsample),
             "Where" => Ok(Self::Where),
             other => Err(other.to_string()),
         }
@@ -189,7 +191,7 @@ impl OpType {
             Self::Gemm => &[F, F, F],
             Self::BatchNormalization => &[F, F, F, F, F],
             Self::MaxPool | Self::GlobalAveragePool => &[F],
-            Self::Resize => &[F],
+            Self::Resize | Self::Upsample => &[F],
             Self::DequantizeLinear => &[F, F, F],
             Self::QuantizeLinear => &[F, F, F],
             Self::NonMaxSuppression => &[F, F],
@@ -497,7 +499,9 @@ impl OpType {
                         DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
                         DType::String => return None,
                     }
-                } else { get_attr_ints(node, "shape")? };
+                } else {
+                    get_attr_ints(node, "shape")?
+                };
 
                 let mut dims: Dims = Dims::new();
                 let mut infer_idx = None;
@@ -728,6 +732,18 @@ impl OpType {
                     );
                 }
                 None
+            }
+
+            Self::Upsample => {
+                let x = get_shape(0)?;
+                let scales = get_value(1)?;
+                let sf = scales.floats();
+                Some(
+                    x.iter()
+                        .zip(sf.iter())
+                        .map(|(&d, &s)| (d as f32 * s) as usize)
+                        .collect(),
+                )
             }
 
             Self::ReduceMin => {
