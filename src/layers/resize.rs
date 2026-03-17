@@ -82,44 +82,67 @@ impl Layer for Resize {
             in_strides[i] = in_strides[i + 1] * input.dims[i + 1];
         }
 
+        // Precompute per-axis coordinate lookup tables: for each output coordinate,
+        // store the corresponding input offset contribution (in_coord * in_stride).
+        let mut coord_tables: [Vec<usize>; 8] = Default::default();
+        for ax in 0..rank {
+            let scale = out_dims[ax] as f32 / input.dims[ax] as f32;
+            let max_in = (input.dims[ax] - 1) as f32;
+            coord_tables[ax] = (0..out_dims[ax])
+                .map(|out_coord| {
+                    let orig = match self.coord_transform {
+                        CoordTransform::HalfPixel => (out_coord as f32 + 0.5) / scale - 0.5,
+                        CoordTransform::Asymmetric => out_coord as f32 / scale,
+                        CoordTransform::AlignCorners => {
+                            if out_dims[ax] <= 1 {
+                                0.0
+                            } else {
+                                out_coord as f32 * max_in / (out_dims[ax] - 1) as f32
+                            }
+                        }
+                    };
+                    let in_coord = match self.nearest_mode {
+                        NearestMode::RoundPreferCeil => orig.round(),
+                        NearestMode::RoundPreferFloor => {
+                            if orig - orig.floor() == 0.5 {
+                                orig.floor()
+                            } else {
+                                orig.round()
+                            }
+                        }
+                        NearestMode::Floor => orig.floor(),
+                        NearestMode::Ceil => orig.ceil(),
+                    };
+                    in_coord.max(0.0).min(max_in) as usize * in_strides[ax]
+                })
+                .collect();
+        }
+
         let input_f = input.floats();
         let buf = output.as_mut_f32(numel);
-        #[allow(clippy::needless_range_loop)]
+
+        // Use incrementing coordinate array to avoid division/modulo
+        let mut coord = [0usize; 8];
+        let mut in_off = 0usize;
+        // Initialize in_off from coord [0,0,...,0]
+        for ax in 0..rank {
+            in_off += coord_tables[ax][0];
+        }
         for out_flat in 0..numel {
-            let mut remaining = out_flat;
-            let mut in_flat = 0;
-            for ax in 0..rank {
-                let out_coord = remaining / out_strides[ax];
-                remaining %= out_strides[ax];
-                let scale = out_dims[ax] as f32 / input.dims[ax] as f32;
-                let orig = match self.coord_transform {
-                    CoordTransform::HalfPixel => (out_coord as f32 + 0.5) / scale - 0.5,
-                    CoordTransform::Asymmetric => out_coord as f32 / scale,
-                    CoordTransform::AlignCorners => {
-                        if out_dims[ax] <= 1 {
-                            0.0
-                        } else {
-                            out_coord as f32 * (input.dims[ax] - 1) as f32
-                                / (out_dims[ax] - 1) as f32
-                        }
-                    }
-                };
-                let in_coord = match self.nearest_mode {
-                    NearestMode::RoundPreferCeil => orig.round(),
-                    NearestMode::RoundPreferFloor => {
-                        if orig - orig.floor() == 0.5 {
-                            orig.floor()
-                        } else {
-                            orig.round()
-                        }
-                    }
-                    NearestMode::Floor => orig.floor(),
-                    NearestMode::Ceil => orig.ceil(),
-                };
-                let in_coord = in_coord.max(0.0).min((input.dims[ax] - 1) as f32) as usize;
-                in_flat += in_coord * in_strides[ax];
+            buf[out_flat] = input_f[in_off];
+
+            // Increment coordinate and update in_off
+            for d in (0..rank).rev() {
+                let old = coord[d];
+                coord[d] += 1;
+                if coord[d] < out_dims[d] {
+                    in_off = in_off - coord_tables[d][old] + coord_tables[d][coord[d]];
+                    break;
+                }
+                in_off -= coord_tables[d][old];
+                coord[d] = 0;
+                in_off += coord_tables[d][0];
             }
-            buf[out_flat] = input_f[in_flat];
         }
 
         output.set_dims(&out_dims[..rank]);

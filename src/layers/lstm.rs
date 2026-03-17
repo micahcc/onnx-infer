@@ -88,25 +88,28 @@ fn run_lstm_direction(
         let x_t = &x[t * batch * input_size..(t + 1) * batch * input_size];
 
         // gates = X_t * W^T + H_{t-1} * R^T + Wb + Rb
-        // W: [4*hs, input_size], R: [4*hs, hs]
+        // Initialize gates with bias (Wb + Rb)
         for b in 0..batch {
             for g in 0..hs4 {
-                let mut val = wb[g] + rb[g];
-                // X_t[b] * W[g]
-                let x_row = &x_t[b * input_size..(b + 1) * input_size];
-                let w_row = &w[g * input_size..(g + 1) * input_size];
-                for k in 0..input_size {
-                    val += x_row[k] * w_row[k];
-                }
-                // H_{t-1}[b] * R[g]
-                let h_row = &h[b * hs..(b + 1) * hs];
-                let r_row = &r[g * hs..(g + 1) * hs];
-                for k in 0..hs {
-                    val += h_row[k] * r_row[k];
-                }
-                gates[b * hs4 + g] = val;
+                gates[b * hs4 + g] = wb[g] + rb[g];
             }
         }
+
+        // gates += X_t * W^T   (X_t: [batch, input_size], W: [4*hs, input_size])
+        crate::blas::sgemm(
+            batch, hs4, input_size,
+            1.0, x_t, input_size, false,
+            w, input_size, true,
+            1.0, &mut gates, hs4,
+        );
+
+        // gates += H_{t-1} * R^T   (H: [batch, hs], R: [4*hs, hs])
+        crate::blas::sgemm(
+            batch, hs4, hs,
+            1.0, &h, hs, false,
+            r, hs, true,
+            1.0, &mut gates, hs4,
+        );
 
         // ONNX gate order: i, o, f, c (different from some frameworks)
         for b in 0..batch {

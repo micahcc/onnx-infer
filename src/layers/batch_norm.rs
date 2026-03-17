@@ -71,18 +71,17 @@ impl Layer for BatchNorm {
 
         let total = input_f.len();
         let buf = output.as_mut_f32(total);
-        buf.copy_from_slice(input_f);
 
         for batch in 0..p.n {
             for ch in 0..p.c {
-                let s = scale_f[ch];
-                let b = bias_f[ch];
-                let m = mean_f[ch];
-                let v = var_f[ch];
-                let inv_std = 1.0 / (v + self.epsilon).sqrt();
+                let inv_std = 1.0 / (var_f[ch] + self.epsilon).sqrt();
+                let alpha = scale_f[ch] * inv_std;
+                let beta = bias_f[ch] - mean_f[ch] * alpha;
                 let base = (batch * p.c + ch) * p.spatial;
+                let src = &input_f[base..base + p.spatial];
+                let dst = &mut buf[base..base + p.spatial];
                 for i in 0..p.spatial {
-                    buf[base + i] = (buf[base + i] - m) * inv_std * s + b;
+                    dst[i] = src[i] * alpha + beta;
                 }
             }
         }

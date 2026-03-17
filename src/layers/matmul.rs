@@ -80,6 +80,52 @@ impl MatMul {
     }
 }
 
+impl MatMul {
+    /// Naive scalar matmul — used by QLinearMatMul to avoid BLAS-induced rounding
+    /// differences in quantized pipelines.
+    pub fn execute_naive(
+        &mut self,
+        values: &HashMap<String, Tensor>,
+        output: &mut Tensor,
+    ) -> Result<()> {
+        let a = get_tensor(values, &self.inputs[0])?;
+        let b = get_tensor(values, &self.inputs[1])?;
+
+        let mut key = Dims::from_slice(&a.dims);
+        key.extend_from_slice(&b.dims);
+        let p = match &self.precomp {
+            Some(p) if self.shape_cache.as_slice() == key.as_slice() => p,
+            _ => {
+                self.precomp = Some(Self::compute_shapes(&a.dims, &b.dims));
+                self.shape_cache = key;
+                self.precomp.as_ref().expect("just set")
+            }
+        };
+
+        let a_f = a.floats();
+        let b_f = b.floats();
+        let total = p.batch_size * p.m * p.n;
+        let buf = output.as_mut_f32(total);
+
+        for batch in 0..p.batch_size {
+            let a_off = if p.a_broadcasts { 0 } else { batch * p.a_batch_stride };
+            let b_off = if p.b_broadcasts { 0 } else { batch * p.b_batch_stride };
+            let o_off = batch * p.o_batch_stride;
+            matmul_naive(
+                &a_f[a_off..],
+                &b_f[b_off..],
+                &mut buf[o_off..],
+                p.m,
+                p.k,
+                p.n,
+            );
+        }
+
+        output.set_dims(&p.out_dims[..p.out_rank]);
+        Ok(())
+    }
+}
+
 impl Layer for MatMul {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let a = get_tensor(values, &self.inputs[0])?;
@@ -113,18 +159,46 @@ impl Layer for MatMul {
             } else {
                 batch * p.b_batch_stride
             };
-            for i in 0..p.m {
-                for j in 0..p.n {
-                    let mut sum = 0.0f32;
-                    for pk in 0..p.k {
-                        sum += a_f[a_off + i * p.k + pk] * b_f[b_off + pk * p.n + j];
-                    }
-                    buf[batch * p.o_batch_stride + i * p.n + j] = sum;
-                }
-            }
+            let o_off = batch * p.o_batch_stride;
+            crate::blas::sgemm(
+                p.m,
+                p.n,
+                p.k,
+                1.0,
+                &a_f[a_off..],
+                p.k,
+                false,
+                &b_f[b_off..],
+                p.n,
+                false,
+                0.0,
+                &mut buf[o_off..],
+                p.n,
+            );
         }
 
         output.set_dims(&p.out_dims[..p.out_rank]);
         Ok(())
+    }
+}
+
+/// Naive reference implementation for correctness testing.
+pub fn matmul_naive(
+    a: &[f32],
+    b: &[f32],
+    c: &mut [f32],
+    m: usize,
+    k: usize,
+    n: usize,
+) {
+    c.fill(0.0);
+    for i in 0..m {
+        for j in 0..n {
+            let mut sum = 0.0f32;
+            for pk in 0..k {
+                sum += a[i * k + pk] * b[pk * n + j];
+            }
+            c[i * n + j] = sum;
+        }
     }
 }

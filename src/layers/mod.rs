@@ -135,8 +135,72 @@ pub fn binary_op(
 
     let a_f = a.floats();
     let b_f = b.floats();
-    let mut index = [0usize; 8];
 
+    // Fast path: identical shapes — no broadcast needed
+    if a.dims.as_slice() == b_dims {
+        for i in 0..numel {
+            buf[i] = op(a_f[i], b_f[i]);
+        }
+        output.set_dims(out_dims);
+        return Ok(());
+    }
+
+    // Fast path: b is scalar
+    if b_f.len() == 1 {
+        let bv = b_f[0];
+        for i in 0..numel {
+            buf[i] = op(a_f[i], bv);
+        }
+        output.set_dims(out_dims);
+        return Ok(());
+    }
+
+    // Fast path: a is scalar
+    if a_f.len() == 1 {
+        let av = a_f[0];
+        for i in 0..numel {
+            buf[i] = op(av, b_f[i]);
+        }
+        output.set_dims(out_dims);
+        return Ok(());
+    }
+
+    // Fast path: per-channel broadcast where b has one non-1 dim matching a
+    // Covers common patterns like [N,C,H,W] + [1,C,1,1] or [N,C,H,W] + [C]
+    if a_f.len() == numel && b_f.len() > 1 && b_f.len() < numel {
+        // Compute b's strides into the output space
+        let b_rank = b_dims.len();
+        let offset = ndim - b_rank;
+        // Build a stride multiplier for b indexing
+        let mut inner = 1usize;
+        let mut b_stride = 0usize;
+        let mut single_axis = true;
+        let mut non1_count = 0usize;
+        for i in (0..b_rank).rev() {
+            if b_dims[i] != 1 {
+                non1_count += 1;
+                if non1_count == 1 {
+                    b_stride = inner;
+                } else {
+                    single_axis = false;
+                    break;
+                }
+            }
+            inner *= out_dims[i + offset];
+        }
+        if single_axis && non1_count == 1 {
+            let b_len = b_f.len();
+            for i in 0..numel {
+                let bi = (i / b_stride) % b_len;
+                buf[i] = op(a_f[i], b_f[bi]);
+            }
+            output.set_dims(out_dims);
+            return Ok(());
+        }
+    }
+
+    // General fallback with per-element broadcast index
+    let mut index = [0usize; 8];
     for val in buf.iter_mut() {
         let ai = broadcast_index(&index[..ndim], &a.dims, out_dims);
         let bi = broadcast_index(&index[..ndim], b_dims, out_dims);

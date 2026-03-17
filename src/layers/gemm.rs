@@ -110,38 +110,63 @@ impl Layer for Gemm {
         let a_f = a.floats();
         let b_f = b.floats();
         let buf = output.as_mut_f32(m * n);
-        for i in 0..m {
-            for j in 0..n {
-                let mut sum = 0.0f32;
-                for p in 0..k {
-                    let a_val = if self.trans_a {
-                        a_f[p * m + i]
-                    } else {
-                        a_f[i * k + p]
-                    };
-                    let b_val = if self.trans_b {
-                        b_f[j * k + p]
-                    } else {
-                        b_f[p * n + j]
-                    };
-                    sum += a_val * b_val;
-                }
-                buf[i * n + j] = self.alpha * sum;
-            }
-        }
 
+        // If we have a bias, pre-fill the output with beta*C, then accumulate with sgemm
         if let Some(c_tensor) = c_tensor {
             let c_f = c_tensor.floats();
-            let ndim = 2.max(c_tensor.dims.len());
-            let mut c_shape = [0usize; 8];
-            broadcast_shape_into(&[m, n], &c_tensor.dims, &mut c_shape[..ndim]);
-            for i in 0..m {
-                for j in 0..n {
-                    let idx = [i, j];
-                    let ci = broadcast_index(&idx, &c_tensor.dims, &c_shape[..ndim]);
-                    buf[i * n + j] += self.beta * c_f[ci];
+            if c_tensor.dims.as_slice() == [m, n] {
+                // C is already m x n, copy directly
+                buf[..m * n].copy_from_slice(&c_f[..m * n]);
+            } else {
+                // Broadcast C into buf
+                let ndim = 2.max(c_tensor.dims.len());
+                let mut c_shape = [0usize; 8];
+                broadcast_shape_into(&[m, n], &c_tensor.dims, &mut c_shape[..ndim]);
+                for i in 0..m {
+                    for j in 0..n {
+                        let idx = [i, j];
+                        let ci = broadcast_index(&idx, &c_tensor.dims, &c_shape[..ndim]);
+                        buf[i * n + j] = c_f[ci];
+                    }
                 }
             }
+
+            let lda = if self.trans_a { m } else { k };
+            let ldb = if self.trans_b { k } else { n };
+            crate::blas::sgemm(
+                m,
+                n,
+                k,
+                self.alpha,
+                a_f,
+                lda,
+                self.trans_a,
+                b_f,
+                ldb,
+                self.trans_b,
+                self.beta,
+                buf,
+                n,
+            );
+        } else {
+            buf.fill(0.0);
+            let lda = if self.trans_a { m } else { k };
+            let ldb = if self.trans_b { k } else { n };
+            crate::blas::sgemm(
+                m,
+                n,
+                k,
+                self.alpha,
+                a_f,
+                lda,
+                self.trans_a,
+                b_f,
+                ldb,
+                self.trans_b,
+                0.0,
+                buf,
+                n,
+            );
         }
 
         output.set_dims(&[m, n]);

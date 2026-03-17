@@ -9,6 +9,8 @@ exclude = ["fixtures/"]
 
 [features]
 cli = ["dep:clap", "dep:image", "dep:prost-reflect", "dep:serde_json"]
+accelerate = []
+openblas = []
 
 [dependencies]
 prost = "0"
@@ -27,6 +29,10 @@ criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
 name = "inference"
+harness = false
+
+[[bench]]
+name = "kernels"
 harness = false
 
 [build-dependencies]

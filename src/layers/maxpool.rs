@@ -165,29 +165,59 @@ impl Layer for MaxPool {
         let buf = output.as_mut_f32(p.total);
         buf.fill(f32::NEG_INFINITY);
 
+        // Compute the range of output pixels that don't need bounds checks
+        let oh_safe_start = if p.p0 > 0 { (p.p0 + sh - 1) / sh } else { 0 };
+        let ow_safe_start = if p.p1 > 0 { (p.p1 + sw - 1) / sw } else { 0 };
+        let oh_safe_end = if p.h_in + p.p0 >= kh {
+            ((p.h_in + p.p0 - kh) / sh + 1).min(p.h_out)
+        } else {
+            0
+        };
+        let ow_safe_end = if p.w_in + p.p1 >= kw {
+            ((p.w_in + p.p1 - kw) / sw + 1).min(p.w_out)
+        } else {
+            0
+        };
+
         for batch in 0..p.n {
             for ch in 0..p.c {
+                let in_base = (batch * p.c + ch) * p.h_in * p.w_in;
+                let out_base = (batch * p.c + ch) * p.h_out * p.w_out;
                 for oh in 0..p.h_out {
                     for ow in 0..p.w_out {
                         let mut max_val = f32::NEG_INFINITY;
-                        for fh in 0..kh {
-                            for fw in 0..kw {
-                                let ih = oh * sh + fh;
-                                let iw = ow * sw + fw;
-                                if ih >= p.p0
-                                    && iw >= p.p1
-                                    && ih - p.p0 < p.h_in
-                                    && iw - p.p1 < p.w_in
-                                {
-                                    let ih = ih - p.p0;
-                                    let iw = iw - p.p1;
-                                    let idx = ((batch * p.c + ch) * p.h_in + ih) * p.w_in + iw;
-                                    max_val = max_val.max(input_f[idx]);
+                        if oh >= oh_safe_start
+                            && oh < oh_safe_end
+                            && ow >= ow_safe_start
+                            && ow < ow_safe_end
+                        {
+                            // No bounds checks needed
+                            let ih_start = oh * sh - p.p0;
+                            let iw_start = ow * sw - p.p1;
+                            for fh in 0..kh {
+                                let row = in_base + (ih_start + fh) * p.w_in + iw_start;
+                                for fw in 0..kw {
+                                    max_val = max_val.max(input_f[row + fw]);
+                                }
+                            }
+                        } else {
+                            for fh in 0..kh {
+                                for fw in 0..kw {
+                                    let ih = oh * sh + fh;
+                                    let iw = ow * sw + fw;
+                                    if ih >= p.p0
+                                        && iw >= p.p1
+                                        && ih - p.p0 < p.h_in
+                                        && iw - p.p1 < p.w_in
+                                    {
+                                        let idx =
+                                            in_base + (ih - p.p0) * p.w_in + (iw - p.p1);
+                                        max_val = max_val.max(input_f[idx]);
+                                    }
                                 }
                             }
                         }
-                        let out_idx = ((batch * p.c + ch) * p.h_out + oh) * p.w_out + ow;
-                        buf[out_idx] = max_val;
+                        buf[out_base + oh * p.w_out + ow] = max_val;
                     }
                 }
             }
