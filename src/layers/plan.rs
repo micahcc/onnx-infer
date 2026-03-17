@@ -76,6 +76,8 @@ use crate::layers::shape_op;
 use crate::layers::sigmoid;
 use crate::layers::slice;
 use crate::layers::softmax;
+use crate::layers::softplus;
+use crate::layers::unary_ops;
 use crate::layers::split;
 use crate::layers::sqrt;
 use crate::layers::squeeze;
@@ -592,6 +594,7 @@ pub fn build_node(
             get_attr_int(node, "axis").unwrap_or(-1),
             input_shapes[0],
         )),
+        OpType::Softplus => Box::new(softplus::Softplus::new(inputs)),
         OpType::Add => {
             let lb = get_attr_int(node, "broadcast").unwrap_or(0) != 0;
             let axis = get_attr_int(node, "axis").unwrap_or(0) as usize;
@@ -853,6 +856,47 @@ pub fn build_node(
         )),
         OpType::Sum => Box::new(sum::Sum::new(inputs)),
         OpType::Where => Box::new(where_op::Where::new(inputs)),
+        // Unary ops
+        OpType::Sin => Box::new(unary_ops::Sin::new(inputs)),
+        OpType::Cos => Box::new(unary_ops::Cos::new(inputs)),
+        OpType::Tan => Box::new(unary_ops::Tan::new(inputs)),
+        OpType::Asin => Box::new(unary_ops::Asin::new(inputs)),
+        OpType::Acos => Box::new(unary_ops::Acos::new(inputs)),
+        OpType::Atan => Box::new(unary_ops::Atan::new(inputs)),
+        OpType::Sinh => Box::new(unary_ops::Sinh::new(inputs)),
+        OpType::Cosh => Box::new(unary_ops::Cosh::new(inputs)),
+        OpType::Asinh => Box::new(unary_ops::Asinh::new(inputs)),
+        OpType::Acosh => Box::new(unary_ops::Acosh::new(inputs)),
+        OpType::Atanh => Box::new(unary_ops::Atanh::new(inputs)),
+        OpType::Erf => Box::new(unary_ops::Erf::new(inputs)),
+        OpType::Sign => Box::new(unary_ops::Sign::new(inputs)),
+        OpType::Neg => Box::new(unary_ops::Neg::new(inputs)),
+        OpType::Reciprocal => Box::new(unary_ops::Reciprocal::new(inputs)),
+        OpType::Softsign => Box::new(unary_ops::Softsign::new(inputs)),
+        OpType::IsNaN => Box::new(unary_ops::IsNaN::new(inputs)),
+        OpType::IsInf => Box::new(unary_ops::IsInf::new(inputs)),
+        OpType::Elu => Box::new(unary_ops::Elu::new(
+            inputs,
+            get_attr_float(node, "alpha").unwrap_or(1.0),
+        )),
+        OpType::Celu => Box::new(unary_ops::Celu::new(
+            inputs,
+            get_attr_float(node, "alpha").unwrap_or(1.0),
+        )),
+        OpType::Selu => Box::new(unary_ops::Selu::new(
+            inputs,
+            get_attr_float(node, "alpha").unwrap_or(1.67326319),
+            get_attr_float(node, "gamma").unwrap_or(1.05070102),
+        )),
+        OpType::HardSigmoid => Box::new(unary_ops::HardSigmoid::new(
+            inputs,
+            get_attr_float(node, "alpha").unwrap_or(0.2),
+            get_attr_float(node, "beta").unwrap_or(0.5),
+        )),
+        OpType::ThresholdedRelu => Box::new(unary_ops::ThresholdedRelu::new(
+            inputs,
+            get_attr_float(node, "alpha").unwrap_or(1.0),
+        )),
         OpType::Loop | OpType::Split | OpType::If | OpType::TopK | OpType::Scan => {
             unreachable!()
         }

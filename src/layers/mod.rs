@@ -61,6 +61,8 @@ pub mod shape_op;
 pub mod sigmoid;
 pub mod slice;
 pub mod softmax;
+pub mod softplus;
+pub mod unary_ops;
 pub mod split;
 pub mod sqrt;
 pub mod squeeze;

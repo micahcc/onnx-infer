@@ -15,22 +15,33 @@ use crate::onnx::NodeProto;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpType {
     Abs,
+    Acos,
+    Acosh,
     Add,
     ArgMax,
+    Asin,
+    Asinh,
+    Atan,
+    Atanh,
     BatchNormalization,
     Cast,
     CategoryMapper,
     Ceil,
+    Celu,
     Clip,
     Compress,
     Concat,
     Constant,
     ConstantOfShape,
     Conv,
+    Cos,
+    Cosh,
     DequantizeLinear,
     Div,
     Dropout,
+    Elu,
     Equal,
+    Erf,
     Expand,
     Exp,
     Flatten,
@@ -39,9 +50,12 @@ pub enum OpType {
     Gemm,
     GlobalAveragePool,
     Greater,
+    HardSigmoid,
     Hardmax,
     Identity,
     If,
+    IsInf,
+    IsNaN,
     Lstm,
     LeakyRelu,
     Less,
@@ -52,6 +66,7 @@ pub enum OpType {
     MaxPool,
     Min,
     Mul,
+    Neg,
     NonMaxSuppression,
     NonZero,
     QLinearAdd,
@@ -60,6 +75,7 @@ pub enum OpType {
     QLinearMatMul,
     QuantizeLinear,
     Range,
+    Reciprocal,
     ReduceMax,
     ReduceMin,
     ReduceSum,
@@ -70,16 +86,24 @@ pub enum OpType {
     Round,
     Scan,
     ScatterElements,
+    Selu,
     Shape,
     Sigmoid,
+    Sign,
+    Sin,
+    Sinh,
     Slice,
     Softmax,
+    Softplus,
+    Softsign,
     Split,
     Sqrt,
     Squeeze,
     Sub,
     Sum,
+    Tan,
     Tanh,
+    ThresholdedRelu,
     Tile,
     TopK,
     Transpose,
@@ -92,22 +116,33 @@ impl OpType {
     pub fn parse(s: &str) -> std::result::Result<Self, String> {
         match s {
             "Abs" => Ok(Self::Abs),
+            "Acos" => Ok(Self::Acos),
+            "Acosh" => Ok(Self::Acosh),
             "Add" => Ok(Self::Add),
             "ArgMax" => Ok(Self::ArgMax),
+            "Asin" => Ok(Self::Asin),
+            "Asinh" => Ok(Self::Asinh),
+            "Atan" => Ok(Self::Atan),
+            "Atanh" => Ok(Self::Atanh),
             "BatchNormalization" => Ok(Self::BatchNormalization),
             "Cast" => Ok(Self::Cast),
             "CategoryMapper" => Ok(Self::CategoryMapper),
             "Ceil" => Ok(Self::Ceil),
+            "Celu" => Ok(Self::Celu),
             "Clip" => Ok(Self::Clip),
             "Compress" => Ok(Self::Compress),
             "Concat" => Ok(Self::Concat),
             "Constant" => Ok(Self::Constant),
             "ConstantOfShape" => Ok(Self::ConstantOfShape),
             "Conv" => Ok(Self::Conv),
+            "Cos" => Ok(Self::Cos),
+            "Cosh" => Ok(Self::Cosh),
             "DequantizeLinear" => Ok(Self::DequantizeLinear),
             "Div" => Ok(Self::Div),
             "Dropout" => Ok(Self::Dropout),
+            "Elu" => Ok(Self::Elu),
             "Equal" => Ok(Self::Equal),
+            "Erf" => Ok(Self::Erf),
             "Expand" => Ok(Self::Expand),
             "Exp" => Ok(Self::Exp),
             "Flatten" => Ok(Self::Flatten),
@@ -116,9 +151,12 @@ impl OpType {
             "Gemm" => Ok(Self::Gemm),
             "GlobalAveragePool" => Ok(Self::GlobalAveragePool),
             "Greater" => Ok(Self::Greater),
+            "HardSigmoid" => Ok(Self::HardSigmoid),
             "Hardmax" => Ok(Self::Hardmax),
             "Identity" => Ok(Self::Identity),
             "If" => Ok(Self::If),
+            "IsInf" => Ok(Self::IsInf),
+            "IsNaN" => Ok(Self::IsNaN),
             "LSTM" => Ok(Self::Lstm),
             "LeakyRelu" => Ok(Self::LeakyRelu),
             "Less" => Ok(Self::Less),
@@ -129,6 +167,7 @@ impl OpType {
             "MaxPool" => Ok(Self::MaxPool),
             "Min" => Ok(Self::Min),
             "Mul" => Ok(Self::Mul),
+            "Neg" => Ok(Self::Neg),
             "NonMaxSuppression" => Ok(Self::NonMaxSuppression),
             "NonZero" => Ok(Self::NonZero),
             "QLinearAdd" => Ok(Self::QLinearAdd),
@@ -137,6 +176,7 @@ impl OpType {
             "QLinearMatMul" => Ok(Self::QLinearMatMul),
             "QuantizeLinear" => Ok(Self::QuantizeLinear),
             "Range" => Ok(Self::Range),
+            "Reciprocal" => Ok(Self::Reciprocal),
             "ReduceMax" => Ok(Self::ReduceMax),
             "ReduceMin" => Ok(Self::ReduceMin),
             "ReduceSum" => Ok(Self::ReduceSum),
@@ -147,16 +187,24 @@ impl OpType {
             "Round" => Ok(Self::Round),
             "Scan" => Ok(Self::Scan),
             "ScatterElements" => Ok(Self::ScatterElements),
+            "Selu" => Ok(Self::Selu),
             "Shape" => Ok(Self::Shape),
             "Sigmoid" => Ok(Self::Sigmoid),
+            "Sign" => Ok(Self::Sign),
+            "Sin" => Ok(Self::Sin),
+            "Sinh" => Ok(Self::Sinh),
             "Slice" => Ok(Self::Slice),
             "Softmax" => Ok(Self::Softmax),
+            "Softplus" => Ok(Self::Softplus),
+            "Softsign" => Ok(Self::Softsign),
             "Split" => Ok(Self::Split),
             "Sqrt" => Ok(Self::Sqrt),
             "Squeeze" => Ok(Self::Squeeze),
             "Sub" => Ok(Self::Sub),
             "Sum" => Ok(Self::Sum),
+            "Tan" => Ok(Self::Tan),
             "Tanh" => Ok(Self::Tanh),
+            "ThresholdedRelu" => Ok(Self::ThresholdedRelu),
             "Tile" => Ok(Self::Tile),
             "TopK" => Ok(Self::TopK),
             "Transpose" => Ok(Self::Transpose),
@@ -180,12 +228,36 @@ impl OpType {
             | Self::Ceil
             | Self::Round
             | Self::Softmax
+            | Self::Softplus
+            | Self::Softsign
             | Self::Log
             | Self::Tanh
             | Self::Floor
             | Self::Sqrt
             | Self::Abs
-            | Self::Hardmax => &[F],
+            | Self::Hardmax
+            | Self::Sin
+            | Self::Cos
+            | Self::Tan
+            | Self::Asin
+            | Self::Acos
+            | Self::Atan
+            | Self::Sinh
+            | Self::Cosh
+            | Self::Asinh
+            | Self::Acosh
+            | Self::Atanh
+            | Self::Erf
+            | Self::Sign
+            | Self::Neg
+            | Self::Reciprocal
+            | Self::Elu
+            | Self::Celu
+            | Self::Selu
+            | Self::HardSigmoid
+            | Self::ThresholdedRelu
+            | Self::IsNaN
+            | Self::IsInf => &[F],
             Self::Conv => &[F, F, F],
             Self::MatMul => &[F, F],
             Self::Gemm => &[F, F, F],
@@ -207,7 +279,9 @@ impl OpType {
             | Self::Greater
             | Self::NonZero
             | Self::ArgMax
-            | Self::CategoryMapper => DType::Int64,
+            | Self::CategoryMapper
+            | Self::IsNaN
+            | Self::IsInf => DType::Int64,
             Self::Constant => node
                 .attribute
                 .iter()
@@ -281,6 +355,8 @@ impl OpType {
             | Self::Ceil
             | Self::Round
             | Self::Softmax
+            | Self::Softplus
+            | Self::Softsign
             | Self::Log
             | Self::Tanh
             | Self::Floor
@@ -293,7 +369,29 @@ impl OpType {
             | Self::Cast
             | Self::DequantizeLinear
             | Self::QuantizeLinear
-            | Self::ScatterElements => get_shape(0).cloned(),
+            | Self::ScatterElements
+            | Self::Sin
+            | Self::Cos
+            | Self::Tan
+            | Self::Asin
+            | Self::Acos
+            | Self::Atan
+            | Self::Sinh
+            | Self::Cosh
+            | Self::Asinh
+            | Self::Acosh
+            | Self::Atanh
+            | Self::Erf
+            | Self::Sign
+            | Self::Neg
+            | Self::Reciprocal
+            | Self::Elu
+            | Self::Celu
+            | Self::Selu
+            | Self::HardSigmoid
+            | Self::ThresholdedRelu
+            | Self::IsNaN
+            | Self::IsInf => get_shape(0).cloned(),
 
             Self::Add
             | Self::Sub
