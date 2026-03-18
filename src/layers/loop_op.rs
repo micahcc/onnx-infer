@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::DType;
-use crate::Dims;
-use crate::InferenceError;
-use crate::Result;
-use crate::Tensor;
 use crate::dims;
 use crate::get_tensor;
 use crate::layers::Plan;
 use crate::layers::PlanNode;
 use crate::onnx::GraphProto;
+use crate::DType;
+use crate::Dims;
+use crate::InferenceError;
+use crate::Result;
+use crate::Tensor;
 
 pub struct Loop {
     pub inputs: Vec<String>,
@@ -220,10 +220,10 @@ impl Loop {
 
         // Update outer references
         for name in &self.outer_refs {
-            if let Some(outer) = outer_values.get(name)
-                && let Some(body) = self.values.get_mut(name)
-            {
-                body.copy_from(outer);
+            if let Some(outer) = outer_values.get(name) {
+                if let Some(body) = self.values.get_mut(name) {
+                    body.copy_from(outer);
+                }
             }
         }
 

@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 
-use crate::DType;
-use crate::Dims;
-use crate::ONNX_INT32;
-use crate::ONNX_INT64;
-use crate::Tensor;
 use crate::broadcast_shape;
 use crate::dims;
 use crate::get_attr_int;
 use crate::get_attr_ints;
 use crate::get_attr_string;
 use crate::onnx::NodeProto;
+use crate::DType;
+use crate::Dims;
+use crate::Tensor;
+use crate::ONNX_INT32;
+use crate::ONNX_INT64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpType {
@@ -809,25 +809,25 @@ impl OpType {
 
             Self::Resize => {
                 let x = get_shape(0)?;
-                if let Some(sizes) = get_value(3)
-                    && sizes.numel() > 0
-                {
-                    return Some(match sizes.dtype() {
-                        DType::Int64 => sizes.ints().iter().map(|&v| v as usize).collect(),
-                        DType::Float => sizes.floats().iter().map(|&v| v as usize).collect(),
-                        DType::String => return None,
-                    });
+                if let Some(sizes) = get_value(3) {
+                    if sizes.numel() > 0 {
+                        return Some(match sizes.dtype() {
+                            DType::Int64 => sizes.ints().iter().map(|&v| v as usize).collect(),
+                            DType::Float => sizes.floats().iter().map(|&v| v as usize).collect(),
+                            DType::String => return None,
+                        });
+                    }
                 }
-                if let Some(scales) = get_value(2)
-                    && scales.numel() > 0
-                {
-                    let sf = scales.floats();
-                    return Some(
-                        x.iter()
-                            .zip(sf.iter())
-                            .map(|(&d, &s)| (d as f32 * s) as usize)
-                            .collect(),
-                    );
+                if let Some(scales) = get_value(2) {
+                    if scales.numel() > 0 {
+                        let sf = scales.floats();
+                        return Some(
+                            x.iter()
+                                .zip(sf.iter())
+                                .map(|(&d, &s)| (d as f32 * s) as usize)
+                                .collect(),
+                        );
+                    }
                 }
                 None
             }

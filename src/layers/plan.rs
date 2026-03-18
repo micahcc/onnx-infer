@@ -1,20 +1,10 @@
 use std::collections::HashMap;
 
-use crate::DType;
-use crate::Dims;
-use crate::InferenceError;
-use crate::ONNX_INT32;
-use crate::ONNX_INT64;
-use crate::ONNX_STRING;
-use crate::Result;
-use crate::Tensor;
 use crate::dims;
 use crate::get_attr_float;
 use crate::get_attr_int;
 use crate::get_attr_ints;
 use crate::get_attr_string;
-use crate::layers::Layer;
-use crate::layers::OpType;
 use crate::layers::abs;
 use crate::layers::add;
 use crate::layers::argmax;
@@ -89,7 +79,17 @@ use crate::layers::transpose;
 use crate::layers::unary_ops;
 use crate::layers::unsqueeze;
 use crate::layers::where_op;
+use crate::layers::Layer;
+use crate::layers::OpType;
 use crate::onnx::NodeProto;
+use crate::DType;
+use crate::Dims;
+use crate::InferenceError;
+use crate::Result;
+use crate::Tensor;
+use crate::ONNX_INT32;
+use crate::ONNX_INT64;
+use crate::ONNX_STRING;
 
 pub enum PlanNode {
     Single {
@@ -237,18 +237,19 @@ impl Plan {
                 if input_name.is_empty() {
                     continue;
                 }
-                if let Some(Some(expected_dt)) = expected.get(i)
-                    && let Some(&actual_dt) = type_map.get(input_name)
-                    && actual_dt != *expected_dt
-                {
-                    let cast_name = format!("__auto_cast_{cast_counter}__");
-                    cast_counter += 1;
-                    nodes.push(PlanNode::Single {
-                        output: cast_name.clone(),
-                        layer: Box::new(auto_cast::AutoCastF32::new(input_name.clone())),
-                    });
-                    type_map.insert(cast_name.clone(), DType::Float);
-                    modified_inputs[i] = cast_name;
+                if let Some(Some(expected_dt)) = expected.get(i) {
+                    if let Some(&actual_dt) = type_map.get(input_name) {
+                        if actual_dt != *expected_dt {
+                            let cast_name = format!("__auto_cast_{cast_counter}__");
+                            cast_counter += 1;
+                            nodes.push(PlanNode::Single {
+                                output: cast_name.clone(),
+                                layer: Box::new(auto_cast::AutoCastF32::new(input_name.clone())),
+                            });
+                            type_map.insert(cast_name.clone(), DType::Float);
+                            modified_inputs[i] = cast_name;
+                        }
+                    }
                 }
             }
 
@@ -272,9 +273,10 @@ impl Plan {
                 }
             } else if let Some(shape) =
                 op.infer_output_shape(node, &node.input, &shape_map, &known_values)
-                && let Some(out_name) = out_name
             {
-                shape_map.insert(out_name.clone(), shape);
+                if let Some(out_name) = out_name {
+                    shape_map.insert(out_name.clone(), shape);
+                }
             }
 
             // For Split, infer types and shapes for all outputs
@@ -502,10 +504,10 @@ pub fn build_node(
     let empty: &[usize] = &[];
     let mut input_shapes: [&[usize]; 8] = [empty; 8];
     for (i, name) in inputs.iter().enumerate().take(8) {
-        if !name.is_empty()
-            && let Some(s) = shape_map.get(name)
-        {
-            input_shapes[i] = s.as_slice();
+        if !name.is_empty() {
+            if let Some(s) = shape_map.get(name) {
+                input_shapes[i] = s.as_slice();
+            }
         }
     }
 
@@ -996,11 +998,14 @@ pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
         if input_name.is_empty() {
             continue;
         }
-        if let Some(Some(expected_dt)) = expected.get(i)
-            && let Some(tensor) = values.get(input_name)
-            && tensor.dtype() != *expected_dt
-        {
-            to_cast.push((i, input_name.clone()));
+        if let Some(Some(expected_dt)) = expected.get(i) {
+            if let Some(tensor) = values.get(input_name) {
+                if tensor.dtype() != *expected_dt {
+                    {
+                        to_cast.push((i, input_name.clone()));
+                    }
+                }
+            }
         }
     }
 

@@ -1,19 +1,42 @@
 let
-  # Pinned nixpkgs, deterministic. Last updated: 2026-01-05.
-  pkgs = import (fetchTarball (
-    "https://github.com/NixOS/nixpkgs/archive/c8ba0d39ac852f040726e33bb08c24a953934568.tar.gz"
-  )) { };
+  pkgs = import
+    (fetchTarball (
+      "https://github.com/NixOS/nixpkgs/archive/f0549fcd9330025d103fce421c6e17a4d70ed4d4.tar.gz"
+    ))
+    { };
 
-  #xnnpack = pkgs.callPackage ./nix/xnnpack.nix { };
+  nixpkgs = import <nixpkgs> { };
+
+  # Use nightly Rust with rustfmt and other tools
+  rustChannels = nixpkgs.latest.rustChannels;
+  rustNightly = (rustChannels.nightly.rust.override {
+    extensions = [
+      "rust-src"
+      "rustfmt-preview"
+      "clippy-preview"
+      "rust-analysis"
+    ];
+  });
 in
 pkgs.mkShell {
-  #XNNPACK_DIR = "${xnnpack}";
   LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+
+  # Set environment variables for OpenBLAS
+  LD_LIBRARY_PATH = "${pkgs.openblas}/lib";
+
   buildInputs = [
-    #xnnpack
+    # Rust nightly toolchain
+    rustNightly
+
+    # OpenBLAS for optimized matrix operations
+    pkgs.openblas
+
+    # Development tools
     pkgs.llvmPackages.clang
-    pkgs.cargo
-    pkgs.rustc
-    (pkgs.rustfmt.override { asNightly = true; })
+    pkgs.pkg-config
+
+    # Optional debugging tools
+    pkgs.lldb
+    pkgs.gdb
   ];
 }

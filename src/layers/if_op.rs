@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use crate::DType;
-use crate::Result;
-use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::plan::execute_node;
 use crate::onnx::GraphProto;
+use crate::DType;
+use crate::Result;
+use crate::Tensor;
 
 pub struct If {
     pub inputs: Vec<String>,
@@ -46,11 +46,10 @@ impl If {
         // Execute the branch graph using the outer values
         // Copy initializers into values
         for init in &branch.initializer {
-            if !init.name.is_empty()
-                && !values.contains_key(&init.name)
-                && let Ok(t) = Tensor::from_proto(init)
-            {
-                values.insert(init.name.clone(), t);
+            if !init.name.is_empty() && !values.contains_key(&init.name) {
+                if let Ok(t) = Tensor::from_proto(init) {
+                    values.insert(init.name.clone(), t);
+                }
             }
         }
 
@@ -63,11 +62,12 @@ impl If {
             if out_name.is_empty() {
                 continue;
             }
-            if let Some(branch_out) = branch.output.get(i)
-                && branch_out.name != *out_name
-                && let Some(src) = values.remove(&branch_out.name)
-            {
-                values.insert(out_name.clone(), src);
+            if let Some(branch_out) = branch.output.get(i) {
+                if branch_out.name != *out_name {
+                    if let Some(src) = values.remove(&branch_out.name) {
+                        values.insert(out_name.clone(), src);
+                    }
+                }
             }
         }
 
