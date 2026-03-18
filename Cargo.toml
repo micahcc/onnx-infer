@@ -10,7 +10,7 @@ exclude = ["fixtures/"]
 [features]
 cli = ["dep:clap", "dep:image", "dep:prost-reflect", "dep:serde_json"]
 accelerate = []
-openblas = []
+blas = []
 
 [dependencies]
 prost = "0"

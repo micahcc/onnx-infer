@@ -28,8 +28,8 @@ pkgs.mkShell {
     # Rust nightly toolchain
     rustNightly
 
-    # OpenBLAS for optimized matrix operations
-    pkgs.openblas
+    # BLAS for optimized matrix operations
+    pkgs.blas
 
     # Development tools
     pkgs.llvmPackages.clang

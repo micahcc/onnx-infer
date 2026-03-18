@@ -1,4 +1,4 @@
-#[cfg(any(feature = "accelerate", feature = "openblas"))]
+#[cfg(any(feature = "accelerate", feature = "blas"))]
 unsafe extern "C" {
     fn cblas_sgemm(
         order: i32,
@@ -22,7 +22,7 @@ unsafe extern "C" {
 ///
 /// All matrices are row-major.
 /// A is m x k (or k x m if transposed), B is k x n (or n x k if transposed), C is m x n.
-#[cfg(any(feature = "accelerate", feature = "openblas"))]
+#[cfg(any(feature = "accelerate", feature = "blas"))]
 pub fn sgemm(
     m: usize,
     n: usize,
@@ -187,7 +187,7 @@ unsafe fn i16_gemm_neon(
 }
 
 /// Fallback: naive sgemm for platforms without system BLAS (e.g. wasm).
-#[cfg(not(any(feature = "accelerate", feature = "openblas")))]
+#[cfg(not(any(feature = "accelerate", feature = "blas")))]
 pub fn sgemm(
     m: usize,
     n: usize,

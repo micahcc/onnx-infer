@@ -4,8 +4,8 @@ fn main() -> Result<()> {
     #[cfg(feature = "accelerate")]
     println!("cargo:rustc-link-lib=framework=Accelerate");
 
-    #[cfg(feature = "openblas")]
-    println!("cargo:rustc-link-lib=openblas");
+    #[cfg(feature = "blas")]
+    println!("cargo:rustc-link-lib=blas");
 
     let file_descriptors =
         protox::compile(["proto/onnx.proto"], ["proto/"]).expect("protox compile");
