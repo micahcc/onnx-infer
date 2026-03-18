@@ -25,32 +25,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for input in &graph.input {
         println!("  {}", input.name);
         if let Some(typ) = &input.r#type {
-            if let Some(value) = &typ.value {
-                if let onnx_infer::onnx::type_proto::Value::TensorType(tt) = value {
-                    if let Some(shape) = &tt.shape {
-                        print!("    Shape: [");
-                        let mut first = true;
-                        for dim in &shape.dim {
-                            if !first {
-                                print!(", ");
+            if let Some(onnx_infer::onnx::type_proto::Value::TensorType(tt)) = &typ.value {
+                if let Some(shape) = &tt.shape {
+                    print!("    Shape: [");
+                    let mut first = true;
+                    for dim in &shape.dim {
+                        if !first {
+                            print!(", ");
+                        }
+                        first = false;
+                        match &dim.value {
+                            Some(
+                                onnx_infer::onnx::tensor_shape_proto::dimension::Value::DimValue(v),
+                            ) => {
+                                print!("{v}");
                             }
-                            first = false;
-                            match &dim.value {
-                                Some(onnx_infer::onnx::tensor_shape_proto::dimension::Value::DimValue(v)) => {
-                                    print!("{}", v);
-                                }
-                                Some(onnx_infer::onnx::tensor_shape_proto::dimension::Value::DimParam(s)) => {
-                                    print!("{}", s);
-                                }
-                                None => {
-                                    print!("?");
-                                }
+                            Some(
+                                onnx_infer::onnx::tensor_shape_proto::dimension::Value::DimParam(s),
+                            ) => {
+                                print!("{s}");
+                            }
+                            None => {
+                                print!("?");
                             }
                         }
-                        println!("]");
                     }
-                    println!("    Data type: {}", tt.elem_type);
+                    println!("]");
                 }
+                println!("    Data type: {}", tt.elem_type);
             }
         }
     }
@@ -59,32 +61,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for output in &graph.output {
         println!("  {}", output.name);
         if let Some(typ) = &output.r#type {
-            if let Some(value) = &typ.value {
-                if let onnx_infer::onnx::type_proto::Value::TensorType(tt) = value {
-                    if let Some(shape) = &tt.shape {
-                        print!("    Shape: [");
-                        let mut first = true;
-                        for dim in &shape.dim {
-                            if !first {
-                                print!(", ");
+            if let Some(onnx_infer::onnx::type_proto::Value::TensorType(tt)) = &typ.value {
+                if let Some(shape) = &tt.shape {
+                    print!("    Shape: [");
+                    let mut first = true;
+                    for dim in &shape.dim {
+                        if !first {
+                            print!(", ");
+                        }
+                        first = false;
+                        match &dim.value {
+                            Some(
+                                onnx_infer::onnx::tensor_shape_proto::dimension::Value::DimValue(v),
+                            ) => {
+                                print!("{v}");
                             }
-                            first = false;
-                            match &dim.value {
-                                Some(onnx_infer::onnx::tensor_shape_proto::dimension::Value::DimValue(v)) => {
-                                    print!("{}", v);
-                                }
-                                Some(onnx_infer::onnx::tensor_shape_proto::dimension::Value::DimParam(s)) => {
-                                    print!("{}", s);
-                                }
-                                None => {
-                                    print!("?");
-                                }
+                            Some(
+                                onnx_infer::onnx::tensor_shape_proto::dimension::Value::DimParam(s),
+                            ) => {
+                                print!("{s}");
+                            }
+                            None => {
+                                print!("?");
                             }
                         }
-                        println!("]");
                     }
-                    println!("    Data type: {}", tt.elem_type);
+                    println!("]");
                 }
+                println!("    Data type: {}", tt.elem_type);
             }
         }
     }
@@ -113,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     for (i, node) in complex_nodes.iter().enumerate().take(10) {
-        println!("Node {}:", i);
+        println!("Node {i}:");
         println!("  Op: {}", node.op_type);
         println!("  Name: {}", node.name);
         println!("  Inputs: {:?}", node.input);

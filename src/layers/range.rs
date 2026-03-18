@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use crate::DType;
@@ -38,13 +39,12 @@ impl Layer for Range {
                 let s = start.ints()[0];
                 let l = limit.ints()[0];
                 let d = delta.ints()[0];
-                let n = if d > 0 {
-                    ((l - s + d - 1) / d).max(0) as usize
-                } else if d < 0 {
-                    ((s - l - d - 1) / (-d)).max(0) as usize
-                } else {
-                    0
+                let n = match d.cmp(&0) {
+                    Ordering::Greater => ((l - s + d - 1) / d).max(0) as usize,
+                    Ordering::Less => ((s - l - d - 1) / (-d)).max(0) as usize,
+                    Ordering::Equal => 0,
                 };
+
                 let buf = output.as_mut_i64(n);
                 for (i, v) in buf.iter_mut().enumerate() {
                     *v = s + (i as i64) * d;

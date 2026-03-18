@@ -620,7 +620,7 @@ impl OpType {
                         .filter(|&(i, _)| i != idx)
                         .map(|(_, &v)| v)
                         .product();
-                    #[allow(clippy::manual_checked_ops)]
+                    #[allow(clippy::arithmetic_side_effects)]
                     if known > 0 {
                         dims[idx] = total / known;
                     }
@@ -987,6 +987,6 @@ impl OpType {
 
 impl std::fmt::Display for OpType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }

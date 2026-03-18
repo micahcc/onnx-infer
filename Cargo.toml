@@ -54,3 +54,7 @@ required-features = ["cli"]
 name = "load_onnx"
 path = "src/bin/load_onnx.rs"
 required-features = ["cli"]
+
+[[bin]]
+name = "inspect_model"
+path = "src/bin/inspect_model.rs"

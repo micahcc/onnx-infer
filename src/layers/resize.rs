@@ -12,7 +12,7 @@ use crate::layers::Layer;
 /// various input parameter formats:
 ///
 /// 1. Explicit Output Sizes (ONNX opset 11+)
-///    ```
+///    ```rust,ignore
 ///    Resize[mode=nearest]
 ///      Input[0]: data[1, 64, 26, 26]      # Input tensor to resize
 ///      Input[1]: roi[] (optional)         # Region of interest (usually empty)
@@ -21,7 +21,7 @@ use crate::layers::Layer;
 ///    ```
 ///
 /// 2. Scale Factors in Third Input (ONNX opset 11)
-///    ```
+///    ```rust,ignore
 ///    Resize[mode=nearest]
 ///      Input[0]: data[1, 64, 26, 26]      # Input tensor to resize
 ///      Input[1]: roi[] (optional)         # Region of interest (usually empty)
@@ -30,7 +30,7 @@ use crate::layers::Layer;
 ///    ```
 ///
 /// 3. Scale Factors in Second Input (ONNX opset 10 or YOLOv4-style)
-///    ```
+///    ```rust,ignore
 ///    Resize[mode=nearest]
 ///      Input[0]: data[1, 64, 26, 26]      # Input tensor to resize
 ///      Input[1]: scales[1.0, 1.0, 2.0, 2.0] # Scale factors
@@ -230,9 +230,10 @@ impl Layer for Resize {
         let mut coord = [0usize; 8];
         let mut in_off = 0usize;
         // Initialize in_off from coord [0,0,...,0]
-        for ax in 0..rank {
-            in_off += coord_tables[ax][0];
+        for table in coord_tables.iter().take(rank) {
+            in_off += table[0];
         }
+        #[allow(clippy::needless_range_loop)]
         for out_flat in 0..numel {
             buf[out_flat] = input_f[in_off];
 

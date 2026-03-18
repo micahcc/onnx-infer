@@ -94,8 +94,8 @@ fn transpose_inner<T: Copy>(
     // Use an incrementing coordinate array to avoid division/modulo
     let mut coord = [0usize; 8];
     let mut in_off = 0usize;
-    for out_flat in 0..numel {
-        dst[out_flat] = src[in_off];
+    for (_out_flat, dst_value) in dst.iter_mut().enumerate().take(numel) {
+        *dst_value = src[in_off];
 
         // Increment coordinate and update in_off
         for d in (0..rank).rev() {
