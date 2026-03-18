@@ -74,6 +74,8 @@ pub mod transpose;
 pub mod unary_ops;
 pub mod unsqueeze;
 pub mod where_op;
+#[cfg(feature = "xnnpack")]
+pub mod xnnpack_subgraph;
 
 use std::collections::HashMap;
 

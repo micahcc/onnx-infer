@@ -17,8 +17,10 @@ let
       "rust-analysis"
     ];
   });
+  xnnpack = pkgs.callPackage ./nix/xnnpack.nix { };
 in
 pkgs.mkShell {
+  XNNPACK_DIR = "${xnnpack}";
   LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
   # Set environment variables for OpenBLAS
@@ -30,6 +32,7 @@ pkgs.mkShell {
 
     # BLAS for optimized matrix operations
     pkgs.blas
+    pkgs.xnnpack
 
     # Development tools
     pkgs.llvmPackages.clang

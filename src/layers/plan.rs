@@ -1,20 +1,10 @@
 use std::collections::HashMap;
 
-use crate::DType;
-use crate::Dims;
-use crate::InferenceError;
-use crate::ONNX_INT32;
-use crate::ONNX_INT64;
-use crate::ONNX_STRING;
-use crate::Result;
-use crate::Tensor;
 use crate::dims;
 use crate::get_attr_float;
 use crate::get_attr_int;
 use crate::get_attr_ints;
 use crate::get_attr_string;
-use crate::layers::Layer;
-use crate::layers::OpType;
 use crate::layers::abs;
 use crate::layers::add;
 use crate::layers::argmax;
@@ -89,7 +79,17 @@ use crate::layers::transpose;
 use crate::layers::unary_ops;
 use crate::layers::unsqueeze;
 use crate::layers::where_op;
+use crate::layers::Layer;
+use crate::layers::OpType;
 use crate::onnx::NodeProto;
+use crate::DType;
+use crate::Dims;
+use crate::InferenceError;
+use crate::Result;
+use crate::Tensor;
+use crate::ONNX_INT32;
+use crate::ONNX_INT64;
+use crate::ONNX_STRING;
 
 pub enum PlanNode {
     Single {
@@ -101,6 +101,8 @@ pub enum PlanNode {
     If(Box<if_op::If>),
     TopK(Box<topk::TopK>),
     Scan(Box<scan::Scan>),
+    #[cfg(feature = "xnnpack")]
+    XnnpackSubgraph(Box<super::xnnpack_subgraph::XnnpackSubgraph>),
 }
 
 pub struct Plan {
@@ -158,6 +160,28 @@ impl Plan {
         Some(dims)
     }
 
+    /// Extract shape from graph input, using 0 for dynamic/symbolic dimensions.
+    pub fn extract_shape_partial(input: &crate::onnx::ValueInfoProto) -> Option<Dims> {
+        let tt = match input.r#type.as_ref()?.value.as_ref()? {
+            crate::onnx::type_proto::Value::TensorType(tt) => tt,
+            _ => return None,
+        };
+        let shape_proto = tt.shape.as_ref()?;
+        if shape_proto.dim.is_empty() {
+            return None;
+        }
+        let mut dims = Dims::new();
+        for d in &shape_proto.dim {
+            match &d.value {
+                Some(crate::onnx::tensor_shape_proto::dimension::Value::DimValue(v)) if *v > 0 => {
+                    dims.push(*v as usize);
+                }
+                _ => dims.push(0), // symbolic or missing → 0
+            }
+        }
+        Some(dims)
+    }
+
     pub fn build_with_types(
         graph: &crate::onnx::GraphProto,
         input_sizes: &HashMap<String, Dims>,
@@ -206,19 +230,48 @@ impl Plan {
         for (name, tensor) in &initializers {
             shape_map.insert(name.clone(), tensor.dims.clone());
         }
-        // Merge graph-inferred input sizes first, then override with explicit ones
-        let inferred = Self::infer_input_sizes(graph);
-        for (name, dims) in &inferred {
-            shape_map.insert(name.clone(), dims.clone());
+        // Merge graph-inferred input sizes first, then override with explicit ones.
+        // Use partial shapes (with 0 for dynamic dims) so that user-provided
+        // input_sizes can selectively fill in just the dynamic dimensions.
+        let initializer_names: std::collections::HashSet<&str> =
+            graph.initializer.iter().map(|i| i.name.as_str()).collect();
+        for input in &graph.input {
+            if input.name.is_empty() || initializer_names.contains(input.name.as_str()) {
+                continue;
+            }
+            if let Some(shape) = Self::extract_shape_partial(input) {
+                // Only insert if fully concrete (no zeros) OR user will override
+                if shape.iter().all(|&d| d > 0) || input_sizes.contains_key(&input.name) {
+                    shape_map.insert(input.name.clone(), shape);
+                }
+            }
         }
-        for (name, dims) in input_sizes {
-            shape_map.insert(name.clone(), dims.clone());
+        // User-provided sizes: merge dimension-by-dimension, replacing 0s
+        for (name, user_dims) in input_sizes {
+            if let Some(existing) = shape_map.get_mut(name) {
+                if existing.len() == user_dims.len() {
+                    // Fill in zeros from user-provided dims
+                    for (i, d) in existing.iter_mut().enumerate() {
+                        if *d == 0 {
+                            *d = user_dims[i];
+                        }
+                    }
+                } else {
+                    // Different rank — use user dims entirely
+                    *existing = user_dims.clone();
+                }
+            } else {
+                shape_map.insert(name.clone(), user_dims.clone());
+            }
         }
 
         let mut known_values: HashMap<String, Tensor> = HashMap::new();
 
         let mut nodes = Vec::new();
         let mut cast_counter = 0usize;
+        // Parallel metadata for XNNPACK subgraph identification
+        #[cfg(feature = "xnnpack")]
+        let mut node_meta: Vec<Option<(OpType, Vec<String>, crate::onnx::NodeProto)>> = Vec::new();
 
         for node in &graph.node {
             let op = OpType::parse(&node.op_type).map_err(InferenceError::UnsupportedOperator)?;
@@ -246,6 +299,8 @@ impl Plan {
                                 output: cast_name.clone(),
                                 layer: Box::new(auto_cast::AutoCastF32::new(input_name.clone())),
                             });
+                            #[cfg(feature = "xnnpack")]
+                            node_meta.push(None); // auto-cast nodes are not XNNPACK-compatible
                             type_map.insert(cast_name.clone(), DType::Float);
                             modified_inputs[i] = cast_name;
                         }
@@ -320,7 +375,16 @@ impl Plan {
                 }
             }
 
+            #[cfg(feature = "xnnpack")]
+            node_meta.push(Some((op, modified_inputs.clone(), node.clone())));
             nodes.push(build_node(op, node, modified_inputs, &shape_map)?);
+        }
+
+        // XNNPACK subgraph compilation: find runs of compatible ops and compile them
+        #[cfg(feature = "xnnpack")]
+        {
+            nodes =
+                compile_xnnpack_subgraphs(nodes, node_meta, &shape_map, &type_map, &initializers)?;
         }
 
         // Pre-allocate tensors for all known shapes/types
@@ -1036,5 +1100,281 @@ pub fn execute_node(node: &NodeProto, values: &mut HashMap<String, Tensor>) -> R
         PlanNode::If(if_layer) => if_layer.execute(values),
         PlanNode::TopK(topk_layer) => topk_layer.execute(values),
         PlanNode::Scan(scan_layer) => scan_layer.execute(values),
+        #[cfg(feature = "xnnpack")]
+        PlanNode::XnnpackSubgraph(_) => Err(InferenceError::InvalidModel(
+            "XnnpackSubgraph cannot be executed via execute_node".into(),
+        )),
     }
+}
+
+/// Identify runs of XNNPACK-compatible ops and compile them into subgraph nodes.
+///
+/// A "run" is a maximal contiguous sequence of ops where:
+/// - The op is XNNPACK-compatible
+/// - All non-initializer inputs either come from within the run or from outside
+/// - The shapes are statically known (required for XNNPACK subgraph)
+/// - The op works on float data
+///
+/// Runs shorter than 2 nodes are not worth compiling.
+#[cfg(feature = "xnnpack")]
+fn compile_xnnpack_subgraphs(
+    mut nodes: Vec<PlanNode>,
+    node_meta: Vec<Option<(OpType, Vec<String>, crate::onnx::NodeProto)>>,
+    shape_map: &HashMap<String, Dims>,
+    type_map: &HashMap<String, DType>,
+    initializers: &HashMap<String, Tensor>,
+) -> Result<Vec<PlanNode>> {
+    use super::xnnpack_subgraph::{is_xnnpack_compatible, CapturedOp};
+
+    assert_eq!(nodes.len(), node_meta.len());
+
+    // Identify which nodes are XNNPACK-compatible single nodes with known shapes
+    let compatible: Vec<bool> = node_meta
+        .iter()
+        .map(|meta| {
+            let Some((op, inputs, node)) = meta else {
+                return false;
+            };
+            if !is_xnnpack_compatible(*op) {
+                return false;
+            }
+            // XNNPACK only handles Float — reject ops with non-Float outputs
+            for out in &node.output {
+                if !out.is_empty() {
+                    if let Some(&dt) = type_map.get(out) {
+                        if dt != DType::Float {
+                            return false;
+                        }
+                    }
+                }
+            }
+            // Also reject ops where non-initializer inputs are non-Float
+            for inp in inputs {
+                if !inp.is_empty() && !initializers.contains_key(inp) {
+                    if let Some(&dt) = type_map.get(inp) {
+                        if dt != DType::Float {
+                            return false;
+                        }
+                    }
+                }
+            }
+            // Spatial ops (Conv, MaxPool, GlobalAvgPool) require 4D input.
+            // If shapes are known at plan time, verify they are 4D.
+            // If shapes are unknown (dynamic spatial dims), allow them through —
+            // ensure_compiled will resolve shapes from runtime tensors and fall back
+            // to CPU if they turn out incompatible.
+            let needs_4d = matches!(
+                op,
+                OpType::Conv | OpType::MaxPool | OpType::GlobalAveragePool
+            );
+            if needs_4d {
+                let first_input = inputs.first().filter(|s| !s.is_empty());
+                if let Some(name) = first_input {
+                    if let Some(s) = shape_map.get(name) {
+                        if s.len() != 4 {
+                            return false;
+                        }
+                    }
+                    // else: shape unknown at plan time — allow through for lazy compilation
+                } else {
+                    return false;
+                }
+            }
+            // MaxPool with auto_pad or asymmetric padding
+            if *op == OpType::MaxPool {
+                let auto_pad = get_attr_string(node, "auto_pad").unwrap_or_default();
+                if !auto_pad.is_empty() && auto_pad != "NOTSET" {
+                    return false;
+                }
+                let pads = get_attr_ints(node, "pads").unwrap_or_default();
+                if pads.len() >= 4 && (pads[0] != pads[2] || pads[1] != pads[3]) {
+                    return false;
+                }
+            }
+            // Conv and Gemm require static weights
+            if matches!(op, OpType::Conv | OpType::Gemm) {
+                if inputs.len() < 2 || !initializers.contains_key(&inputs[1]) {
+                    return false;
+                }
+            }
+            // MatMul with static B uses fully_connected; dynamic B uses batch_matrix_multiply
+            // Both are fine, but we need shapes for batch_matrix_multiply
+            if *op == OpType::MatMul && inputs.len() >= 2 && !initializers.contains_key(&inputs[1])
+            {
+                let a = inputs.first().and_then(|n| shape_map.get(n));
+                let b = inputs.get(1).and_then(|n| shape_map.get(n));
+                if a.is_none() || b.is_none() {
+                    return false;
+                }
+            }
+            // Reshape/Flatten need known output shapes at compile time;
+            // ensure_compiled will infer them from runtime shapes if not
+            // available at plan time.
+            // BatchNorm requires all params in initializers
+            if *op == OpType::BatchNormalization {
+                if inputs.len() < 5 {
+                    return false;
+                }
+                for i in 1..5 {
+                    if !initializers.contains_key(&inputs[i]) {
+                        return false;
+                    }
+                }
+            }
+            // Concat: only allow when all inputs and output are 4D
+            // (non-4D concat axis semantics differ from spatial NCHW layout)
+            if *op == OpType::Concat {
+                for name in inputs.iter().chain(node.output.iter()) {
+                    if name.is_empty() {
+                        continue;
+                    }
+                    if let Some(s) = shape_map.get(name) {
+                        if s.len() != 4 {
+                            return false;
+                        }
+                    }
+                    // else: shape unknown — allow through for lazy compilation
+                }
+            }
+            true
+        })
+        .collect();
+
+    // Find contiguous runs of compatible nodes (min length 2)
+    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut i = 0;
+    while i < compatible.len() {
+        if compatible[i] {
+            let start = i;
+            while i < compatible.len() && compatible[i] {
+                i += 1;
+            }
+            if i - start >= 2 {
+                runs.push(start..i);
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    if runs.is_empty() {
+        return Ok(nodes);
+    }
+
+    // Build shape_map with Vec<usize> values for the subgraph builder
+    let shape_map_vec: HashMap<String, Vec<usize>> = shape_map
+        .iter()
+        .map(|(k, v)| (k.clone(), v.to_vec()))
+        .collect();
+
+    // Replace runs with XnnpackSubgraph nodes (process in reverse to preserve indices)
+    // Collect all node inputs/outputs for determining required outputs
+    let all_node_inputs: Vec<std::collections::HashSet<&str>> = node_meta
+        .iter()
+        .map(|meta| {
+            if let Some((_, inputs, _)) = meta {
+                inputs.iter().map(|s| s.as_str()).collect()
+            } else {
+                std::collections::HashSet::new()
+            }
+        })
+        .collect();
+
+    for run in runs.into_iter().rev() {
+        // Collect all outputs produced by this run
+        let mut run_outputs: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for meta in &node_meta[run.clone()] {
+            if let Some((_, _, node)) = meta {
+                for out in &node.output {
+                    if !out.is_empty() {
+                        run_outputs.insert(out.as_str());
+                    }
+                }
+            }
+        }
+
+        // Find which of those outputs are consumed by nodes OUTSIDE the run
+        // or are plan outputs
+        let mut required_output_set: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for i in 0..node_meta.len() {
+            if run.contains(&i) {
+                continue;
+            }
+            for name in &all_node_inputs[i] {
+                if run_outputs.contains(name) {
+                    required_output_set.insert(name.to_string());
+                }
+            }
+        }
+        // Always include the last op's outputs (they may be plan-level outputs)
+        if let Some(meta) = node_meta[run.end - 1].as_ref() {
+            for out in &meta.2.output {
+                if !out.is_empty() {
+                    required_output_set.insert(out.clone());
+                }
+            }
+        }
+        let required_outputs: Vec<String> = required_output_set.into_iter().collect();
+
+        let captured: Vec<CapturedOp> = node_meta[run.clone()]
+            .iter()
+            .map(|meta| {
+                let (op, inputs, node) = meta.as_ref().unwrap();
+                CapturedOp {
+                    op: *op,
+                    inputs: inputs.clone(),
+                    outputs: node.output.clone(),
+                    node: node.clone(),
+                }
+            })
+            .collect();
+
+        let op_names: Vec<&str> = captured
+            .iter()
+            .map(|c| match c.op {
+                OpType::Conv => "Conv",
+                OpType::Relu => "Relu",
+                OpType::Add => "Add",
+                OpType::MaxPool => "MaxPool",
+                OpType::GlobalAveragePool => "GlobalAvgPool",
+                OpType::Flatten => "Flatten",
+                OpType::Gemm => "Gemm",
+                OpType::Softmax => "Softmax",
+                OpType::BatchNormalization => "BatchNorm",
+                _ => "other",
+            })
+            .collect();
+        tracing::info!(
+            "XNNPACK: planning subgraph of {} ops: {:?}",
+            captured.len(),
+            op_names
+        );
+
+        // Collect initializers needed by captured ops
+        let mut sub_initializers: HashMap<String, Tensor> = HashMap::new();
+        for cap in &captured {
+            for inp in &cap.inputs {
+                if !inp.is_empty() && initializers.contains_key(inp) {
+                    if let Some(t) = initializers.get(inp) {
+                        sub_initializers.insert(inp.clone(), t.clone());
+                    }
+                }
+            }
+        }
+
+        let mut subgraph = super::xnnpack_subgraph::XnnpackSubgraph::new(
+            captured,
+            required_outputs,
+            shape_map_vec.clone(),
+            sub_initializers,
+        );
+
+        // Remove the nodes and store as fallback for lazy compilation failure
+        let removed: Vec<_> = nodes.drain(run.clone()).collect();
+        subgraph.fallback_nodes = removed;
+        nodes.insert(run.start, PlanNode::XnnpackSubgraph(Box::new(subgraph)));
+    }
+
+    Ok(nodes)
 }

@@ -71,6 +71,8 @@ pub mod inference_error;
 pub mod layers;
 pub mod tensor_data;
 pub mod utils;
+#[cfg(feature = "xnnpack")]
+pub mod xnnpack_ffi;
 
 pub use dtype::DType;
 pub use dtype::ONNX_DOUBLE;
@@ -185,6 +187,21 @@ mod tests {
 
         let out_data = output.floats();
         let exp_data = expected.floats();
+        // XNNPACK uses optimized kernels that may accumulate differently,
+        // so allow slightly higher tolerance when xnnpack feature is enabled.
+        let mut max_err: f32 = 0.0;
+        let mut max_err_idx = 0;
+        for (i, (got, want)) in out_data.iter().zip(exp_data.iter()).enumerate() {
+            let err = (got - want).abs();
+            if err > max_err {
+                max_err = err;
+                max_err_idx = i;
+            }
+        }
+        if max_err > 1e-3 {
+            eprintln!("max absolute error: {max_err} at index {max_err_idx} (got={}, want={}), output len={}",
+                out_data[max_err_idx], exp_data[max_err_idx], out_data.len());
+        }
         for (got, want) in out_data.iter().zip(exp_data.iter()) {
             assert_relative_eq!(got, want, max_relative = 1e-3, epsilon = 1e-5);
         }

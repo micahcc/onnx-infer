@@ -19,7 +19,52 @@ pub struct InferenceEngine {
 
 impl InferenceEngine {
     pub fn new(model_bytes: &[u8]) -> Result<Self> {
-        Self::with_input_sizes(model_bytes, HashMap::new())
+        Self::with_batch_size(model_bytes, 1)
+    }
+
+    /// Create an engine with a fixed batch size.
+    ///
+    /// Models with dynamic batch dimensions (common in ONNX exports) use
+    /// symbolic dimension names like `"N"` or `"batch"`. This method resolves
+    /// all such dimensions to the given `batch_size`, enabling full shape
+    /// inference at build time and unlocking XNNPACK acceleration for spatial
+    /// ops like Conv and MaxPool.
+    ///
+    /// ```no_run
+    /// # use onnx_infer::InferenceEngine;
+    /// let model_bytes = std::fs::read("model.onnx").unwrap();
+    /// let mut engine = InferenceEngine::with_batch_size(&model_bytes, 1).unwrap();
+    /// ```
+    pub fn with_batch_size(model_bytes: &[u8], batch_size: usize) -> Result<Self> {
+        let model = ModelProto::decode(model_bytes).map_err(InferenceError::ParseError)?;
+        let graph = model
+            .graph
+            .as_ref()
+            .ok_or_else(|| InferenceError::InvalidModel("Model has no graph".into()))?;
+
+        let initializer_names: std::collections::HashSet<&str> =
+            graph.initializer.iter().map(|i| i.name.as_str()).collect();
+
+        let mut input_sizes = HashMap::new();
+        for input in &graph.input {
+            if input.name.is_empty() || initializer_names.contains(input.name.as_str()) {
+                continue;
+            }
+            if let Some(mut shape) = Plan::extract_shape_partial(input) {
+                // Replace only the batch dimension (dim 0) with batch_size.
+                // Other dynamic dims (e.g. spatial) remain as 0/unknown and
+                // will be resolved from actual runtime input shapes.
+                if !shape.is_empty() && shape[0] == 0 {
+                    shape[0] = batch_size;
+                }
+                // Only provide the shape if all dims are known
+                if shape.iter().all(|&d| d > 0) {
+                    input_sizes.insert(input.name.clone(), shape);
+                }
+            }
+        }
+
+        Self::with_input_sizes(model_bytes, input_sizes)
     }
 
     pub fn with_input_sizes(
@@ -113,6 +158,10 @@ impl InferenceEngine {
                 }
                 PlanNode::Scan(scan_layer) => {
                     scan_layer.execute(&mut self.values)?;
+                }
+                #[cfg(feature = "xnnpack")]
+                PlanNode::XnnpackSubgraph(subgraph) => {
+                    subgraph.execute(&mut self.values)?;
                 }
             }
         }

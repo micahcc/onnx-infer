@@ -7,6 +7,24 @@ fn main() -> Result<()> {
     #[cfg(feature = "blas")]
     println!("cargo:rustc-link-lib=blas");
 
+    #[cfg(feature = "xnnpack")]
+    {
+        let xnnpack_dir =
+            std::env::var("XNNPACK_DIR").expect("XNNPACK_DIR must be set for xnnpack feature");
+        println!("cargo:rustc-link-search=native={xnnpack_dir}/lib");
+        println!("cargo:rustc-link-lib=static=XNNPACK");
+        println!("cargo:rustc-link-lib=static=xnnpack-microkernels-prod");
+        println!("cargo:rustc-link-lib=static=cpuinfo");
+        println!("cargo:rustc-link-lib=static=pthreadpool");
+        // kleidiai is needed on ARM
+        println!("cargo:rustc-link-lib=static=kleidiai");
+        // Link C++ runtime for XNNPACK internals
+        #[cfg(target_os = "macos")]
+        println!("cargo:rustc-link-lib=c++");
+        #[cfg(target_os = "linux")]
+        println!("cargo:rustc-link-lib=stdc++");
+    }
+
     let file_descriptors =
         protox::compile(["proto/onnx.proto"], ["proto/"]).expect("protox compile");
 

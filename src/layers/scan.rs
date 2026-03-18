@@ -321,6 +321,8 @@ impl Scan {
                     PlanNode::If(if_layer) => if_layer.execute(values)?,
                     PlanNode::TopK(topk_layer) => topk_layer.execute(values)?,
                     PlanNode::Scan(scan_layer) => scan_layer.execute(values)?,
+                    #[cfg(feature = "xnnpack")]
+                    PlanNode::XnnpackSubgraph(subgraph) => subgraph.execute(values)?,
                 }
             }
 
