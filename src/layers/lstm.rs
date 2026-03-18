@@ -97,18 +97,13 @@ fn run_lstm_direction(
 
         // gates += X_t * W^T   (X_t: [batch, input_size], W: [4*hs, input_size])
         crate::blas::sgemm(
-            batch, hs4, input_size,
-            1.0, x_t, input_size, false,
-            w, input_size, true,
-            1.0, &mut gates, hs4,
+            batch, hs4, input_size, 1.0, x_t, input_size, false, w, input_size, true, 1.0,
+            &mut gates, hs4,
         );
 
         // gates += H_{t-1} * R^T   (H: [batch, hs], R: [4*hs, hs])
         crate::blas::sgemm(
-            batch, hs4, hs,
-            1.0, &h, hs, false,
-            r, hs, true,
-            1.0, &mut gates, hs4,
+            batch, hs4, hs, 1.0, &h, hs, false, r, hs, true, 1.0, &mut gates, hs4,
         );
 
         // ONNX gate order: i, o, f, c (different from some frameworks)

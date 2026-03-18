@@ -7,10 +7,7 @@ use onnx_infer::Tensor;
 use onnx_infer::dims;
 
 fn make_values(pairs: Vec<(&str, Tensor)>) -> HashMap<String, Tensor> {
-    pairs
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect()
+    pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
 }
 
 fn rand_vec(n: usize) -> Vec<f32> {
@@ -29,8 +26,8 @@ fn rand_vec(n: usize) -> Vec<f32> {
 // --- Conv benchmarks ---
 
 fn bench_conv_3x3_64(c: &mut Criterion) {
-    use onnx_infer::layers::conv::Conv;
     use onnx_infer::layers::Layer;
+    use onnx_infer::layers::conv::Conv;
 
     // Typical: batch=1, 64 in channels, 64 out channels, 56x56, 3x3 kernel
     let n = 1;
@@ -42,10 +39,7 @@ fn bench_conv_3x3_64(c: &mut Criterion) {
     let kw = 3;
 
     let input = Tensor::new(dims![n, c_in, h, w], rand_vec(n * c_in * h * w));
-    let weight = Tensor::new(
-        dims![c_out, c_in, kh, kw],
-        rand_vec(c_out * c_in * kh * kw),
-    );
+    let weight = Tensor::new(dims![c_out, c_in, kh, kw], rand_vec(c_out * c_in * kh * kw));
     let bias = Tensor::new(dims![c_out], rand_vec(c_out));
 
     let values = make_values(vec![("x", input), ("w", weight), ("b", bias)]);
@@ -69,8 +63,8 @@ fn bench_conv_3x3_64(c: &mut Criterion) {
 }
 
 fn bench_conv_1x1_128(c: &mut Criterion) {
-    use onnx_infer::layers::conv::Conv;
     use onnx_infer::layers::Layer;
+    use onnx_infer::layers::conv::Conv;
 
     let n = 1;
     let c_in = 128;
@@ -81,10 +75,7 @@ fn bench_conv_1x1_128(c: &mut Criterion) {
     let kw = 1;
 
     let input = Tensor::new(dims![n, c_in, h, w], rand_vec(n * c_in * h * w));
-    let weight = Tensor::new(
-        dims![c_out, c_in, kh, kw],
-        rand_vec(c_out * c_in * kh * kw),
-    );
+    let weight = Tensor::new(dims![c_out, c_in, kh, kw], rand_vec(c_out * c_in * kh * kw));
     let bias = Tensor::new(dims![c_out], rand_vec(c_out));
 
     let values = make_values(vec![("x", input), ("w", weight), ("b", bias)]);
@@ -110,8 +101,8 @@ fn bench_conv_1x1_128(c: &mut Criterion) {
 // --- MatMul benchmarks ---
 
 fn bench_matmul_256(c: &mut Criterion) {
-    use onnx_infer::layers::matmul::MatMul;
     use onnx_infer::layers::Layer;
+    use onnx_infer::layers::matmul::MatMul;
 
     let m = 256;
     let k = 256;
@@ -131,8 +122,8 @@ fn bench_matmul_256(c: &mut Criterion) {
 }
 
 fn bench_matmul_512(c: &mut Criterion) {
-    use onnx_infer::layers::matmul::MatMul;
     use onnx_infer::layers::Layer;
+    use onnx_infer::layers::matmul::MatMul;
 
     let m = 512;
     let k = 512;
@@ -152,8 +143,8 @@ fn bench_matmul_512(c: &mut Criterion) {
 }
 
 fn bench_matmul_batch(c: &mut Criterion) {
-    use onnx_infer::layers::matmul::MatMul;
     use onnx_infer::layers::Layer;
+    use onnx_infer::layers::matmul::MatMul;
 
     let batch = 8;
     let m = 64;
@@ -176,8 +167,8 @@ fn bench_matmul_batch(c: &mut Criterion) {
 // --- Gemm benchmarks ---
 
 fn bench_gemm_256(c: &mut Criterion) {
-    use onnx_infer::layers::gemm::Gemm;
     use onnx_infer::layers::Layer;
+    use onnx_infer::layers::gemm::Gemm;
 
     let m = 256;
     let k = 256;

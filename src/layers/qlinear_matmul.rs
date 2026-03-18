@@ -45,8 +45,7 @@ impl Layer for QLinearMatMul {
         let p = match &self.inner.precomp {
             Some(p) if self.inner.shape_cache.as_slice() == key.as_slice() => p,
             _ => {
-                self.inner.precomp =
-                    Some(MatMul::compute_shapes(&a_quant.dims, &b_quant.dims));
+                self.inner.precomp = Some(MatMul::compute_shapes(&a_quant.dims, &b_quant.dims));
                 self.inner.shape_cache = key;
                 self.inner.precomp.as_ref().expect("just set")
             }
@@ -129,8 +128,7 @@ impl Layer for QLinearMatMul {
                 let combined_scale = a_scale * b_scale_f[0];
                 for idx in 0..m * n {
                     let float_val = self.c_buf[idx] as f32 * combined_scale;
-                    buf[o_off + idx] =
-                        (float_val * inv_y_scale + y_zp).round().clamp(0.0, 255.0);
+                    buf[o_off + idx] = (float_val * inv_y_scale + y_zp).round().clamp(0.0, 255.0);
                 }
             }
         }

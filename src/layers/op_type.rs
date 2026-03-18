@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 
+use crate::DType;
+use crate::Dims;
+use crate::ONNX_INT32;
+use crate::ONNX_INT64;
+use crate::Tensor;
 use crate::broadcast_shape;
 use crate::dims;
 use crate::get_attr_int;
 use crate::get_attr_ints;
 use crate::get_attr_string;
 use crate::onnx::NodeProto;
-use crate::DType;
-use crate::Dims;
-use crate::Tensor;
-use crate::ONNX_INT32;
-use crate::ONNX_INT64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpType {

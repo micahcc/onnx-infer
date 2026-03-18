@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::get_tensor;
-use crate::layers::Plan;
-use crate::layers::PlanNode;
-use crate::onnx::GraphProto;
 use crate::DType;
 use crate::Dims;
 use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
+use crate::get_tensor;
+use crate::layers::Plan;
+use crate::layers::PlanNode;
+use crate::onnx::GraphProto;
 
 pub struct Scan {
     pub inputs: Vec<String>,

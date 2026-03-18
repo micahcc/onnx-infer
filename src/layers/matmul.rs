@@ -108,8 +108,16 @@ impl MatMul {
         let buf = output.as_mut_f32(total);
 
         for batch in 0..p.batch_size {
-            let a_off = if p.a_broadcasts { 0 } else { batch * p.a_batch_stride };
-            let b_off = if p.b_broadcasts { 0 } else { batch * p.b_batch_stride };
+            let a_off = if p.a_broadcasts {
+                0
+            } else {
+                batch * p.a_batch_stride
+            };
+            let b_off = if p.b_broadcasts {
+                0
+            } else {
+                batch * p.b_batch_stride
+            };
             let o_off = batch * p.o_batch_stride;
             matmul_naive(
                 &a_f[a_off..],
@@ -183,14 +191,7 @@ impl Layer for MatMul {
 }
 
 /// Naive reference implementation for correctness testing.
-pub fn matmul_naive(
-    a: &[f32],
-    b: &[f32],
-    c: &mut [f32],
-    m: usize,
-    k: usize,
-    n: usize,
-) {
+pub fn matmul_naive(a: &[f32], b: &[f32], c: &mut [f32], m: usize, k: usize, n: usize) {
     c.fill(0.0);
     for i in 0..m {
         for j in 0..n {

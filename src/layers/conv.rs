@@ -375,8 +375,7 @@ impl Layer for Conv {
                 );
 
                 let w_group = g * p.c_out_per_group * gemm_k;
-                let out_group =
-                    batch * p.c_out * spatial_out + g * p.c_out_per_group * spatial_out;
+                let out_group = batch * p.c_out * spatial_out + g * p.c_out_per_group * spatial_out;
 
                 // Fill output with bias if present
                 if let Some(bias) = bias {
@@ -468,11 +467,7 @@ pub fn conv_naive(
                                 for fw in 0..kw {
                                     let ih = oh * sh + fh * dh;
                                     let iw = ow * sw + fw * dw;
-                                    if ih >= p0
-                                        && iw >= p1
-                                        && ih - p0 < h_in
-                                        && iw - p1 < w_in
-                                    {
+                                    if ih >= p0 && iw >= p1 && ih - p0 < h_in && iw - p1 < w_in {
                                         let ih = ih - p0;
                                         let iw = iw - p1;
                                         let input_idx =
@@ -487,8 +482,7 @@ pub fn conv_naive(
                         if let Some(bias) = bias {
                             sum += bias[abs_oc];
                         }
-                        let out_idx =
-                            ((batch * c_out + abs_oc) * h_out + oh) * w_out + ow;
+                        let out_idx = ((batch * c_out + abs_oc) * h_out + oh) * w_out + ow;
                         output[out_idx] = sum;
                     }
                 }

@@ -65,8 +65,7 @@ fn im2col_i16(
                         let iw = ow * sw + fw * dw;
                         let col_idx = col_row_off + oh * w_out + ow;
                         if valid_h && iw >= p1 && iw - p1 < w_in {
-                            col[col_idx] =
-                                in_plane[ih_actual * w_in + (iw - p1)] as i16 - zp;
+                            col[col_idx] = in_plane[ih_actual * w_in + (iw - p1)] as i16 - zp;
                         } else {
                             col[col_idx] = 0;
                         }
@@ -194,8 +193,7 @@ impl Layer for QLinearConv {
                 );
 
                 // Scale i32 → f32 and quantize output
-                let out_group =
-                    batch * p.c_out * spatial_out + g * p.c_out_per_group * spatial_out;
+                let out_group = batch * p.c_out * spatial_out + g * p.c_out_per_group * spatial_out;
                 for oc in 0..gemm_m {
                     let abs_oc = g * p.c_out_per_group + oc;
                     let combined_scale = x_scale

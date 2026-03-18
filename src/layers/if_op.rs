@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use crate::get_tensor;
-use crate::layers::plan::execute_node;
-use crate::onnx::GraphProto;
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
+use crate::get_tensor;
+use crate::layers::plan::execute_node;
+use crate::onnx::GraphProto;
 
 pub struct If {
     pub inputs: Vec<String>,

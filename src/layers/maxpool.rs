@@ -166,8 +166,8 @@ impl Layer for MaxPool {
         buf.fill(f32::NEG_INFINITY);
 
         // Compute the range of output pixels that don't need bounds checks
-        let oh_safe_start = if p.p0 > 0 { (p.p0 + sh - 1) / sh } else { 0 };
-        let ow_safe_start = if p.p1 > 0 { (p.p1 + sw - 1) / sw } else { 0 };
+        let oh_safe_start = if p.p0 > 0 { p.p0.div_ceil(sh) } else { 0 };
+        let ow_safe_start = if p.p1 > 0 { p.p1.div_ceil(sw) } else { 0 };
         let oh_safe_end = if p.h_in + p.p0 >= kh {
             ((p.h_in + p.p0 - kh) / sh + 1).min(p.h_out)
         } else {
@@ -210,8 +210,7 @@ impl Layer for MaxPool {
                                         && ih - p.p0 < p.h_in
                                         && iw - p.p1 < p.w_in
                                     {
-                                        let idx =
-                                            in_base + (ih - p.p0) * p.w_in + (iw - p.p1);
+                                        let idx = in_base + (ih - p.p0) * p.w_in + (iw - p.p1);
                                         max_val = max_val.max(input_f[idx]);
                                     }
                                 }
