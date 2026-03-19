@@ -9,6 +9,32 @@ use crate::onnx::NodeProto;
 use crate::xnnpack_ffi::*;
 use crate::{get_attr_float, get_attr_int, get_attr_ints, get_attr_string};
 
+/// 2D padding values (top, left, bottom, right).
+struct Padding2D {
+    top: usize,
+    left: usize,
+    bottom: usize,
+    right: usize,
+}
+
+/// 2D stride values.
+struct Stride2D {
+    h: u32,
+    w: u32,
+}
+
+/// 2D dilation values.
+struct Dilation2D {
+    h: u32,
+    w: u32,
+}
+
+/// 2D kernel size.
+struct KernelSize {
+    h: usize,
+    w: usize,
+}
+
 /// An ONNX op captured for compilation into an XNNPACK subgraph.
 pub struct CapturedOp {
     pub op: OpType,
@@ -467,46 +493,65 @@ impl SubgraphBuilder {
         let kw = w_shape[3];
 
         let group = get_attr_int(node, "group").unwrap_or(1) as usize;
-        let strides = get_attr_ints(node, "strides").unwrap_or_else(|| vec![1, 1]);
-        let pads = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
-        let dilations = get_attr_ints(node, "dilations").unwrap_or_else(|| vec![1, 1]);
+        let strides_attr = get_attr_ints(node, "strides").unwrap_or_else(|| vec![1, 1]);
+        let pads_attr = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+        let dilations_attr = get_attr_ints(node, "dilations").unwrap_or_else(|| vec![1, 1]);
         let auto_pad = get_attr_string(node, "auto_pad").unwrap_or_default();
 
-        let sh = strides[0] as u32;
-        let sw = strides[1] as u32;
-        let dh = dilations[0] as u32;
-        let dw = dilations[1] as u32;
+        let stride = Stride2D {
+            h: strides_attr[0] as u32,
+            w: strides_attr[1] as u32,
+        };
+        let dilation = Dilation2D {
+            h: dilations_attr[0] as u32,
+            w: dilations_attr[1] as u32,
+        };
 
         let is_depthwise = group > 1 && c_in_per_group == 1;
         let c_out_per_group = c_out / group;
 
         // Compute SAME padding if needed
-        let (pt, pl, pb, pr) = if auto_pad == "SAME_UPPER" || auto_pad == "SAME_LOWER" {
+        let pad = if auto_pad == "SAME_UPPER" || auto_pad == "SAME_LOWER" {
             let in_shape = shape_map.get(input_name);
             if let Some(s) = in_shape {
                 let h_in = s[2];
                 let w_in = s[3];
-                let oh = h_in.div_ceil(sh as usize);
-                let ow = w_in.div_ceil(sw as usize);
-                let pad_h =
-                    ((oh - 1) * sh as usize + (dh as usize) * (kh - 1) + 1).saturating_sub(h_in);
-                let pad_w =
-                    ((ow - 1) * sw as usize + (dw as usize) * (kw - 1) + 1).saturating_sub(w_in);
+                let oh = h_in.div_ceil(stride.h as usize);
+                let ow = w_in.div_ceil(stride.w as usize);
+                let pad_h = ((oh - 1) * stride.h as usize + (dilation.h as usize) * (kh - 1) + 1)
+                    .saturating_sub(h_in);
+                let pad_w = ((ow - 1) * stride.w as usize + (dilation.w as usize) * (kw - 1) + 1)
+                    .saturating_sub(w_in);
                 if auto_pad == "SAME_UPPER" {
-                    (pad_h / 2, pad_w / 2, pad_h - pad_h / 2, pad_w - pad_w / 2)
+                    Padding2D {
+                        top: pad_h / 2,
+                        left: pad_w / 2,
+                        bottom: pad_h - pad_h / 2,
+                        right: pad_w - pad_w / 2,
+                    }
                 } else {
-                    (pad_h - pad_h / 2, pad_w - pad_w / 2, pad_h / 2, pad_w / 2)
+                    Padding2D {
+                        top: pad_h - pad_h / 2,
+                        left: pad_w - pad_w / 2,
+                        bottom: pad_h / 2,
+                        right: pad_w / 2,
+                    }
                 }
             } else {
-                (0, 0, 0, 0)
+                Padding2D {
+                    top: 0,
+                    left: 0,
+                    bottom: 0,
+                    right: 0,
+                }
             }
         } else {
-            (
-                pads[0] as usize,
-                pads[1] as usize,
-                pads[2] as usize,
-                pads[3] as usize,
-            )
+            Padding2D {
+                top: pads_attr[0] as usize,
+                left: pads_attr[1] as usize,
+                bottom: pads_attr[2] as usize,
+                right: pads_attr[3] as usize,
+            }
         };
 
         // Get NHWC input
@@ -548,11 +593,11 @@ impl SubgraphBuilder {
         let (h_out, w_out) = if in_shape.len() == 4 {
             let h_in = in_shape[2];
             let w_in = in_shape[3];
-            let eff_kh = dh as usize * (kh - 1) + 1;
-            let eff_kw = dw as usize * (kw - 1) + 1;
+            let eff_kh = dilation.h as usize * (kh - 1) + 1;
+            let eff_kw = dilation.w as usize * (kw - 1) + 1;
             (
-                (h_in + pt + pb - eff_kh) / sh as usize + 1,
-                (w_in + pl + pr - eff_kw) / sw as usize + 1,
+                (h_in + pad.top + pad.bottom - eff_kh) / stride.h as usize + 1,
+                (w_in + pad.left + pad.right - eff_kw) / stride.w as usize + 1,
             )
         } else {
             (1, 1)
@@ -567,16 +612,16 @@ impl SubgraphBuilder {
             unsafe {
                 xnn_define_depthwise_convolution_2d(
                     self.subgraph,
-                    pt as u32,
-                    pr as u32,
-                    pb as u32,
-                    pl as u32,
+                    pad.top as u32,
+                    pad.right as u32,
+                    pad.bottom as u32,
+                    pad.left as u32,
                     kh as u32,
                     kw as u32,
-                    sh,
-                    sw,
-                    dh,
-                    dw,
+                    stride.h,
+                    stride.w,
+                    dilation.h,
+                    dilation.w,
                     depth_multiplier as u32,
                     input_channels,
                     f32::NEG_INFINITY,
@@ -592,16 +637,16 @@ impl SubgraphBuilder {
             unsafe {
                 xnn_define_convolution_2d(
                     self.subgraph,
-                    pt as u32,
-                    pr as u32,
-                    pb as u32,
-                    pl as u32,
+                    pad.top as u32,
+                    pad.right as u32,
+                    pad.bottom as u32,
+                    pad.left as u32,
                     kh as u32,
                     kw as u32,
-                    sh,
-                    sw,
-                    dh,
-                    dw,
+                    stride.h,
+                    stride.w,
+                    dilation.h,
+                    dilation.w,
                     group as u32,
                     c_in_per_group,
                     c_out_per_group,
@@ -833,9 +878,24 @@ impl SubgraphBuilder {
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
         let node = &cap.node;
-        let ks = get_attr_ints(node, "kernel_shape").unwrap_or_default();
-        let strides = get_attr_ints(node, "strides").unwrap_or_else(|| vec![1, 1]);
-        let pads = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+        let ks_attr = get_attr_ints(node, "kernel_shape").unwrap_or_default();
+        let strides_attr = get_attr_ints(node, "strides").unwrap_or_else(|| vec![1, 1]);
+        let pads_attr = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+
+        let kernel = KernelSize {
+            h: ks_attr[0] as usize,
+            w: ks_attr[1] as usize,
+        };
+        let stride = Stride2D {
+            h: strides_attr[0] as u32,
+            w: strides_attr[1] as u32,
+        };
+        let pad = Padding2D {
+            top: pads_attr[0] as usize,
+            left: pads_attr[1] as usize,
+            bottom: pads_attr[2] as usize,
+            right: pads_attr[3] as usize,
+        };
 
         let input_id = self.ensure_nhwc(&cap.inputs[0], shape_map)?;
 
@@ -845,12 +905,8 @@ impl SubgraphBuilder {
         } else {
             (1, 1, 1, 1)
         };
-        let kh = ks[0] as usize;
-        let kw = ks[1] as usize;
-        let sh = strides[0] as usize;
-        let sw = strides[1] as usize;
-        let h_out = (h_in + pads[0] as usize + pads[2] as usize - kh) / sh + 1;
-        let w_out = (w_in + pads[1] as usize + pads[3] as usize - kw) / sw + 1;
+        let h_out = (h_in + pad.top + pad.bottom - kernel.h) / stride.h as usize + 1;
+        let w_out = (w_in + pad.left + pad.right - kernel.w) / stride.w as usize + 1;
 
         let nhwc_out_shape = [n, h_out, w_out, c];
         let output_id = self.define_nhwc_output(&cap.outputs[0], &nhwc_out_shape)?;
@@ -858,14 +914,14 @@ impl SubgraphBuilder {
         let status = unsafe {
             xnn_define_max_pooling_2d(
                 self.subgraph,
-                pads[0] as u32,
-                pads[3] as u32,
-                pads[2] as u32,
-                pads[1] as u32,
-                kh as u32,
-                kw as u32,
-                sh as u32,
-                sw as u32,
+                pad.top as u32,
+                pad.right as u32,
+                pad.bottom as u32,
+                pad.left as u32,
+                kernel.h as u32,
+                kernel.w as u32,
+                stride.h,
+                stride.w,
                 1,
                 1, // dilation
                 f32::NEG_INFINITY,
