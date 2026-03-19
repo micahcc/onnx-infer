@@ -16,7 +16,8 @@ fn main() -> Result<()> {
         println!("cargo:rustc-link-lib=static=xnnpack-microkernels-prod");
         println!("cargo:rustc-link-lib=static=cpuinfo");
         println!("cargo:rustc-link-lib=static=pthreadpool");
-        // kleidiai is needed on ARM
+        // kleidiai is needed on ARM only
+        #[cfg(target_arch = "aarch64")]
         println!("cargo:rustc-link-lib=static=kleidiai");
         // Link C++ runtime for XNNPACK internals
         #[cfg(target_os = "macos")]

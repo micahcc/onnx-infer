@@ -1,10 +1,20 @@
 use std::collections::HashMap;
 
+use crate::DType;
+use crate::Dims;
+use crate::InferenceError;
+use crate::ONNX_INT32;
+use crate::ONNX_INT64;
+use crate::ONNX_STRING;
+use crate::Result;
+use crate::Tensor;
 use crate::dims;
 use crate::get_attr_float;
 use crate::get_attr_int;
 use crate::get_attr_ints;
 use crate::get_attr_string;
+use crate::layers::Layer;
+use crate::layers::OpType;
 use crate::layers::abs;
 use crate::layers::add;
 use crate::layers::argmax;
@@ -79,17 +89,7 @@ use crate::layers::transpose;
 use crate::layers::unary_ops;
 use crate::layers::unsqueeze;
 use crate::layers::where_op;
-use crate::layers::Layer;
-use crate::layers::OpType;
 use crate::onnx::NodeProto;
-use crate::DType;
-use crate::Dims;
-use crate::InferenceError;
-use crate::Result;
-use crate::Tensor;
-use crate::ONNX_INT32;
-use crate::ONNX_INT64;
-use crate::ONNX_STRING;
 
 pub enum PlanNode {
     Single {
@@ -1124,7 +1124,7 @@ fn compile_xnnpack_subgraphs(
     type_map: &HashMap<String, DType>,
     initializers: &HashMap<String, Tensor>,
 ) -> Result<Vec<PlanNode>> {
-    use super::xnnpack_subgraph::{is_xnnpack_compatible, CapturedOp};
+    use super::xnnpack_subgraph::{CapturedOp, is_xnnpack_compatible};
 
     assert_eq!(nodes.len(), node_meta.len());
 

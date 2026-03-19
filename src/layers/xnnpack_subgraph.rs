@@ -147,8 +147,7 @@ impl SubgraphBuilder {
     fn new(num_external: u32) -> Result<Self> {
         ensure_init();
         let mut subgraph: xnn_subgraph_t = std::ptr::null_mut();
-        let status =
-            unsafe { xnn_create_subgraph(num_external, 0, &mut subgraph) };
+        let status = unsafe { xnn_create_subgraph(num_external, 0, &mut subgraph) };
         if status != xnn_status::xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_create_subgraph failed: {status:?}"
@@ -285,11 +284,7 @@ impl SubgraphBuilder {
 
     /// Ensure a value is in NHWC layout. If it's 4D and not already NHWC,
     /// insert a transpose and return the NHWC value ID.
-    fn ensure_nhwc(
-        &mut self,
-        name: &str,
-        shape_map: &HashMap<String, Vec<usize>>,
-    ) -> Result<u32> {
+    fn ensure_nhwc(&mut self, name: &str, shape_map: &HashMap<String, Vec<usize>>) -> Result<u32> {
         let src_id = self.get_or_define_value(name, shape_map)?;
         if self.nhwc_values.contains(name) {
             return Ok(src_id);
@@ -319,11 +314,7 @@ impl SubgraphBuilder {
     }
 
     /// Mark a value as being in NHWC layout and define an NCHW version via transpose.
-    fn define_nhwc_output(
-        &mut self,
-        name: &str,
-        nhwc_shape: &[usize],
-    ) -> Result<u32> {
+    fn define_nhwc_output(&mut self, name: &str, nhwc_shape: &[usize]) -> Result<u32> {
         let nhwc_name = format!("{name}__nhwc");
         let nhwc_id = self.define_internal_value(&nhwc_name, nhwc_shape)?;
         self.nhwc_values.insert(nhwc_name);
@@ -357,24 +348,86 @@ impl SubgraphBuilder {
             OpType::Conv => self.add_conv(captured, shape_map, initializers),
             OpType::Relu => self.add_relu(captured, shape_map),
             OpType::Clip => self.add_clip(captured, shape_map, initializers),
-            OpType::Sigmoid => self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_sigmoid, None),
-            OpType::Tanh => self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_tanh, None),
-            OpType::Exp => self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_exp, None),
-            OpType::Abs => self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_abs, None),
-            OpType::Sqrt => self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_square_root, None),
-            OpType::Floor => self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_floor, None),
-            OpType::Ceil => self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_ceiling, None),
-            OpType::Log => self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_log, None),
-            OpType::Neg => self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_negate, None),
-            OpType::Sin => self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_sine, None),
-            OpType::Cos => self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_cosine, None),
+            OpType::Sigmoid => self.add_unary(
+                captured,
+                shape_map,
+                xnn_unary_operator::xnn_unary_sigmoid,
+                None,
+            ),
+            OpType::Tanh => self.add_unary(
+                captured,
+                shape_map,
+                xnn_unary_operator::xnn_unary_tanh,
+                None,
+            ),
+            OpType::Exp => {
+                self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_exp, None)
+            }
+            OpType::Abs => {
+                self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_abs, None)
+            }
+            OpType::Sqrt => self.add_unary(
+                captured,
+                shape_map,
+                xnn_unary_operator::xnn_unary_square_root,
+                None,
+            ),
+            OpType::Floor => self.add_unary(
+                captured,
+                shape_map,
+                xnn_unary_operator::xnn_unary_floor,
+                None,
+            ),
+            OpType::Ceil => self.add_unary(
+                captured,
+                shape_map,
+                xnn_unary_operator::xnn_unary_ceiling,
+                None,
+            ),
+            OpType::Log => {
+                self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_log, None)
+            }
+            OpType::Neg => self.add_unary(
+                captured,
+                shape_map,
+                xnn_unary_operator::xnn_unary_negate,
+                None,
+            ),
+            OpType::Sin => self.add_unary(
+                captured,
+                shape_map,
+                xnn_unary_operator::xnn_unary_sine,
+                None,
+            ),
+            OpType::Cos => self.add_unary(
+                captured,
+                shape_map,
+                xnn_unary_operator::xnn_unary_cosine,
+                None,
+            ),
             OpType::LeakyRelu => self.add_leaky_relu(captured, shape_map),
-            OpType::Add => self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_add),
-            OpType::Sub => self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_subtract),
-            OpType::Mul => self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_multiply),
-            OpType::Div => self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_divide),
-            OpType::Max => self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_maximum),
-            OpType::Min => self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_minimum),
+            OpType::Add => {
+                self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_add)
+            }
+            OpType::Sub => self.add_binary(
+                captured,
+                shape_map,
+                xnn_binary_operator::xnn_binary_subtract,
+            ),
+            OpType::Mul => self.add_binary(
+                captured,
+                shape_map,
+                xnn_binary_operator::xnn_binary_multiply,
+            ),
+            OpType::Div => {
+                self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_divide)
+            }
+            OpType::Max => {
+                self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_maximum)
+            }
+            OpType::Min => {
+                self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_minimum)
+            }
             OpType::MaxPool => self.add_maxpool(captured, shape_map),
             OpType::GlobalAveragePool => self.add_global_avg_pool(captured, shape_map),
             OpType::Softmax => self.add_softmax(captured, shape_map),
@@ -403,7 +456,9 @@ impl SubgraphBuilder {
         let output_name = &cap.outputs[0];
 
         let weight = initializers.get(weight_name).ok_or_else(|| {
-            InferenceError::InvalidModel(format!("XNNPACK Conv: weight {weight_name} not found in initializers"))
+            InferenceError::InvalidModel(format!(
+                "XNNPACK Conv: weight {weight_name} not found in initializers"
+            ))
         })?;
         let w_shape = &weight.dims;
         let c_out = w_shape[0];
@@ -433,8 +488,10 @@ impl SubgraphBuilder {
                 let w_in = s[3];
                 let oh = h_in.div_ceil(sh as usize);
                 let ow = w_in.div_ceil(sw as usize);
-                let pad_h = ((oh - 1) * sh as usize + (dh as usize) * (kh - 1) + 1).saturating_sub(h_in);
-                let pad_w = ((ow - 1) * sw as usize + (dw as usize) * (kw - 1) + 1).saturating_sub(w_in);
+                let pad_h =
+                    ((oh - 1) * sh as usize + (dh as usize) * (kh - 1) + 1).saturating_sub(h_in);
+                let pad_w =
+                    ((ow - 1) * sw as usize + (dw as usize) * (kw - 1) + 1).saturating_sub(w_in);
                 if auto_pad == "SAME_UPPER" {
                     (pad_h / 2, pad_w / 2, pad_h - pad_h / 2, pad_w - pad_w / 2)
                 } else {
@@ -444,7 +501,12 @@ impl SubgraphBuilder {
                 (0, 0, 0, 0)
             }
         } else {
-            (pads[0] as usize, pads[1] as usize, pads[2] as usize, pads[3] as usize)
+            (
+                pads[0] as usize,
+                pads[1] as usize,
+                pads[2] as usize,
+                pads[3] as usize,
+            )
         };
 
         // Get NHWC input
@@ -462,11 +524,8 @@ impl SubgraphBuilder {
         } else {
             vec![c_out, kh, kw, c_in_per_group]
         };
-        let filter_id = self.define_static_value(
-            &format!("{weight_name}__xnn"),
-            &filter_shape,
-            filter_data,
-        )?;
+        let filter_id =
+            self.define_static_value(&format!("{weight_name}__xnn"), &filter_shape, filter_data)?;
 
         // Bias
         let bias_id = if cap.inputs.len() > 2 && !cap.inputs[2].is_empty() {
@@ -508,14 +567,24 @@ impl SubgraphBuilder {
             unsafe {
                 xnn_define_depthwise_convolution_2d(
                     self.subgraph,
-                    pt as u32, pr as u32, pb as u32, pl as u32,
-                    kh as u32, kw as u32,
-                    sh, sw,
-                    dh, dw,
+                    pt as u32,
+                    pr as u32,
+                    pb as u32,
+                    pl as u32,
+                    kh as u32,
+                    kw as u32,
+                    sh,
+                    sw,
+                    dh,
+                    dw,
                     depth_multiplier as u32,
                     input_channels,
-                    f32::NEG_INFINITY, f32::INFINITY,
-                    input_id, filter_id, bias_id, output_id,
+                    f32::NEG_INFINITY,
+                    f32::INFINITY,
+                    input_id,
+                    filter_id,
+                    bias_id,
+                    output_id,
                     0,
                 )
             }
@@ -523,14 +592,25 @@ impl SubgraphBuilder {
             unsafe {
                 xnn_define_convolution_2d(
                     self.subgraph,
-                    pt as u32, pr as u32, pb as u32, pl as u32,
-                    kh as u32, kw as u32,
-                    sh, sw,
-                    dh, dw,
+                    pt as u32,
+                    pr as u32,
+                    pb as u32,
+                    pl as u32,
+                    kh as u32,
+                    kw as u32,
+                    sh,
+                    sw,
+                    dh,
+                    dw,
                     group as u32,
-                    c_in_per_group, c_out_per_group,
-                    f32::NEG_INFINITY, f32::INFINITY,
-                    input_id, filter_id, bias_id, output_id,
+                    c_in_per_group,
+                    c_out_per_group,
+                    f32::NEG_INFINITY,
+                    f32::INFINITY,
+                    input_id,
+                    filter_id,
+                    bias_id,
+                    output_id,
                     0,
                 )
             }
@@ -554,7 +634,12 @@ impl SubgraphBuilder {
                 max: f32::INFINITY,
             },
         };
-        self.add_unary(cap, shape_map, xnn_unary_operator::xnn_unary_clamp, Some(params))
+        self.add_unary(
+            cap,
+            shape_map,
+            xnn_unary_operator::xnn_unary_clamp,
+            Some(params),
+        )
     }
 
     fn add_clip(
@@ -567,7 +652,11 @@ impl SubgraphBuilder {
         // Opset < 11: min/max come from attributes
         let min_val = if cap.inputs.len() > 1 && !cap.inputs[1].is_empty() {
             if let Some(t) = initializers.get(&cap.inputs[1]) {
-                if t.dtype() == crate::DType::Float { t.floats()[0] } else { f32::NEG_INFINITY }
+                if t.dtype() == crate::DType::Float {
+                    t.floats()[0]
+                } else {
+                    f32::NEG_INFINITY
+                }
             } else {
                 f32::NEG_INFINITY
             }
@@ -576,7 +665,11 @@ impl SubgraphBuilder {
         };
         let max_val = if cap.inputs.len() > 2 && !cap.inputs[2].is_empty() {
             if let Some(t) = initializers.get(&cap.inputs[2]) {
-                if t.dtype() == crate::DType::Float { t.floats()[0] } else { f32::INFINITY }
+                if t.dtype() == crate::DType::Float {
+                    t.floats()[0]
+                } else {
+                    f32::INFINITY
+                }
             } else {
                 f32::INFINITY
             }
@@ -589,7 +682,12 @@ impl SubgraphBuilder {
                 max: max_val,
             },
         };
-        self.add_unary(cap, shape_map, xnn_unary_operator::xnn_unary_clamp, Some(params))
+        self.add_unary(
+            cap,
+            shape_map,
+            xnn_unary_operator::xnn_unary_clamp,
+            Some(params),
+        )
     }
 
     fn add_leaky_relu(
@@ -603,7 +701,12 @@ impl SubgraphBuilder {
                 negative_slope: alpha,
             },
         };
-        self.add_unary(cap, shape_map, xnn_unary_operator::xnn_unary_leaky_relu, Some(params))
+        self.add_unary(
+            cap,
+            shape_map,
+            xnn_unary_operator::xnn_unary_leaky_relu,
+            Some(params),
+        )
     }
 
     fn add_unary(
@@ -643,9 +746,8 @@ impl SubgraphBuilder {
             .as_ref()
             .map(|p| p as *const xnn_unary_params)
             .unwrap_or(std::ptr::null());
-        let status = unsafe {
-            xnn_define_unary(self.subgraph, op_type, params_ptr, input_id, output_id, 0)
-        };
+        let status =
+            unsafe { xnn_define_unary(self.subgraph, op_type, params_ptr, input_id, output_id, 0) };
         if status != xnn_status::xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_unary failed for {:?}: {status:?}",
@@ -756,12 +858,20 @@ impl SubgraphBuilder {
         let status = unsafe {
             xnn_define_max_pooling_2d(
                 self.subgraph,
-                pads[0] as u32, pads[3] as u32, pads[2] as u32, pads[1] as u32,
-                kh as u32, kw as u32,
-                sh as u32, sw as u32,
-                1, 1, // dilation
-                f32::NEG_INFINITY, f32::INFINITY,
-                input_id, output_id,
+                pads[0] as u32,
+                pads[3] as u32,
+                pads[2] as u32,
+                pads[1] as u32,
+                kh as u32,
+                kw as u32,
+                sh as u32,
+                sw as u32,
+                1,
+                1, // dilation
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+                input_id,
+                output_id,
                 0,
             )
         };
@@ -792,8 +902,10 @@ impl SubgraphBuilder {
         let status = unsafe {
             xnn_define_global_average_pooling_2d(
                 self.subgraph,
-                f32::NEG_INFINITY, f32::INFINITY,
-                input_id, output_id,
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+                input_id,
+                output_id,
                 XNN_FLAG_KEEP_DIMS,
             )
         };
@@ -812,9 +924,7 @@ impl SubgraphBuilder {
     ) -> Result<()> {
         let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
         let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
-        let status = unsafe {
-            xnn_define_softmax(self.subgraph, input_id, output_id, 0)
-        };
+        let status = unsafe { xnn_define_softmax(self.subgraph, input_id, output_id, 0) };
         if status != xnn_status::xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_softmax failed: {status:?}"
@@ -837,11 +947,14 @@ impl SubgraphBuilder {
         // Weight
         let weight_name = &cap.inputs[1];
         let weight = initializers.get(weight_name).ok_or_else(|| {
-            InferenceError::InvalidModel(format!("XNNPACK Gemm: weight {weight_name} not in initializers"))
+            InferenceError::InvalidModel(format!(
+                "XNNPACK Gemm: weight {weight_name} not in initializers"
+            ))
         })?;
         let w_data = weight.floats().to_vec();
         let w_shape: Vec<usize> = weight.dims.iter().copied().collect();
-        let filter_id = self.define_static_value(&format!("{weight_name}__xnn"), &w_shape, w_data)?;
+        let filter_id =
+            self.define_static_value(&format!("{weight_name}__xnn"), &w_shape, w_data)?;
 
         // Bias
         let bias_id = if cap.inputs.len() > 2 && !cap.inputs[2].is_empty() {
@@ -861,12 +974,20 @@ impl SubgraphBuilder {
 
         let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
 
-        let flags = if trans_b { XNN_FLAG_TRANSPOSE_WEIGHTS } else { 0 };
+        let flags = if trans_b {
+            XNN_FLAG_TRANSPOSE_WEIGHTS
+        } else {
+            0
+        };
         let status = unsafe {
             xnn_define_fully_connected(
                 self.subgraph,
-                f32::NEG_INFINITY, f32::INFINITY,
-                input_id, filter_id, bias_id, output_id,
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+                input_id,
+                filter_id,
+                bias_id,
+                output_id,
                 flags,
             )
         };
@@ -905,8 +1026,12 @@ impl SubgraphBuilder {
             let status = unsafe {
                 xnn_define_fully_connected(
                     self.subgraph,
-                    f32::NEG_INFINITY, f32::INFINITY,
-                    input_id, filter_id, XNN_INVALID_VALUE_ID, output_id,
+                    f32::NEG_INFINITY,
+                    f32::INFINITY,
+                    input_id,
+                    filter_id,
+                    XNN_INVALID_VALUE_ID,
+                    output_id,
                     XNN_FLAG_TRANSPOSE_WEIGHTS,
                 )
             };
@@ -921,11 +1046,7 @@ impl SubgraphBuilder {
             let input2_id = self.get_or_define_value(b_name, shape_map)?;
             let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
             let status = unsafe {
-                xnn_define_batch_matrix_multiply(
-                    self.subgraph,
-                    input1_id, input2_id, output_id,
-                    0,
-                )
+                xnn_define_batch_matrix_multiply(self.subgraph, input1_id, input2_id, output_id, 0)
             };
             if status != xnn_status::xnn_status_success {
                 return Err(InferenceError::InvalidModel(format!(
@@ -950,14 +1071,7 @@ impl SubgraphBuilder {
         let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
         let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
         let status = unsafe {
-            xnn_define_static_reshape(
-                self.subgraph,
-                2,
-                new_shape.as_ptr(),
-                input_id,
-                output_id,
-                0,
-            )
+            xnn_define_static_reshape(self.subgraph, 2, new_shape.as_ptr(), input_id, output_id, 0)
         };
         if status != xnn_status::xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
@@ -1009,7 +1123,11 @@ impl SubgraphBuilder {
         // Resolve negative axis using output rank
         let out_shape = shape_map.get(&cap.outputs[0]).cloned().unwrap_or_default();
         let ndim = out_shape.len() as i64;
-        let axis = if raw_axis < 0 { raw_axis + ndim } else { raw_axis } as usize;
+        let axis = if raw_axis < 0 {
+            raw_axis + ndim
+        } else {
+            raw_axis
+        } as usize;
 
         let mut input_ids = Vec::new();
         for name in &cap.inputs {
@@ -1102,7 +1220,9 @@ impl SubgraphBuilder {
                 self.subgraph,
                 xnn_binary_operator::xnn_binary_multiply,
                 std::ptr::null(),
-                input_id, scale_id, mid_id,
+                input_id,
+                scale_id,
+                mid_id,
                 0,
             )
         };
@@ -1119,7 +1239,9 @@ impl SubgraphBuilder {
                 self.subgraph,
                 xnn_binary_operator::xnn_binary_add,
                 std::ptr::null(),
-                mid_id, bias_data_id, output_id,
+                mid_id,
+                bias_data_id,
+                output_id,
                 0,
             )
         };
@@ -1191,8 +1313,20 @@ fn compile_subgraph(
 
     let external_inputs: Vec<String> = consumed.into_iter().collect();
 
-    tracing::debug!("XNNPACK compile_subgraph: external_inputs={:?}", external_inputs.iter().map(|n| (n, shape_map.get(n))).collect::<Vec<_>>());
-    tracing::debug!("XNNPACK compile_subgraph: required_outputs={:?}", required_outputs.iter().map(|n| (n, shape_map.get(n))).collect::<Vec<_>>());
+    tracing::debug!(
+        "XNNPACK compile_subgraph: external_inputs={:?}",
+        external_inputs
+            .iter()
+            .map(|n| (n, shape_map.get(n)))
+            .collect::<Vec<_>>()
+    );
+    tracing::debug!(
+        "XNNPACK compile_subgraph: required_outputs={:?}",
+        required_outputs
+            .iter()
+            .map(|n| (n, shape_map.get(n)))
+            .collect::<Vec<_>>()
+    );
 
     let num_external = (external_inputs.len() + required_outputs.len()) as u32;
     let mut builder = SubgraphBuilder::new(num_external)?;
@@ -1227,10 +1361,7 @@ fn compile_subgraph(
     // (e.g., Add with a bias initializer) need them defined upfront.
     for op in ops {
         for inp in &op.inputs {
-            if !inp.is_empty()
-                && !builder.value_ids.contains_key(inp)
-                && !produced.contains(inp)
-            {
+            if !inp.is_empty() && !builder.value_ids.contains_key(inp) && !produced.contains(inp) {
                 if let Some(tensor) = initializers.get(inp) {
                     if tensor.dtype() == crate::DType::Float {
                         let shape: Vec<usize> = tensor.dims.iter().copied().collect();
@@ -1326,9 +1457,10 @@ impl XnnpackSubgraph {
             let inferred = op.op.infer_output_shape(
                 &op.node,
                 &op.inputs,
-                &shape_map.iter().map(|(k, v)| {
-                    (k.clone(), crate::Dims::from(v.as_slice()))
-                }).collect(),
+                &shape_map
+                    .iter()
+                    .map(|(k, v)| (k.clone(), crate::Dims::from(v.as_slice())))
+                    .collect(),
                 &self.initializers,
             );
             if let Some(dims) = inferred {
@@ -1357,8 +1489,13 @@ impl XnnpackSubgraph {
             }
         }
         if missing_shape {
-            tracing::debug!("XNNPACK: fallback due to missing shapes, ops: {:?}",
-                self.ops.iter().map(|o| format!("{:?}", o.op)).collect::<Vec<_>>());
+            tracing::debug!(
+                "XNNPACK: fallback due to missing shapes, ops: {:?}",
+                self.ops
+                    .iter()
+                    .map(|o| format!("{:?}", o.op))
+                    .collect::<Vec<_>>()
+            );
             self.compile_failed = true;
             return Ok(());
         }
@@ -1370,10 +1507,17 @@ impl XnnpackSubgraph {
             &self.initializers,
         ) {
             Ok(compiled) => {
-                tracing::debug!("XNNPACK: compiled subgraph: {} inputs {:?}, {} outputs {:?}, ops: {:?}",
-                    compiled.input_names.len(), compiled.input_shapes,
-                    compiled.output_names.len(), compiled.output_shapes,
-                    self.ops.iter().map(|o| format!("{:?}", o.op)).collect::<Vec<_>>());
+                tracing::debug!(
+                    "XNNPACK: compiled subgraph: {} inputs {:?}, {} outputs {:?}, ops: {:?}",
+                    compiled.input_names.len(),
+                    compiled.input_shapes,
+                    compiled.output_names.len(),
+                    compiled.output_shapes,
+                    self.ops
+                        .iter()
+                        .map(|o| format!("{:?}", o.op))
+                        .collect::<Vec<_>>()
+                );
                 self.compiled = Some(compiled);
                 Ok(())
             }
@@ -1400,14 +1544,21 @@ impl XnnpackSubgraph {
         for (i, name) in compiled.input_names.iter().enumerate() {
             if let Some(tensor) = values.get(name) {
                 if tensor.dtype() != crate::DType::Float {
-                    tracing::debug!("XNNPACK: dtype mismatch for input '{name}': {:?}", tensor.dtype());
+                    tracing::debug!(
+                        "XNNPACK: dtype mismatch for input '{name}': {:?}",
+                        tensor.dtype()
+                    );
                     self.compiled = None;
                     self.compile_failed = true;
                     return self.execute_fallback(values);
                 }
                 let runtime_shape: Vec<usize> = tensor.dims.to_vec();
                 if runtime_shape != compiled.input_shapes[i] {
-                    tracing::debug!("XNNPACK: shape mismatch for input '{name}': runtime {:?} != compiled {:?}", runtime_shape, compiled.input_shapes[i]);
+                    tracing::debug!(
+                        "XNNPACK: shape mismatch for input '{name}': runtime {:?} != compiled {:?}",
+                        runtime_shape,
+                        compiled.input_shapes[i]
+                    );
                     self.compiled = None;
                     self.compile_failed = true;
                     return self.execute_fallback(values);
@@ -1495,7 +1646,10 @@ impl XnnpackSubgraph {
     }
 
     fn execute_fallback(&mut self, values: &mut HashMap<String, Tensor>) -> Result<()> {
-        tracing::debug!("XNNPACK: falling back to CPU for {} ops", self.fallback_nodes.len());
+        tracing::debug!(
+            "XNNPACK: falling back to CPU for {} ops",
+            self.fallback_nodes.len()
+        );
         for node in &mut self.fallback_nodes {
             match node {
                 super::PlanNode::Single { output, layer } => {

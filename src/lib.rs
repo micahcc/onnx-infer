@@ -199,8 +199,12 @@ mod tests {
             }
         }
         if max_err > 1e-3 {
-            eprintln!("max absolute error: {max_err} at index {max_err_idx} (got={}, want={}), output len={}",
-                out_data[max_err_idx], exp_data[max_err_idx], out_data.len());
+            eprintln!(
+                "max absolute error: {max_err} at index {max_err_idx} (got={}, want={}), output len={}",
+                out_data[max_err_idx],
+                exp_data[max_err_idx],
+                out_data.len()
+            );
         }
         for (got, want) in out_data.iter().zip(exp_data.iter()) {
             assert_relative_eq!(got, want, max_relative = 1e-3, epsilon = 1e-5);
