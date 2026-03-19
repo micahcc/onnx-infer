@@ -148,7 +148,7 @@ impl SubgraphBuilder {
         ensure_init();
         let mut subgraph: xnn_subgraph_t = std::ptr::null_mut();
         let status = unsafe { xnn_create_subgraph(num_external, 0, &mut subgraph) };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_create_subgraph failed: {status:?}"
             )));
@@ -173,7 +173,7 @@ impl SubgraphBuilder {
         let status = unsafe {
             xnn_define_tensor_value(
                 self.subgraph,
-                xnn_datatype::xnn_datatype_fp32,
+                xnn_datatype_xnn_datatype_fp32,
                 shape_nhwc.len(),
                 shape_nhwc.as_ptr(),
                 std::ptr::null(),
@@ -182,7 +182,7 @@ impl SubgraphBuilder {
                 &mut id_out,
             )
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_tensor_value (input {name}) failed: {status:?}"
             )));
@@ -201,7 +201,7 @@ impl SubgraphBuilder {
         let status = unsafe {
             xnn_define_tensor_value(
                 self.subgraph,
-                xnn_datatype::xnn_datatype_fp32,
+                xnn_datatype_xnn_datatype_fp32,
                 shape_nhwc.len(),
                 shape_nhwc.as_ptr(),
                 std::ptr::null(),
@@ -210,7 +210,7 @@ impl SubgraphBuilder {
                 &mut id_out,
             )
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_tensor_value (output {name}) failed: {status:?}"
             )));
@@ -224,7 +224,7 @@ impl SubgraphBuilder {
         let status = unsafe {
             xnn_define_tensor_value(
                 self.subgraph,
-                xnn_datatype::xnn_datatype_fp32,
+                xnn_datatype_xnn_datatype_fp32,
                 shape.len(),
                 shape.as_ptr(),
                 std::ptr::null(),
@@ -233,7 +233,7 @@ impl SubgraphBuilder {
                 &mut id_out,
             )
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_tensor_value (internal {name}) failed: {status:?}"
             )));
@@ -249,7 +249,7 @@ impl SubgraphBuilder {
         let status = unsafe {
             xnn_define_tensor_value(
                 self.subgraph,
-                xnn_datatype::xnn_datatype_fp32,
+                xnn_datatype_xnn_datatype_fp32,
                 shape.len(),
                 shape.as_ptr(),
                 data_ptr,
@@ -258,7 +258,7 @@ impl SubgraphBuilder {
                 &mut id_out,
             )
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_tensor_value (static {name}) failed: {status:?}"
             )));
@@ -304,7 +304,7 @@ impl SubgraphBuilder {
         let status = unsafe {
             xnn_define_static_transpose(self.subgraph, 4, perm.as_ptr(), src_id, nhwc_id, 0)
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_static_transpose (NCHW→NHWC for {name}) failed: {status:?}"
             )));
@@ -330,7 +330,7 @@ impl SubgraphBuilder {
         let status = unsafe {
             xnn_define_static_transpose(self.subgraph, 4, perm.as_ptr(), nhwc_id, nchw_id, 0)
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_static_transpose (NHWC→NCHW for {name}) failed: {status:?}"
             )));
@@ -351,82 +351,82 @@ impl SubgraphBuilder {
             OpType::Sigmoid => self.add_unary(
                 captured,
                 shape_map,
-                xnn_unary_operator::xnn_unary_sigmoid,
+                xnn_unary_operator_xnn_unary_sigmoid,
                 None,
             ),
             OpType::Tanh => self.add_unary(
                 captured,
                 shape_map,
-                xnn_unary_operator::xnn_unary_tanh,
+                xnn_unary_operator_xnn_unary_tanh,
                 None,
             ),
             OpType::Exp => {
-                self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_exp, None)
+                self.add_unary(captured, shape_map, xnn_unary_operator_xnn_unary_exp, None)
             }
             OpType::Abs => {
-                self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_abs, None)
+                self.add_unary(captured, shape_map, xnn_unary_operator_xnn_unary_abs, None)
             }
             OpType::Sqrt => self.add_unary(
                 captured,
                 shape_map,
-                xnn_unary_operator::xnn_unary_square_root,
+                xnn_unary_operator_xnn_unary_square_root,
                 None,
             ),
             OpType::Floor => self.add_unary(
                 captured,
                 shape_map,
-                xnn_unary_operator::xnn_unary_floor,
+                xnn_unary_operator_xnn_unary_floor,
                 None,
             ),
             OpType::Ceil => self.add_unary(
                 captured,
                 shape_map,
-                xnn_unary_operator::xnn_unary_ceiling,
+                xnn_unary_operator_xnn_unary_ceiling,
                 None,
             ),
             OpType::Log => {
-                self.add_unary(captured, shape_map, xnn_unary_operator::xnn_unary_log, None)
+                self.add_unary(captured, shape_map, xnn_unary_operator_xnn_unary_log, None)
             }
             OpType::Neg => self.add_unary(
                 captured,
                 shape_map,
-                xnn_unary_operator::xnn_unary_negate,
+                xnn_unary_operator_xnn_unary_negate,
                 None,
             ),
             OpType::Sin => self.add_unary(
                 captured,
                 shape_map,
-                xnn_unary_operator::xnn_unary_sine,
+                xnn_unary_operator_xnn_unary_sine,
                 None,
             ),
             OpType::Cos => self.add_unary(
                 captured,
                 shape_map,
-                xnn_unary_operator::xnn_unary_cosine,
+                xnn_unary_operator_xnn_unary_cosine,
                 None,
             ),
             OpType::LeakyRelu => self.add_leaky_relu(captured, shape_map),
             OpType::Add => {
-                self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_add)
+                self.add_binary(captured, shape_map, xnn_binary_operator_xnn_binary_add)
             }
             OpType::Sub => self.add_binary(
                 captured,
                 shape_map,
-                xnn_binary_operator::xnn_binary_subtract,
+                xnn_binary_operator_xnn_binary_subtract,
             ),
             OpType::Mul => self.add_binary(
                 captured,
                 shape_map,
-                xnn_binary_operator::xnn_binary_multiply,
+                xnn_binary_operator_xnn_binary_multiply,
             ),
             OpType::Div => {
-                self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_divide)
+                self.add_binary(captured, shape_map, xnn_binary_operator_xnn_binary_divide)
             }
             OpType::Max => {
-                self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_maximum)
+                self.add_binary(captured, shape_map, xnn_binary_operator_xnn_binary_maximum)
             }
             OpType::Min => {
-                self.add_binary(captured, shape_map, xnn_binary_operator::xnn_binary_minimum)
+                self.add_binary(captured, shape_map, xnn_binary_operator_xnn_binary_minimum)
             }
             OpType::MaxPool => self.add_maxpool(captured, shape_map),
             OpType::GlobalAveragePool => self.add_global_avg_pool(captured, shape_map),
@@ -615,7 +615,7 @@ impl SubgraphBuilder {
                 )
             }
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_convolution_2d failed: {status:?}"
             )));
@@ -629,7 +629,7 @@ impl SubgraphBuilder {
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
         let params = xnn_unary_params {
-            clamp: xnn_unary_clamp_params {
+            clamp: xnn_unary_params__bindgen_ty_1 {
                 min: 0.0,
                 max: f32::INFINITY,
             },
@@ -637,7 +637,7 @@ impl SubgraphBuilder {
         self.add_unary(
             cap,
             shape_map,
-            xnn_unary_operator::xnn_unary_clamp,
+            xnn_unary_operator_xnn_unary_clamp,
             Some(params),
         )
     }
@@ -677,7 +677,7 @@ impl SubgraphBuilder {
             get_attr_float(&cap.node, "max").unwrap_or(f32::INFINITY)
         };
         let params = xnn_unary_params {
-            clamp: xnn_unary_clamp_params {
+            clamp: xnn_unary_params__bindgen_ty_1 {
                 min: min_val,
                 max: max_val,
             },
@@ -685,7 +685,7 @@ impl SubgraphBuilder {
         self.add_unary(
             cap,
             shape_map,
-            xnn_unary_operator::xnn_unary_clamp,
+            xnn_unary_operator_xnn_unary_clamp,
             Some(params),
         )
     }
@@ -697,14 +697,14 @@ impl SubgraphBuilder {
     ) -> Result<()> {
         let alpha = get_attr_float(&cap.node, "alpha").unwrap_or(0.01);
         let params = xnn_unary_params {
-            leaky_relu: xnn_unary_leaky_relu_params {
+            leaky_relu: xnn_unary_params__bindgen_ty_3 {
                 negative_slope: alpha,
             },
         };
         self.add_unary(
             cap,
             shape_map,
-            xnn_unary_operator::xnn_unary_leaky_relu,
+            xnn_unary_operator_xnn_unary_leaky_relu,
             Some(params),
         )
     }
@@ -748,7 +748,7 @@ impl SubgraphBuilder {
             .unwrap_or(std::ptr::null());
         let status =
             unsafe { xnn_define_unary(self.subgraph, op_type, params_ptr, input_id, output_id, 0) };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_unary failed for {:?}: {status:?}",
                 cap.op
@@ -792,7 +792,7 @@ impl SubgraphBuilder {
                         0,
                     )
                 };
-                if status != xnn_status::xnn_status_success {
+                if status != xnn_status_xnn_status_success {
                     return Err(InferenceError::InvalidModel(format!(
                         "xnn_define_static_reshape (legacy broadcast) failed: {status:?}"
                     )));
@@ -818,7 +818,7 @@ impl SubgraphBuilder {
                 0,
             )
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_binary failed for {:?}: {status:?}",
                 cap.op
@@ -875,7 +875,7 @@ impl SubgraphBuilder {
                 0,
             )
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_max_pooling_2d failed: {status:?}"
             )));
@@ -909,7 +909,7 @@ impl SubgraphBuilder {
                 XNN_FLAG_KEEP_DIMS,
             )
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_global_average_pooling_2d failed: {status:?}"
             )));
@@ -925,7 +925,7 @@ impl SubgraphBuilder {
         let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
         let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
         let status = unsafe { xnn_define_softmax(self.subgraph, input_id, output_id, 0) };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_softmax failed: {status:?}"
             )));
@@ -991,7 +991,7 @@ impl SubgraphBuilder {
                 flags,
             )
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_fully_connected (Gemm) failed: {status:?}"
             )));
@@ -1035,7 +1035,7 @@ impl SubgraphBuilder {
                     XNN_FLAG_TRANSPOSE_WEIGHTS,
                 )
             };
-            if status != xnn_status::xnn_status_success {
+            if status != xnn_status_xnn_status_success {
                 return Err(InferenceError::InvalidModel(format!(
                     "xnn_define_fully_connected (MatMul) failed: {status:?}"
                 )));
@@ -1048,7 +1048,7 @@ impl SubgraphBuilder {
             let status = unsafe {
                 xnn_define_batch_matrix_multiply(self.subgraph, input1_id, input2_id, output_id, 0)
             };
-            if status != xnn_status::xnn_status_success {
+            if status != xnn_status_xnn_status_success {
                 return Err(InferenceError::InvalidModel(format!(
                     "xnn_define_batch_matrix_multiply failed: {status:?}"
                 )));
@@ -1073,7 +1073,7 @@ impl SubgraphBuilder {
         let status = unsafe {
             xnn_define_static_reshape(self.subgraph, 2, new_shape.as_ptr(), input_id, output_id, 0)
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_static_reshape (Flatten) failed: {status:?}"
             )));
@@ -1088,7 +1088,7 @@ impl SubgraphBuilder {
         _initializers: &HashMap<String, Tensor>,
     ) -> Result<()> {
         let out_shape = shape_map.get(&cap.outputs[0]).cloned().unwrap_or_default();
-        if out_shape.is_empty() || out_shape.len() > XNN_MAX_TENSOR_DIMS {
+        if out_shape.is_empty() || out_shape.len() > XNN_MAX_TENSOR_DIMS as usize {
             return Err(InferenceError::InvalidModel(
                 "XNNPACK Reshape: unknown or too many output dims".into(),
             ));
@@ -1106,7 +1106,7 @@ impl SubgraphBuilder {
                 0,
             )
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_static_reshape failed: {status:?}"
             )));
@@ -1137,14 +1137,14 @@ impl SubgraphBuilder {
         let status = unsafe {
             xnn_define_concatenate(
                 self.subgraph,
-                axis,
+                axis as i32,
                 input_ids.len(),
                 input_ids.as_ptr(),
                 output_id,
                 0,
             )
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_concatenate failed: {status:?}"
             )));
@@ -1218,7 +1218,7 @@ impl SubgraphBuilder {
         let status = unsafe {
             xnn_define_binary(
                 self.subgraph,
-                xnn_binary_operator::xnn_binary_multiply,
+                xnn_binary_operator_xnn_binary_multiply,
                 std::ptr::null(),
                 input_id,
                 scale_id,
@@ -1226,7 +1226,7 @@ impl SubgraphBuilder {
                 0,
             )
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_binary (BatchNorm mul) failed: {status:?}"
             )));
@@ -1237,7 +1237,7 @@ impl SubgraphBuilder {
         let status = unsafe {
             xnn_define_binary(
                 self.subgraph,
-                xnn_binary_operator::xnn_binary_add,
+                xnn_binary_operator_xnn_binary_add,
                 std::ptr::null(),
                 mid_id,
                 bias_data_id,
@@ -1245,7 +1245,7 @@ impl SubgraphBuilder {
                 0,
             )
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             return Err(InferenceError::InvalidModel(format!(
                 "xnn_define_binary (BatchNorm add) failed: {status:?}"
             )));
@@ -1339,7 +1339,7 @@ fn compile_subgraph(
         let shape = shape_map.get(name).cloned().unwrap_or_default();
         let numel: usize = shape.iter().product();
         builder.define_external_input(name, i as u32, &shape)?;
-        input_bufs.push(vec![0.0f32; numel + XNN_EXTRA_BYTES / 4]);
+        input_bufs.push(vec![0.0f32; numel + XNN_EXTRA_BYTES as usize / 4]);
         input_shapes.push(shape);
     }
 
@@ -1352,7 +1352,7 @@ fn compile_subgraph(
         let numel: usize = shape.iter().product();
         let ext_id = (external_inputs.len() + i) as u32;
         builder.define_external_output(name, ext_id, &shape)?;
-        output_bufs.push(vec![0.0f32; numel + XNN_EXTRA_BYTES / 4]);
+        output_bufs.push(vec![0.0f32; numel + XNN_EXTRA_BYTES as usize / 4]);
         output_shapes.push(shape);
     }
 
@@ -1383,7 +1383,7 @@ fn compile_subgraph(
     let status = unsafe { xnn_create_runtime(builder.subgraph, &mut runtime) };
     unsafe { xnn_delete_subgraph(builder.subgraph) };
 
-    if status != xnn_status::xnn_status_success {
+    if status != xnn_status_xnn_status_success {
         return Err(InferenceError::InvalidModel(format!(
             "xnn_create_runtime failed: {status:?}"
         )));
@@ -1578,7 +1578,7 @@ impl XnnpackSubgraph {
             })?;
             let src = tensor.floats();
             let buf = &mut compiled.input_bufs[i];
-            let needed = src.len() + XNN_EXTRA_BYTES / 4;
+            let needed = src.len() + XNN_EXTRA_BYTES as usize / 4;
             if buf.len() < needed {
                 buf.resize(needed, 0.0);
             }
@@ -1601,7 +1601,7 @@ impl XnnpackSubgraph {
         }
 
         let status = unsafe { xnn_reshape_runtime(compiled.runtime) };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             tracing::debug!("XNNPACK: reshape failed with {:?}", status);
             self.compiled = None;
             self.compile_failed = true;
@@ -1615,7 +1615,7 @@ impl XnnpackSubgraph {
                 external_values.as_ptr(),
             )
         };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             tracing::debug!("XNNPACK: setup failed with {:?}", status);
             self.compiled = None;
             self.compile_failed = true;
@@ -1623,7 +1623,7 @@ impl XnnpackSubgraph {
         }
 
         let status = unsafe { xnn_invoke_runtime(compiled.runtime) };
-        if status != xnn_status::xnn_status_success {
+        if status != xnn_status_xnn_status_success {
             tracing::debug!("XNNPACK: invoke failed with {:?}", status);
             self.compiled = None;
             self.compile_failed = true;

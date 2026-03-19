@@ -37,6 +37,7 @@ name = "kernels"
 harness = false
 
 [build-dependencies]
+bindgen = "0.71"
 prost = "0"
 prost-build = "0"
 protox = "0.9"

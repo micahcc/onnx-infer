@@ -10,7 +10,7 @@ fn main() -> Result<()> {
     #[cfg(feature = "xnnpack")]
     {
         let xnnpack_dir =
-            std::env::var("XNNPACK_DIR").expect("XNNPACK_DIR must be set for xnnpack feature");
+            std::env::var("XNNPACK").expect("XNNPACK must be set for xnnpack feature");
         println!("cargo:rustc-link-search=native={xnnpack_dir}/lib");
         println!("cargo:rustc-link-lib=static=XNNPACK");
         println!("cargo:rustc-link-lib=static=xnnpack-microkernels-prod");
@@ -24,6 +24,27 @@ fn main() -> Result<()> {
         println!("cargo:rustc-link-lib=c++");
         #[cfg(target_os = "linux")]
         println!("cargo:rustc-link-lib=stdc++");
+
+        let include_dir = format!("{xnnpack_dir}/include");
+        println!("cargo:rerun-if-changed={include_dir}/xnnpack.h");
+
+        let bindings = bindgen::Builder::default()
+            .header(format!("{include_dir}/xnnpack.h"))
+            .clang_arg(format!("-I{include_dir}"))
+            .allowlist_function("xnn_.*")
+            .allowlist_type("xnn_.*")
+            .allowlist_var("XNN_.*")
+            .allowlist_type("pthreadpool_t")
+            .derive_debug(true)
+            .derive_copy(true)
+            .generate_comments(false)
+            .generate()
+            .expect("bindgen failed to generate XNNPACK bindings");
+
+        let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+        bindings
+            .write_to_file(out_dir.join("xnnpack_bindings.rs"))
+            .expect("failed to write XNNPACK bindings");
     }
 
     let file_descriptors =
