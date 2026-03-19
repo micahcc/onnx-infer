@@ -3,10 +3,8 @@ use std::collections::HashMap;
 use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
-use crate::get_attr_ints;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::onnx::NodeProto;
 
 pub struct Reshape {
     pub inputs: Vec<String>,
@@ -14,11 +12,8 @@ pub struct Reshape {
 }
 
 impl Reshape {
-    pub fn new(inputs: Vec<String>, node: &NodeProto) -> Self {
-        Self {
-            inputs,
-            shape_attr: get_attr_ints(node, "shape"),
-        }
+    pub fn new(inputs: Vec<String>, shape_attr: Option<Vec<i64>>) -> Self {
+        Self { inputs, shape_attr }
     }
 }
 

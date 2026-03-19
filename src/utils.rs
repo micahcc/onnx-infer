@@ -4,35 +4,6 @@ use crate::Dims;
 use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
-use crate::onnx::NodeProto;
-
-pub fn get_attr_ints(node: &NodeProto, name: &str) -> Option<Vec<i64>> {
-    node.attribute
-        .iter()
-        .find(|a| a.name == name)
-        .map(|a| a.ints.clone())
-}
-
-pub fn get_attr_int(node: &NodeProto, name: &str) -> Option<i64> {
-    node.attribute.iter().find(|a| a.name == name).map(|a| a.i)
-}
-
-pub fn get_attr_float(node: &NodeProto, name: &str) -> Option<f32> {
-    node.attribute.iter().find(|a| a.name == name).map(|a| a.f)
-}
-
-pub fn get_attr_string(node: &NodeProto, name: &str) -> Option<String> {
-    node.attribute
-        .iter()
-        .find(|a| a.name == name)
-        .and_then(|a| {
-            if a.s.is_empty() {
-                None
-            } else {
-                Some(String::from_utf8_lossy(&a.s).to_string())
-            }
-        })
-}
 
 pub fn get_tensor<'a>(values: &'a HashMap<String, Tensor>, name: &str) -> Result<&'a Tensor> {
     values

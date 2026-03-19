@@ -5,9 +5,8 @@ use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
 use crate::layers::OpType;
-use crate::onnx::NodeProto;
+use crate::onnx_ir::Node;
 use crate::xnnpack_ffi::*;
-use crate::{get_attr_float, get_attr_int, get_attr_ints, get_attr_string};
 
 /// 2D padding values (top, left, bottom, right).
 struct Padding2D {
@@ -40,7 +39,7 @@ pub struct CapturedOp {
     pub op: OpType,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
-    pub node: NodeProto,
+    pub node: Node,
 }
 
 /// A compiled XNNPACK subgraph that replaces a sequence of ONNX ops.
@@ -492,11 +491,11 @@ impl SubgraphBuilder {
         let kh = w_shape[2];
         let kw = w_shape[3];
 
-        let group = get_attr_int(node, "group").unwrap_or(1) as usize;
-        let strides_attr = get_attr_ints(node, "strides").unwrap_or_else(|| vec![1, 1]);
-        let pads_attr = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
-        let dilations_attr = get_attr_ints(node, "dilations").unwrap_or_else(|| vec![1, 1]);
-        let auto_pad = get_attr_string(node, "auto_pad").unwrap_or_default();
+        let group = node.attrs.get_int("group").unwrap_or(1) as usize;
+        let strides_attr = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
+        let pads_attr = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+        let dilations_attr = node.attrs.get_ints("dilations").unwrap_or_else(|| vec![1, 1]);
+        let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
 
         let stride = Stride2D {
             h: strides_attr[0] as u32,
@@ -706,7 +705,7 @@ impl SubgraphBuilder {
                 f32::NEG_INFINITY
             }
         } else {
-            get_attr_float(&cap.node, "min").unwrap_or(f32::NEG_INFINITY)
+            cap.node.attrs.get_float("min").unwrap_or(f32::NEG_INFINITY)
         };
         let max_val = if cap.inputs.len() > 2 && !cap.inputs[2].is_empty() {
             if let Some(t) = initializers.get(&cap.inputs[2]) {
@@ -719,7 +718,7 @@ impl SubgraphBuilder {
                 f32::INFINITY
             }
         } else {
-            get_attr_float(&cap.node, "max").unwrap_or(f32::INFINITY)
+            cap.node.attrs.get_float("max").unwrap_or(f32::INFINITY)
         };
         let params = xnn_unary_params {
             clamp: xnn_unary_params__bindgen_ty_1 {
@@ -740,7 +739,7 @@ impl SubgraphBuilder {
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
-        let alpha = get_attr_float(&cap.node, "alpha").unwrap_or(0.01);
+        let alpha = cap.node.attrs.get_float("alpha").unwrap_or(0.01);
         let params = xnn_unary_params {
             leaky_relu: xnn_unary_params__bindgen_ty_3 {
                 negative_slope: alpha,
@@ -813,9 +812,9 @@ impl SubgraphBuilder {
         // Handle legacy broadcasting (opset-1 broadcast=1 with axis attribute).
         // XNNPACK uses standard numpy broadcasting, so we need to reshape the second
         // input to align it at the right axis.
-        let legacy_broadcast = get_attr_int(&cap.node, "broadcast").unwrap_or(0) != 0;
+        let legacy_broadcast = cap.node.attrs.get_int("broadcast").unwrap_or(0) != 0;
         let input2_id = if legacy_broadcast {
-            let axis = get_attr_int(&cap.node, "axis").unwrap_or(0) as usize;
+            let axis = cap.node.attrs.get_int("axis").unwrap_or(0) as usize;
             let a_shape = shape_map.get(&cap.inputs[0]).cloned().unwrap_or_default();
             let b_shape = shape_map.get(&cap.inputs[1]).cloned().unwrap_or_default();
             if b_shape.len() < a_shape.len() {
@@ -878,9 +877,9 @@ impl SubgraphBuilder {
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
         let node = &cap.node;
-        let ks_attr = get_attr_ints(node, "kernel_shape").unwrap_or_default();
-        let strides_attr = get_attr_ints(node, "strides").unwrap_or_else(|| vec![1, 1]);
-        let pads_attr = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+        let ks_attr = node.attrs.get_ints("kernel_shape").unwrap_or_default();
+        let strides_attr = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
+        let pads_attr = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
 
         let kernel = KernelSize {
             h: ks_attr[0] as usize,
@@ -996,7 +995,7 @@ impl SubgraphBuilder {
         initializers: &HashMap<String, Tensor>,
     ) -> Result<()> {
         let node = &cap.node;
-        let trans_b = get_attr_int(node, "transB").unwrap_or(0) != 0;
+        let trans_b = node.attrs.get_int("transB").unwrap_or(0) != 0;
 
         let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
 
@@ -1119,7 +1118,7 @@ impl SubgraphBuilder {
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
         let in_shape = shape_map.get(&cap.inputs[0]).cloned().unwrap_or_default();
-        let axis = get_attr_int(&cap.node, "axis").unwrap_or(1) as usize;
+        let axis = cap.node.attrs.get_int("axis").unwrap_or(1) as usize;
         let outer: usize = in_shape[..axis].iter().product();
         let inner: usize = in_shape[axis..].iter().product();
         let new_shape = [outer, inner];
@@ -1175,7 +1174,7 @@ impl SubgraphBuilder {
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
-        let raw_axis = get_attr_int(&cap.node, "axis").unwrap_or(0);
+        let raw_axis = cap.node.attrs.get_int("axis").unwrap_or(0);
         // Resolve negative axis using output rank
         let out_shape = shape_map.get(&cap.outputs[0]).cloned().unwrap_or_default();
         let ndim = out_shape.len() as i64;
@@ -1216,7 +1215,7 @@ impl SubgraphBuilder {
     ) -> Result<()> {
         // Fuse BatchNorm into scale+bias: y = (x - mean) / sqrt(var + eps) * gamma + beta
         // Which is: y = x * (gamma / sqrt(var + eps)) + (beta - mean * gamma / sqrt(var + eps))
-        let epsilon = get_attr_float(&cap.node, "epsilon").unwrap_or(1e-5);
+        let epsilon = cap.node.attrs.get_float("epsilon").unwrap_or(1e-5);
 
         let scale_t = initializers.get(&cap.inputs[1]).ok_or_else(|| {
             InferenceError::InvalidModel("XNNPACK BatchNorm: scale not in initializers".into())

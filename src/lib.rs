@@ -69,6 +69,7 @@ pub mod dtype;
 pub mod inference_engine;
 pub mod inference_error;
 pub mod layers;
+pub mod onnx_ir;
 pub mod tensor_data;
 pub mod utils;
 #[cfg(feature = "xnnpack")]
@@ -91,10 +92,6 @@ pub use tensor_data::TensorData;
 pub use utils::broadcast_index;
 pub use utils::broadcast_shape;
 pub use utils::broadcast_shape_into;
-pub use utils::get_attr_float;
-pub use utils::get_attr_int;
-pub use utils::get_attr_ints;
-pub use utils::get_attr_string;
 pub use utils::get_tensor;
 
 #[cfg(test)]

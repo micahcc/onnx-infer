@@ -2,15 +2,10 @@ use std::collections::HashMap;
 
 use crate::DType;
 use crate::Dims;
-use crate::ONNX_INT32;
-use crate::ONNX_INT64;
 use crate::Tensor;
 use crate::broadcast_shape;
 use crate::dims;
-use crate::get_attr_int;
-use crate::get_attr_ints;
-use crate::get_attr_string;
-use crate::onnx::NodeProto;
+use crate::onnx_ir::{Attr, Node};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpType {
@@ -271,7 +266,7 @@ impl OpType {
         }
     }
 
-    pub fn infer_output_dtype(self, node: &NodeProto, input_types: &[DType]) -> DType {
+    pub fn infer_output_dtype(self, node: &Node, input_types: &[DType]) -> DType {
         match self {
             Self::Shape
             | Self::Less
@@ -282,27 +277,13 @@ impl OpType {
             | Self::CategoryMapper
             | Self::IsNaN
             | Self::IsInf => DType::Int64,
-            Self::Constant => node
-                .attribute
-                .iter()
-                .find(|a| a.name == "value")
-                .and_then(|a| a.t.as_ref())
-                .map(|t| {
-                    if t.data_type == ONNX_INT32 || t.data_type == ONNX_INT64 {
-                        DType::Int64
-                    } else {
-                        DType::Float
-                    }
-                })
-                .unwrap_or(DType::Float),
+            Self::Constant => match node.attrs.get("value") {
+                Some(Attr::Tensor(t)) => t.dtype(),
+                _ => DType::Float,
+            },
             Self::Cast => {
-                let to = get_attr_int(node, "to").unwrap_or(1);
-                let to32 = to as i32;
-                if to32 == ONNX_INT32 || to32 == ONNX_INT64 {
-                    DType::Int64
-                } else {
-                    DType::Float
-                }
+                let to = node.attrs.get_int("to").unwrap_or(1);
+                crate::onnx_ir::ElemType::from_onnx(to as i32).to_dtype()
             }
             Self::Identity
             | Self::Reshape
@@ -328,7 +309,7 @@ impl OpType {
 
     pub fn infer_output_shape(
         self,
-        node: &NodeProto,
+        node: &Node,
         input_names: &[String],
         shape_map: &HashMap<String, Dims>,
         known_values: &HashMap<String, Tensor>,
@@ -424,11 +405,11 @@ impl OpType {
                 }
                 let n = x[0];
                 let c_out = w[0];
-                let auto_pad = get_attr_string(node, "auto_pad").unwrap_or_default();
-                let strides = get_attr_ints(node, "strides").unwrap_or_else(|| vec![1, 1]);
-                let dilations = get_attr_ints(node, "dilations").unwrap_or_else(|| vec![1, 1]);
-                let pads = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
-                let ks_attr = get_attr_ints(node, "kernel_shape");
+                let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
+                let strides = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
+                let dilations = node.attrs.get_ints("dilations").unwrap_or_else(|| vec![1, 1]);
+                let pads = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+                let ks_attr = node.attrs.get_ints("kernel_shape");
 
                 let mut out_dims: Dims = dims![n, c_out];
                 for i in 0..2 {
@@ -485,8 +466,8 @@ impl OpType {
                 if a.len() != 2 || b.len() != 2 {
                     return None;
                 }
-                let trans_a = get_attr_int(node, "transA").unwrap_or(0) != 0;
-                let trans_b = get_attr_int(node, "transB").unwrap_or(0) != 0;
+                let trans_a = node.attrs.get_int("transA").unwrap_or(0) != 0;
+                let trans_b = node.attrs.get_int("transB").unwrap_or(0) != 0;
                 let m = if trans_a { a[1] } else { a[0] };
                 let n = if trans_b { b[0] } else { b[1] };
                 Some(dims![m, n])
@@ -497,10 +478,10 @@ impl OpType {
                 if x.len() != 4 {
                     return None;
                 }
-                let auto_pad = get_attr_string(node, "auto_pad").unwrap_or_default();
-                let ks = get_attr_ints(node, "kernel_shape")?;
-                let strides = get_attr_ints(node, "strides").unwrap_or_else(|| vec![1, 1]);
-                let pads = get_attr_ints(node, "pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+                let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
+                let ks = node.attrs.get_ints("kernel_shape")?;
+                let strides = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
+                let pads = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
 
                 let mut out_dims: Dims = dims![x[0], x[1]];
                 for i in 0..2 {
@@ -532,7 +513,7 @@ impl OpType {
 
             Self::Flatten => {
                 let x = get_shape(0)?;
-                let axis = get_attr_int(node, "axis").unwrap_or(1) as usize;
+                let axis = node.attrs.get_int("axis").unwrap_or(1) as usize;
                 let outer: usize = x[..axis].iter().product();
                 let inner: usize = x[axis..].iter().product();
                 Some(dims![outer, inner])
@@ -546,7 +527,7 @@ impl OpType {
             Self::Gather => {
                 let data = get_shape(0)?;
                 let indices = get_shape(1)?;
-                let axis = get_attr_int(node, "axis").unwrap_or(0);
+                let axis = node.attrs.get_int("axis").unwrap_or(0);
                 let axis = if axis < 0 {
                     (data.len() as i64 + axis) as usize
                 } else {
@@ -561,7 +542,7 @@ impl OpType {
 
             Self::Concat => {
                 let first = get_shape(0)?;
-                let axis = get_attr_int(node, "axis").unwrap_or(0);
+                let axis = node.attrs.get_int("axis").unwrap_or(0);
                 let axis = if axis < 0 {
                     (first.len() as i64 + axis) as usize
                 } else {
@@ -577,7 +558,7 @@ impl OpType {
 
             Self::Transpose => {
                 let x = get_shape(0)?;
-                match get_attr_ints(node, "perm") {
+                match node.attrs.get_ints("perm") {
                     Some(p) => Some(p.iter().map(|&i| x[i as usize]).collect()),
                     None => {
                         let mut out = x.clone();
@@ -598,7 +579,7 @@ impl OpType {
                         DType::String => return None,
                     }
                 } else {
-                    get_attr_ints(node, "shape")?
+                    node.attrs.get_ints("shape")?
                 };
 
                 let mut dims: Dims = Dims::new();
@@ -630,7 +611,7 @@ impl OpType {
 
             Self::Squeeze => {
                 let x = get_shape(0)?;
-                let axes: Option<Vec<i64>> = get_attr_ints(node, "axes").or_else(|| {
+                let axes: Option<Vec<i64>> = node.attrs.get_ints("axes").or_else(|| {
                     let t = get_value(1)?;
                     Some(match t.dtype() {
                         DType::Int64 => t.ints().to_vec(),
@@ -665,7 +646,7 @@ impl OpType {
 
             Self::Unsqueeze => {
                 let x = get_shape(0)?;
-                let axes: Vec<i64> = get_attr_ints(node, "axes").or_else(|| {
+                let axes: Vec<i64> = node.attrs.get_ints("axes").or_else(|| {
                     let t = get_value(1)?;
                     Some(match t.dtype() {
                         DType::Int64 => t.ints().to_vec(),
@@ -846,8 +827,8 @@ impl OpType {
 
             Self::ReduceMin => {
                 let x = get_shape(0)?;
-                let keepdims = get_attr_int(node, "keepdims").unwrap_or(1) != 0;
-                let axes: Vec<i64> = get_attr_ints(node, "axes").or_else(|| {
+                let keepdims = node.attrs.get_int("keepdims").unwrap_or(1) != 0;
+                let axes: Vec<i64> = node.attrs.get_ints("axes").or_else(|| {
                     let t = get_value(1)?;
                     Some(match t.dtype() {
                         DType::Int64 => t.ints().to_vec(),
@@ -884,21 +865,20 @@ impl OpType {
                 }
             }
 
-            Self::Constant => {
-                let attr = node.attribute.iter().find(|a| a.name == "value")?;
-                let t = attr.t.as_ref()?;
-                Some(t.dims.iter().map(|&d| d as usize).collect())
-            }
+            Self::Constant => match node.attrs.get("value") {
+                Some(Attr::Tensor(t)) => Some(t.dims.clone()),
+                _ => None,
+            },
 
             Self::ArgMax => {
                 let x = get_shape(0)?;
-                let axis_raw = get_attr_int(node, "axis").unwrap_or(0);
+                let axis_raw = node.attrs.get_int("axis").unwrap_or(0);
                 let axis = if axis_raw < 0 {
                     (x.len() as i64 + axis_raw) as usize
                 } else {
                     axis_raw as usize
                 };
-                let keepdims = get_attr_int(node, "keepdims").unwrap_or(1) != 0;
+                let keepdims = node.attrs.get_int("keepdims").unwrap_or(1) != 0;
                 let mut out = Dims::new();
                 for (i, &d) in x.iter().enumerate() {
                     if i == axis {
@@ -927,8 +907,8 @@ impl OpType {
 
             Self::ReduceMax | Self::ReduceSum => {
                 let x = get_shape(0)?;
-                let keepdims = get_attr_int(node, "keepdims").unwrap_or(1) != 0;
-                let axes: Option<Vec<i64>> = get_attr_ints(node, "axes");
+                let keepdims = node.attrs.get_int("keepdims").unwrap_or(1) != 0;
+                let axes: Option<Vec<i64>> = node.attrs.get_ints("axes");
                 if let Some(axes) = axes {
                     let rank = x.len() as i64;
                     let axes: Vec<usize> = axes

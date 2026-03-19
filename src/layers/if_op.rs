@@ -5,21 +5,21 @@ use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::plan::execute_node;
-use crate::onnx::GraphProto;
+use crate::onnx_ir::Graph;
 
 pub struct If {
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
-    then_branch: GraphProto,
-    else_branch: GraphProto,
+    then_branch: Graph,
+    else_branch: Graph,
 }
 
 impl If {
     pub fn new(
         inputs: Vec<String>,
         outputs: Vec<String>,
-        then_branch: GraphProto,
-        else_branch: GraphProto,
+        then_branch: Graph,
+        else_branch: Graph,
     ) -> Self {
         Self {
             inputs,
@@ -43,17 +43,14 @@ impl If {
             &self.else_branch
         };
 
-        // Execute the branch graph using the outer values
         // Copy initializers into values
-        for init in &branch.initializer {
-            if !init.name.is_empty() && !values.contains_key(&init.name) {
-                if let Ok(t) = Tensor::from_proto(init) {
-                    values.insert(init.name.clone(), t);
-                }
+        for (name, tensor) in &branch.initializers {
+            if !values.contains_key(name) {
+                values.insert(name.clone(), tensor.clone());
             }
         }
 
-        for node in &branch.node {
+        for node in &branch.nodes {
             execute_node(node, values)?;
         }
 
@@ -62,7 +59,7 @@ impl If {
             if out_name.is_empty() {
                 continue;
             }
-            if let Some(branch_out) = branch.output.get(i) {
+            if let Some(branch_out) = branch.outputs.get(i) {
                 if branch_out.name != *out_name {
                     if let Some(src) = values.remove(&branch_out.name) {
                         values.insert(out_name.clone(), src);

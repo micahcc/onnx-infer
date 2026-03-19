@@ -2,10 +2,8 @@ use std::collections::HashMap;
 
 use crate::Result;
 use crate::Tensor;
-use crate::get_attr_ints;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::onnx::NodeProto;
 
 pub struct Squeeze {
     pub inputs: Vec<String>,
@@ -13,11 +11,8 @@ pub struct Squeeze {
 }
 
 impl Squeeze {
-    pub fn new(inputs: Vec<String>, node: &NodeProto) -> Self {
-        Self {
-            inputs,
-            axes_attr: get_attr_ints(node, "axes").unwrap_or_default(),
-        }
+    pub fn new(inputs: Vec<String>, axes_attr: Vec<i64>) -> Self {
+        Self { inputs, axes_attr }
     }
 }
 

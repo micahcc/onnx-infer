@@ -4,10 +4,8 @@ use crate::DType;
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
-use crate::get_attr_ints;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::onnx::NodeProto;
 
 pub struct ReduceMinPrecomp {
     pub axes_mask: [bool; 8],
@@ -80,10 +78,9 @@ impl ReduceMin {
     pub fn new(
         inputs: Vec<String>,
         keepdims: bool,
-        node: &NodeProto,
+        axes_attr: Option<Vec<i64>>,
         initial_shape: &[usize],
     ) -> Self {
-        let axes_attr = get_attr_ints(node, "axes");
         let has_negative = axes_attr.as_ref().is_some_and(|a| a.iter().any(|&v| v < 0));
         let axes_attr_mask = if !has_negative {
             axes_attr.as_ref().map(|a| {

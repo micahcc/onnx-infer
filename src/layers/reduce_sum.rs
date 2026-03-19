@@ -3,11 +3,8 @@ use std::collections::HashMap;
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
-use crate::get_attr_int;
-use crate::get_attr_ints;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::onnx::NodeProto;
 
 pub struct ReduceSum {
     pub inputs: Vec<String>,
@@ -17,9 +14,12 @@ pub struct ReduceSum {
 }
 
 impl ReduceSum {
-    pub fn new(inputs: Vec<String>, keepdims: bool, node: &NodeProto) -> Self {
-        let axes_attr = get_attr_ints(node, "axes");
-        let noop_with_empty_axes = get_attr_int(node, "noop_with_empty_axes").unwrap_or(0) != 0;
+    pub fn new(
+        inputs: Vec<String>,
+        keepdims: bool,
+        axes_attr: Option<Vec<i64>>,
+        noop_with_empty_axes: bool,
+    ) -> Self {
         Self {
             inputs,
             keepdims,

@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 
 use crate::DType;
-use crate::ONNX_INT32;
-use crate::ONNX_INT64;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
+use crate::onnx_ir::ElemType;
 
 pub struct Cast {
     pub inputs: Vec<String>,
@@ -15,10 +14,9 @@ pub struct Cast {
 
 impl Cast {
     pub fn new(inputs: Vec<String>, to: i64) -> Self {
-        let to32 = to as i32;
         Self {
             inputs,
-            to_int: to32 == ONNX_INT32 || to32 == ONNX_INT64,
+            to_int: ElemType::from_onnx(to as i32).is_int(),
         }
     }
 }

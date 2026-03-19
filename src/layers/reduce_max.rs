@@ -3,10 +3,8 @@ use std::collections::HashMap;
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
-use crate::get_attr_ints;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::onnx::NodeProto;
 
 pub struct ReduceMax {
     pub inputs: Vec<String>,
@@ -15,8 +13,7 @@ pub struct ReduceMax {
 }
 
 impl ReduceMax {
-    pub fn new(inputs: Vec<String>, keepdims: bool, node: &NodeProto) -> Self {
-        let axes_attr = get_attr_ints(node, "axes");
+    pub fn new(inputs: Vec<String>, keepdims: bool, axes_attr: Option<Vec<i64>>) -> Self {
         Self {
             inputs,
             keepdims,

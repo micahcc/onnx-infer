@@ -10,12 +10,12 @@ use crate::dims;
 use crate::get_tensor;
 use crate::layers::Plan;
 use crate::layers::PlanNode;
-use crate::onnx::GraphProto;
+use crate::onnx_ir::Graph;
 
 pub struct Loop {
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
-    body: GraphProto,
+    body: Graph,
     plan: Option<Plan>,
     values: HashMap<String, Tensor>,
     outer_refs: Vec<String>,
@@ -35,7 +35,7 @@ pub struct Loop {
 }
 
 impl Loop {
-    pub fn new(inputs: Vec<String>, outputs: Vec<String>, body: GraphProto) -> Self {
+    pub fn new(inputs: Vec<String>, outputs: Vec<String>, body: Graph) -> Self {
         Self {
             inputs,
             outputs,
@@ -60,38 +60,38 @@ impl Loop {
 
     fn init(&mut self, outer_values: &HashMap<String, Tensor>) -> Result<()> {
         let num_carried = self.inputs.len() - 2;
-        let num_scan = self.body.output.len() - 1 - num_carried;
+        let num_scan = self.body.outputs.len() - 1 - num_carried;
 
         // Pre-compute names
-        self.iter_name = self.body.input[0].name.clone();
-        self.cond_name = self.body.input[1].name.clone();
-        self.cond_out_name = self.body.output[0].name.clone();
+        self.iter_name = self.body.inputs[0].name.clone();
+        self.cond_name = self.body.inputs[1].name.clone();
+        self.cond_out_name = self.body.outputs[0].name.clone();
         self.carried_in_names = (0..num_carried)
-            .map(|j| self.body.input[j + 2].name.clone())
+            .map(|j| self.body.inputs[j + 2].name.clone())
             .collect();
         self.carried_out_names = (0..num_carried)
-            .map(|j| self.body.output[j + 1].name.clone())
+            .map(|j| self.body.outputs[j + 1].name.clone())
             .collect();
         self.scan_out_names = (0..num_scan)
-            .map(|j| self.body.output[1 + num_carried + j].name.clone())
+            .map(|j| self.body.outputs[1 + num_carried + j].name.clone())
             .collect();
 
         // Determine outer references
         let mut body_local: HashSet<&str> = HashSet::new();
-        for inp in &self.body.input {
+        for inp in &self.body.inputs {
             body_local.insert(&inp.name);
         }
-        for init in &self.body.initializer {
-            body_local.insert(&init.name);
+        for name in self.body.initializers.keys() {
+            body_local.insert(name);
         }
-        for node in &self.body.node {
-            for out in &node.output {
+        for node in &self.body.nodes {
+            for out in &node.outputs {
                 body_local.insert(out);
             }
         }
         let mut outer_ref_set: HashSet<String> = HashSet::new();
-        for node in &self.body.node {
-            for inp in &node.input {
+        for node in &self.body.nodes {
+            for inp in &node.inputs {
                 if !inp.is_empty() && !body_local.contains(inp.as_str()) {
                     outer_ref_set.insert(inp.clone());
                 }
@@ -118,8 +118,6 @@ impl Loop {
         let probe = Plan::build_with_types(&self.body, &HashMap::new(), &type_hints)?;
 
         // Determine steady-state carried types from output inference
-        // Carried outputs feed back as carried inputs on subsequent iterations,
-        // so the input type should match the output type.
         let mut needs_rebuild = false;
         self.carried_types = Vec::with_capacity(num_carried);
         for j in 0..num_carried {

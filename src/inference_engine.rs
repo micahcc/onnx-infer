@@ -9,6 +9,7 @@ use crate::Tensor;
 use crate::layers::Plan;
 use crate::layers::PlanNode;
 use crate::onnx::ModelProto;
+use crate::onnx_ir;
 
 pub struct InferenceEngine {
     plan: Plan,
@@ -37,34 +38,32 @@ impl InferenceEngine {
     /// ```
     pub fn with_batch_size(model_bytes: &[u8], batch_size: usize) -> Result<Self> {
         let model = ModelProto::decode(model_bytes).map_err(InferenceError::ParseError)?;
-        let graph = model
+        let graph_proto = model
             .graph
             .as_ref()
             .ok_or_else(|| InferenceError::InvalidModel("Model has no graph".into()))?;
+        let graph = onnx_ir::convert_graph(graph_proto)?;
 
         let initializer_names: std::collections::HashSet<&str> =
-            graph.initializer.iter().map(|i| i.name.as_str()).collect();
+            graph.initializers.keys().map(|k| k.as_str()).collect();
 
         let mut input_sizes = HashMap::new();
-        for input in &graph.input {
+        for input in &graph.inputs {
             if input.name.is_empty() || initializer_names.contains(input.name.as_str()) {
                 continue;
             }
-            if let Some(mut shape) = Plan::extract_shape_partial(input) {
-                // Replace only the batch dimension (dim 0) with batch_size.
-                // Other dynamic dims (e.g. spatial) remain as 0/unknown and
-                // will be resolved from actual runtime input shapes.
+            if let Some(shape) = &input.shape {
+                let mut shape = shape.clone();
                 if !shape.is_empty() && shape[0] == 0 {
                     shape[0] = batch_size;
                 }
-                // Only provide the shape if all dims are known
                 if shape.iter().all(|&d| d > 0) {
                     input_sizes.insert(input.name.clone(), shape);
                 }
             }
         }
 
-        Self::with_input_sizes(model_bytes, input_sizes)
+        Self::build_from_graph(graph, input_sizes)
     }
 
     pub fn with_input_sizes(
@@ -72,17 +71,25 @@ impl InferenceEngine {
         input_sizes: HashMap<String, Dims>,
     ) -> Result<Self> {
         let model = ModelProto::decode(model_bytes).map_err(InferenceError::ParseError)?;
-        let graph = model
+        let graph_proto = model
             .graph
             .as_ref()
             .ok_or_else(|| InferenceError::InvalidModel("Model has no graph".into()))?;
+        let graph = onnx_ir::convert_graph(graph_proto)?;
 
-        let mut plan = Plan::build(graph, &input_sizes)?;
+        Self::build_from_graph(graph, input_sizes)
+    }
+
+    fn build_from_graph(
+        graph: onnx_ir::Graph,
+        input_sizes: HashMap<String, Dims>,
+    ) -> Result<Self> {
+        let mut plan = Plan::build(&graph, &input_sizes)?;
 
         let initializer_names: std::collections::HashSet<&str> =
-            graph.initializer.iter().map(|i| i.name.as_str()).collect();
+            graph.initializers.keys().map(|k| k.as_str()).collect();
         let input_names: Vec<String> = graph
-            .input
+            .inputs
             .iter()
             .filter(|i| !i.name.is_empty() && !initializer_names.contains(i.name.as_str()))
             .map(|i| i.name.clone())
