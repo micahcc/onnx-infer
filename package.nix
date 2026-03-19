@@ -7,10 +7,10 @@
   xnnpack,
 }:
 let
-	pname = "onnx-infer";
+  pname = "onnx-infer";
 in
 rustPlatform.buildRustPackage {
-  inherit pname ;
+  inherit pname;
   version = "0.0.0";
 
   src = "${flakeInputs.${pname}}";
@@ -24,6 +24,6 @@ rustPlatform.buildRustPackage {
   cargoBuildFlags = [ "--package=${pname}" ];
   cargoTestFlags = [ "--package=${pname}" ];
 
-  XNNPACK="${xnnpack}";
-  LIBCLANG_PATH="${libclang.lib}/lib";
+  XNNPACK = "${xnnpack}";
+  LIBCLANG_PATH = "${libclang.lib}/lib";
 }
