@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::Dims;
@@ -67,7 +68,7 @@ impl Layer for Softmax {
             }
         };
 
-        let inp = input.floats();
+        let inp = input.floats().context("in Softmax layer")?;
         let buf = output.as_mut_f32(inp.len());
         buf.copy_from_slice(inp);
 

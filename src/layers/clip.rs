@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::Result;
@@ -26,17 +27,17 @@ impl Layer for Clip {
         let input = get_tensor(values, &self.inputs[0])?;
 
         let min_val = if self.inputs.len() > 1 && !self.inputs[1].is_empty() {
-            get_tensor(values, &self.inputs[1])?.floats()[0]
+            get_tensor(values, &self.inputs[1])?.floats().context("in Clip layer")?[0]
         } else {
             self.attr_min
         };
         let max_val = if self.inputs.len() > 2 && !self.inputs[2].is_empty() {
-            get_tensor(values, &self.inputs[2])?.floats()[0]
+            get_tensor(values, &self.inputs[2])?.floats().context("in Clip layer")?[0]
         } else {
             self.attr_max
         };
 
-        let inp = input.floats();
+        let inp = input.floats().context("in Clip layer")?;
         let buf = output.as_mut_f32(inp.len());
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
             *o = v.clamp(min_val, max_val);

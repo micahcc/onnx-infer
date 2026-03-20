@@ -1,8 +1,8 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::DType;
 use crate::Dims;
-use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
@@ -64,7 +64,7 @@ impl Layer for Concat {
             .inputs
             .iter()
             .find(|n| !n.is_empty())
-            .ok_or_else(|| InferenceError::InvalidModel("Concat with no inputs".into()))?;
+            .ok_or_else(|| anyhow::anyhow!("Concat with no inputs"))?;
         let first = get_tensor(values, first_name)?;
 
         let p = match &self.precomp {
@@ -116,7 +116,7 @@ impl Layer for Concat {
                     let t = get_tensor(values, name)?;
                     let t_axis = t.dims[axis];
                     if t.dtype() == DType::Float {
-                        let floats = t.floats();
+                        let floats = t.floats().context("in Concat layer")?;
                         for o in 0..outer {
                             for a in 0..t_axis {
                                 let src_base = (o * t_axis + a) * inner;
@@ -127,7 +127,7 @@ impl Layer for Concat {
                             }
                         }
                     } else {
-                        let t_data = t.ints();
+                        let t_data = t.ints().context("in Concat layer")?;
                         for o in 0..outer {
                             for a in 0..t_axis {
                                 let src_base = (o * t_axis + a) * inner;
@@ -151,7 +151,7 @@ impl Layer for Concat {
                     let t = get_tensor(values, name)?;
                     let t_axis = t.dims[axis];
                     if t.dtype() == DType::Int64 {
-                        let ints = t.ints();
+                        let ints = t.ints().context("in Concat layer")?;
                         for o in 0..outer {
                             for a in 0..t_axis {
                                 let src_base = (o * t_axis + a) * inner;
@@ -162,7 +162,7 @@ impl Layer for Concat {
                             }
                         }
                     } else {
-                        let t_data = t.floats();
+                        let t_data = t.floats().context("in Concat layer")?;
                         for o in 0..outer {
                             for a in 0..t_axis {
                                 let src_base = (o * t_axis + a) * inner;

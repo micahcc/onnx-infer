@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::Result;
@@ -22,7 +23,7 @@ impl Layer for Squeeze {
 
         let axes: &[i64] = if self.inputs.len() > 1 && !self.inputs[1].is_empty() {
             let axes_tensor = get_tensor(values, &self.inputs[1])?;
-            axes_tensor.ints()
+            axes_tensor.ints().context("in Squeeze layer")?
         } else {
             &self.axes_attr
         };

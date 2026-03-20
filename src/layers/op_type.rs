@@ -390,8 +390,8 @@ impl OpType {
                 let x = get_shape(0)?;
                 let shape = get_value(1)?;
                 let target: Vec<usize> = match shape.dtype() {
-                    DType::Int64 => shape.ints().iter().map(|&v| v as usize).collect(),
-                    DType::Float => shape.floats().iter().map(|&v| v as usize).collect(),
+                    DType::Int64 => shape.ints().ok()?.iter().map(|&v| v as usize).collect(),
+                    DType::Float => shape.floats().ok()?.iter().map(|&v| v as usize).collect(),
                     DType::String => return None,
                 };
                 Some(broadcast_shape(x, &target))
@@ -574,8 +574,8 @@ impl OpType {
 
                 let shape_vals: Vec<i64> = if let Some(t) = get_value(1) {
                     match t.dtype() {
-                        DType::Int64 => t.ints().to_vec(),
-                        DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
+                        DType::Int64 => t.ints().ok()?.to_vec(),
+                        DType::Float => t.floats().ok()?.iter().map(|&v| v as i64).collect(),
                         DType::String => return None,
                     }
                 } else {
@@ -614,8 +614,8 @@ impl OpType {
                 let axes: Option<Vec<i64>> = node.attrs.get_ints("axes").or_else(|| {
                     let t = get_value(1)?;
                     Some(match t.dtype() {
-                        DType::Int64 => t.ints().to_vec(),
-                        DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
+                        DType::Int64 => t.ints().ok()?.to_vec(),
+                        DType::Float => t.floats().ok()?.iter().map(|&v| v as i64).collect(),
                         DType::String => return None,
                     })
                 });
@@ -649,8 +649,8 @@ impl OpType {
                 let axes: Vec<i64> = node.attrs.get_ints("axes").or_else(|| {
                     let t = get_value(1)?;
                     Some(match t.dtype() {
-                        DType::Int64 => t.ints().to_vec(),
-                        DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
+                        DType::Int64 => t.ints().ok()?.to_vec(),
+                        DType::Float => t.floats().ok()?.iter().map(|&v| v as i64).collect(),
                         DType::String => return None,
                     })
                 })?;
@@ -685,20 +685,20 @@ impl OpType {
                 let rank = x.len();
 
                 let starts_ints: Vec<i64> = match starts_t.dtype() {
-                    DType::Int64 => starts_t.ints().to_vec(),
-                    DType::Float => starts_t.floats().iter().map(|&v| v as i64).collect(),
+                    DType::Int64 => starts_t.ints().ok()?.to_vec(),
+                    DType::Float => starts_t.floats().ok()?.iter().map(|&v| v as i64).collect(),
                     DType::String => return None,
                 };
                 let ends_ints: Vec<i64> = match ends_t.dtype() {
-                    DType::Int64 => ends_t.ints().to_vec(),
-                    DType::Float => ends_t.floats().iter().map(|&v| v as i64).collect(),
+                    DType::Int64 => ends_t.ints().ok()?.to_vec(),
+                    DType::Float => ends_t.floats().ok()?.iter().map(|&v| v as i64).collect(),
                     DType::String => return None,
                 };
 
                 let axes: Vec<usize> = if let Some(t) = get_value(3) {
                     match t.dtype() {
                         DType::Int64 => t
-                            .ints()
+                            .ints().ok()?
                             .iter()
                             .map(|&a| {
                                 if a < 0 {
@@ -709,7 +709,7 @@ impl OpType {
                             })
                             .collect(),
                         DType::Float => t
-                            .floats()
+                            .floats().ok()?
                             .iter()
                             .map(|&a| {
                                 let a = a as i64;
@@ -728,8 +728,8 @@ impl OpType {
 
                 let steps: Vec<i64> = if let Some(t) = get_value(4) {
                     match t.dtype() {
-                        DType::Int64 => t.ints().to_vec(),
-                        DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
+                        DType::Int64 => t.ints().ok()?.to_vec(),
+                        DType::Float => t.floats().ok()?.iter().map(|&v| v as i64).collect(),
                         DType::String => return None,
                     }
                 } else {
@@ -781,8 +781,8 @@ impl OpType {
                 let x = get_shape(0)?;
                 let repeats = get_value(1)?;
                 let reps: Vec<usize> = match repeats.dtype() {
-                    DType::Int64 => repeats.ints().iter().map(|&v| v as usize).collect(),
-                    DType::Float => repeats.floats().iter().map(|&v| v as usize).collect(),
+                    DType::Int64 => repeats.ints().ok()?.iter().map(|&v| v as usize).collect(),
+                    DType::Float => repeats.floats().ok()?.iter().map(|&v| v as usize).collect(),
                     DType::String => return None,
                 };
                 Some(x.iter().zip(reps.iter()).map(|(&d, &r)| d * r).collect())
@@ -793,15 +793,15 @@ impl OpType {
                 if let Some(sizes) = get_value(3) {
                     if sizes.numel() > 0 {
                         return Some(match sizes.dtype() {
-                            DType::Int64 => sizes.ints().iter().map(|&v| v as usize).collect(),
-                            DType::Float => sizes.floats().iter().map(|&v| v as usize).collect(),
+                            DType::Int64 => sizes.ints().ok()?.iter().map(|&v| v as usize).collect(),
+                            DType::Float => sizes.floats().ok()?.iter().map(|&v| v as usize).collect(),
                             DType::String => return None,
                         });
                     }
                 }
                 if let Some(scales) = get_value(2) {
                     if scales.numel() > 0 {
-                        let sf = scales.floats();
+                        let sf = scales.floats().ok()?;
                         return Some(
                             x.iter()
                                 .zip(sf.iter())
@@ -816,7 +816,7 @@ impl OpType {
             Self::Upsample => {
                 let x = get_shape(0)?;
                 let scales = get_value(1)?;
-                let sf = scales.floats();
+                let sf = scales.floats().ok()?;
                 Some(
                     x.iter()
                         .zip(sf.iter())
@@ -831,8 +831,8 @@ impl OpType {
                 let axes: Vec<i64> = node.attrs.get_ints("axes").or_else(|| {
                     let t = get_value(1)?;
                     Some(match t.dtype() {
-                        DType::Int64 => t.ints().to_vec(),
-                        DType::Float => t.floats().iter().map(|&v| v as i64).collect(),
+                        DType::Int64 => t.ints().ok()?.to_vec(),
+                        DType::Float => t.floats().ok()?.iter().map(|&v| v as i64).collect(),
                         DType::String => return None,
                     })
                 })?;
@@ -968,5 +968,57 @@ impl OpType {
 impl std::fmt::Display for OpType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
+    }
+}
+
+impl OpType {
+    pub fn is_xnnpack_compatible(self) -> bool {
+        matches!(
+            self,
+            Self::Conv
+                | Self::Relu
+                | Self::Clip
+                | Self::Sigmoid
+                | Self::Tanh
+                | Self::Exp
+                | Self::Abs
+                | Self::Sqrt
+                | Self::Floor
+                | Self::Ceil
+                | Self::Log
+                | Self::LeakyRelu
+                | Self::Add
+                | Self::Sub
+                | Self::Mul
+                | Self::Div
+                | Self::Max
+                | Self::Min
+                | Self::MaxPool
+                | Self::GlobalAveragePool
+                | Self::Softmax
+                | Self::Gemm
+                | Self::MatMul
+                | Self::Flatten
+                | Self::Reshape
+                | Self::Concat
+                | Self::BatchNormalization
+                | Self::Neg
+                | Self::Sin
+                | Self::Cos
+                | Self::Transpose
+                | Self::Identity
+                | Self::Unsqueeze
+                | Self::Squeeze
+                | Self::Slice
+                | Self::Resize
+                | Self::Round
+                | Self::Cast
+                | Self::ReduceMin
+                | Self::QuantizeLinear
+                | Self::DequantizeLinear
+                | Self::QLinearConv
+                | Self::QLinearMatMul
+                | Self::QLinearAdd
+        )
     }
 }

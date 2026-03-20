@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::DType;
@@ -79,17 +80,17 @@ impl Layer for RoiAlign {
         let ow = self.output_width;
         let numel = num_rois * channels * oh * ow;
 
-        let x_data = x.floats();
-        let rois_data = rois.floats();
+        let x_data = x.floats().context("in RoiAlign layer")?;
+        let rois_data = rois.floats().context("in RoiAlign layer")?;
         self.batch_idx_buf.clear();
         match batch_indices.dtype() {
             DType::Int64 => {
-                for &v in batch_indices.ints() {
+                for &v in batch_indices.ints().context("in RoiAlign layer")? {
                     self.batch_idx_buf.push(v as usize);
                 }
             }
             DType::Float => {
-                for &v in batch_indices.floats() {
+                for &v in batch_indices.floats().context("in RoiAlign layer")? {
                     self.batch_idx_buf.push(v as usize);
                 }
             }

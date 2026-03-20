@@ -1,6 +1,6 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
-use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
@@ -24,11 +24,12 @@ impl Layer for Reshape {
         let shape_from_attr;
         let new_shape: &[i64] = if self.inputs.len() > 1 && !self.inputs[1].is_empty() {
             let shape_tensor = get_tensor(values, &self.inputs[1])?;
-            shape_tensor.ints()
+            shape_tensor.ints().context("in Reshape layer")?
         } else {
-            shape_from_attr = self.shape_attr.as_ref().ok_or_else(|| {
-                InferenceError::InvalidModel("Reshape: no shape input or attribute".into())
-            })?;
+            shape_from_attr = self
+                .shape_attr
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Reshape: no shape input or attribute"))?;
             shape_from_attr
         };
 

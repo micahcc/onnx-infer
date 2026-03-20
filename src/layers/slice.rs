@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::DType;
@@ -6,22 +7,22 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
-fn read_i64_into(t: &Tensor, buf: &mut [i64; 8]) -> usize {
+fn read_i64_into(t: &Tensor, buf: &mut [i64; 8]) -> anyhow::Result<usize> {
     let len = t.numel();
     match t.dtype() {
         DType::Int64 => {
-            for (i, &v) in t.ints().iter().enumerate() {
+            for (i, &v) in t.ints().context("in Slice layer")?.iter().enumerate() {
                 buf[i] = v;
             }
         }
         DType::Float => {
-            for (i, &v) in t.floats().iter().enumerate() {
+            for (i, &v) in t.floats().context("in Slice layer")?.iter().enumerate() {
                 buf[i] = v as i64;
             }
         }
-        DType::String => unreachable!("strings not supported"),
+        DType::String => anyhow::bail!("strings not supported in Slice"),
     }
-    len
+    Ok(len)
 }
 
 pub struct Slice {
@@ -118,15 +119,15 @@ impl Layer for Slice {
             };
 
             let mut starts_buf = [0i64; 8];
-            let starts_len = read_i64_into(starts_t, &mut starts_buf);
+            let starts_len = read_i64_into(starts_t, &mut starts_buf)?;
             let mut ends_buf = [0i64; 8];
-            read_i64_into(ends_t, &mut ends_buf);
+            read_i64_into(ends_t, &mut ends_buf)?;
 
             let mut axes_buf = [0usize; 8];
             let axes_len;
             if let Some(at) = axes_t {
                 let mut at_buf = [0i64; 8];
-                axes_len = read_i64_into(at, &mut at_buf);
+                axes_len = read_i64_into(at, &mut at_buf)?;
                 for i in 0..axes_len {
                     axes_buf[i] = if at_buf[i] < 0 {
                         (rank as i64 + at_buf[i]) as usize
@@ -143,7 +144,7 @@ impl Layer for Slice {
 
             let mut steps_buf = [1i64; 8];
             if let Some(st) = steps_t {
-                read_i64_into(st, &mut steps_buf);
+                read_i64_into(st, &mut steps_buf)?;
             }
 
             for i in 0..axes_len {
@@ -208,7 +209,7 @@ impl Layer for Slice {
         #[allow(clippy::needless_range_loop)]
         match input.dtype() {
             DType::Float => {
-                let in_data = input.floats();
+                let in_data = input.floats().context("in Slice layer")?;
                 let buf = output.as_mut_f32(numel);
                 for out_flat in 0..numel {
                     let mut remaining = out_flat;
@@ -223,7 +224,7 @@ impl Layer for Slice {
                 }
             }
             DType::Int64 => {
-                let in_data = input.ints();
+                let in_data = input.ints().context("in Slice layer")?;
                 let buf = output.as_mut_i64(numel);
                 for out_flat in 0..numel {
                     let mut remaining = out_flat;

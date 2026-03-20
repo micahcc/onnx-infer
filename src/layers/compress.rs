@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::DType;
@@ -25,7 +26,7 @@ impl Layer for Compress {
         // Get boolean condition indices
         let cond_true: Vec<usize> = match condition.dtype() {
             DType::Int64 => condition
-                .ints()
+                .ints().context("in Compress layer")?
                 .iter()
                 .enumerate()
                 .filter(|(_, v)| **v != 0)
@@ -33,7 +34,7 @@ impl Layer for Compress {
                 .collect(),
             DType::String => unreachable!("strings not supported"),
             DType::Float => condition
-                .floats()
+                .floats().context("in Compress layer")?
                 .iter()
                 .enumerate()
                 .filter(|(_, v)| **v != 0.0)
@@ -47,14 +48,14 @@ impl Layer for Compress {
                 let count = cond_true.len();
                 match input.dtype() {
                     DType::Float => {
-                        let data = input.floats();
+                        let data = input.floats().context("in Compress layer")?;
                         let buf = output.as_mut_f32(count);
                         for (out_i, &in_i) in cond_true.iter().enumerate() {
                             buf[out_i] = data[in_i];
                         }
                     }
                     DType::Int64 => {
-                        let data = input.ints();
+                        let data = input.ints().context("in Compress layer")?;
                         let buf = output.as_mut_i64(count);
                         for (out_i, &in_i) in cond_true.iter().enumerate() {
                             buf[out_i] = data[in_i];
@@ -83,7 +84,7 @@ impl Layer for Compress {
 
                 match input.dtype() {
                     DType::Float => {
-                        let data = input.floats();
+                        let data = input.floats().context("in Compress layer")?;
                         let buf = output.as_mut_f32(out_numel);
                         for o in 0..outer {
                             for (new_a, &old_a) in cond_true.iter().enumerate() {
@@ -96,7 +97,7 @@ impl Layer for Compress {
                         }
                     }
                     DType::Int64 => {
-                        let data = input.ints();
+                        let data = input.ints().context("in Compress layer")?;
                         let buf = output.as_mut_i64(out_numel);
                         for o in 0..outer {
                             for (new_a, &old_a) in cond_true.iter().enumerate() {

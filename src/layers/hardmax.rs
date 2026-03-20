@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::Result;
@@ -26,7 +27,7 @@ impl Layer for Hardmax {
             self.axis as usize
         };
 
-        let data = input.floats();
+        let data = input.floats().context("in Hardmax layer")?;
         let numel = data.len();
         let buf = output.as_mut_f32(numel);
         buf.fill(0.0);

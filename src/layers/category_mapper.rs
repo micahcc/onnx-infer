@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::Result;
@@ -34,7 +35,7 @@ impl CategoryMapper {
 impl Layer for CategoryMapper {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
-        let strings = input.strings();
+        let strings = input.strings().context("in CategoryMapper layer")?;
         let numel = strings.len();
         let buf = output.as_mut_i64(numel);
         for (o, s) in buf.iter_mut().zip(strings.iter()) {

@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::Result;
@@ -30,13 +31,13 @@ impl QLinearMatMul {
 impl Layer for QLinearMatMul {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let a_quant = get_tensor(values, &self.inputs[0])?;
-        let a_scale = get_tensor(values, &self.inputs[1])?.floats()[0];
-        let a_zp = get_tensor(values, &self.inputs[2])?.floats()[0].round() as i16;
+        let a_scale = get_tensor(values, &self.inputs[1])?.floats().context("in QLinearMatMul layer")?[0];
+        let a_zp = get_tensor(values, &self.inputs[2])?.floats().context("in QLinearMatMul layer")?[0].round() as i16;
         let b_quant = get_tensor(values, &self.inputs[3])?;
         let b_scale_t = get_tensor(values, &self.inputs[4])?;
         let b_zp_t = get_tensor(values, &self.inputs[5])?;
-        let y_scale = get_tensor(values, &self.inputs[6])?.floats()[0];
-        let y_zp = get_tensor(values, &self.inputs[7])?.floats()[0];
+        let y_scale = get_tensor(values, &self.inputs[6])?.floats().context("in QLinearMatMul layer")?[0];
+        let y_zp = get_tensor(values, &self.inputs[7])?.floats().context("in QLinearMatMul layer")?[0];
 
         // Resolve matmul shapes
         use crate::Dims;
@@ -56,15 +57,15 @@ impl Layer for QLinearMatMul {
         let n = p.n;
 
         // Convert A f32→i16 (subtract zero point)
-        let a_f = a_quant.floats();
+        let a_f = a_quant.floats().context("in QLinearMatMul layer")?;
         self.a_buf.resize(a_f.len(), 0);
         for (o, &v) in self.a_buf.iter_mut().zip(a_f.iter()) {
             *o = v as i16 - a_zp;
         }
 
         // Convert B f32→i16 (subtract per-column or scalar zero point)
-        let b_f = b_quant.floats();
-        let b_scale_f = b_scale_t.floats();
+        let b_f = b_quant.floats().context("in QLinearMatMul layer")?;
+        let b_scale_f = b_scale_t.floats().context("in QLinearMatMul layer")?;
         let per_column = b_scale_f.len() > 1;
         self.b_buf.resize(b_f.len(), 0);
         if per_column {
@@ -72,11 +73,11 @@ impl Layer for QLinearMatMul {
             for row in 0..rows {
                 for col in 0..n {
                     let idx = row * n + col;
-                    self.b_buf[idx] = b_f[idx] as i16 - b_zp_t.f32_at(col).round() as i16;
+                    self.b_buf[idx] = b_f[idx] as i16 - b_zp_t.f32_at(col).context("in QLinearMatMul layer")?.round() as i16;
                 }
             }
         } else {
-            let b_zp = b_zp_t.f32_at(0).round() as i16;
+            let b_zp = b_zp_t.f32_at(0).context("in QLinearMatMul layer")?.round() as i16;
             for (o, &v) in self.b_buf.iter_mut().zip(b_f.iter()) {
                 *o = v as i16 - b_zp;
             }

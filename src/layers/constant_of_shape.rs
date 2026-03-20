@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::DType;
@@ -31,12 +32,12 @@ impl Layer for ConstantOfShape {
         let shape_len = shape_tensor.numel();
         match shape_tensor.dtype() {
             DType::Int64 => {
-                for (i, &v) in shape_tensor.ints().iter().enumerate() {
+                for (i, &v) in shape_tensor.ints().context("in ConstantOfShape layer")?.iter().enumerate() {
                     shape[i] = v as usize;
                 }
             }
             DType::Float => {
-                for (i, &v) in shape_tensor.floats().iter().enumerate() {
+                for (i, &v) in shape_tensor.floats().context("in ConstantOfShape layer")?.iter().enumerate() {
                     shape[i] = v as usize;
                 }
             }

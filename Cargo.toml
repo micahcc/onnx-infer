@@ -14,6 +14,7 @@ blas = []
 xnnpack = []
 
 [dependencies]
+anyhow = "1"
 prost = "0"
 smallvec = "1"
 clap = { version = "4", features = ["derive"], optional = true }

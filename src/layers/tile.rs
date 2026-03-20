@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::DType;
@@ -20,7 +21,7 @@ impl Layer for Tile {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
         let repeats_t = get_tensor(values, &self.inputs[1])?;
-        let repeats_ints = repeats_t.ints();
+        let repeats_ints = repeats_t.ints().context("in Tile layer")?;
 
         let rank = input.dims.len();
         let mut out_dims = [0usize; 8];
@@ -42,7 +43,7 @@ impl Layer for Tile {
         #[allow(clippy::needless_range_loop)]
         match input.dtype() {
             DType::Float => {
-                let in_data = input.floats();
+                let in_data = input.floats().context("in Tile layer")?;
                 let buf = output.as_mut_f32(numel);
                 for out_flat in 0..numel {
                     let mut remaining = out_flat;
@@ -56,7 +57,7 @@ impl Layer for Tile {
                 }
             }
             DType::Int64 => {
-                let in_data = input.ints();
+                let in_data = input.ints().context("in Tile layer")?;
                 let buf = output.as_mut_i64(numel);
                 for out_flat in 0..numel {
                     let mut remaining = out_flat;

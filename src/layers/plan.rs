@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
 use crate::DType;
 use crate::Dims;
-use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
 use crate::dims;
@@ -112,7 +112,7 @@ impl Plan {
         graph: &Graph,
         input_sizes: &HashMap<String, Dims>,
     ) -> Result<Self> {
-        Self::build_with_types(graph, input_sizes, &HashMap::new())
+        Self::build_full(graph, input_sizes, &HashMap::new(), &HashMap::new())
     }
 
     pub fn build_with_types(
@@ -120,7 +120,16 @@ impl Plan {
         input_sizes: &HashMap<String, Dims>,
         type_hints: &HashMap<String, DType>,
     ) -> Result<Self> {
-        let initializers = graph.initializers.clone();
+        Self::build_full(graph, input_sizes, type_hints, &HashMap::new())
+    }
+
+    pub fn build_full(
+        graph: &Graph,
+        input_sizes: &HashMap<String, Dims>,
+        type_hints: &HashMap<String, DType>,
+        input_values: &HashMap<String, Tensor>,
+    ) -> Result<Self> {
+        let mut initializers = graph.initializers.clone();
 
         let output_names: Vec<String> = graph.outputs.iter().map(|o| o.name.clone()).collect();
 
@@ -171,12 +180,14 @@ impl Plan {
         }
 
         let mut known_values: HashMap<String, Tensor> = HashMap::new();
+        for (name, tensor) in input_values {
+            known_values.insert(name.clone(), tensor.clone());
+        }
 
         let mut nodes = Vec::new();
         let mut cast_counter = 0usize;
         #[cfg(feature = "xnnpack")]
         let mut node_meta: Vec<Option<(OpType, Vec<String>, Node)>> = Vec::new();
-
         for node in &graph.nodes {
             let op = node.op_type;
 
@@ -228,13 +239,27 @@ impl Plan {
             ) {
                 if let Some(out_name) = out_name {
                     shape_map.insert(out_name.clone(), tensor.dims.clone());
+                    initializers.insert(out_name.clone(), tensor.clone());
                     known_values.insert(out_name.clone(), tensor);
                 }
-            } else if let Some(shape) =
+                // Skip adding to plan — output is already in initializers
+                // and will be available at runtime via the values map.
+                continue;
+            }
+            if let Some(shape) =
                 op.infer_output_shape(node, &node.inputs, &shape_map, &known_values)
             {
                 if let Some(out_name) = out_name {
                     shape_map.insert(out_name.clone(), shape);
+                }
+            } else if matches!(op, OpType::Identity | OpType::Transpose | OpType::Conv) {
+                if let Some(out_name) = out_name {
+                    let missing: Vec<&str> = node.inputs.iter()
+                        .filter(|n| !n.is_empty() && !shape_map.contains_key(n.as_str()))
+                        .map(|n| n.as_str()).collect();
+                    if !missing.is_empty() {
+                        eprintln!("  shape-miss: {:?} {:?} -> {:?}, missing inputs: {:?}", op, node.name, out_name, missing);
+                    }
                 }
             }
 
@@ -279,6 +304,55 @@ impl Plan {
                 }
             }
 
+            // Try to fold Loop ops when all inputs are known
+            if op == OpType::Loop {
+                let all_inputs_known = node.inputs.iter().all(|n| {
+                    n.is_empty()
+                        || known_values.contains_key(n)
+                        || initializers.contains_key(n)
+                });
+
+
+                if all_inputs_known {
+                    let plan_node =
+                        build_node(op, node, modified_inputs.clone(), &shape_map)?;
+                    if let PlanNode::Loop(mut loop_layer) = plan_node {
+                        let mut temp_values: HashMap<String, Tensor> = HashMap::new();
+                        for name in &node.inputs {
+                            if !name.is_empty() {
+                                if let Some(t) = known_values
+                                    .get(name)
+                                    .or_else(|| initializers.get(name))
+                                {
+                                    temp_values.insert(name.clone(), t.clone());
+                                }
+                            }
+                        }
+                        if let Ok(()) = loop_layer.execute(&mut temp_values) {
+                            let mut folded = true;
+                            for out_name in &node.outputs {
+                                if !out_name.is_empty() {
+                                    if let Some(t) = temp_values.remove(out_name) {
+                                        shape_map
+                                            .insert(out_name.clone(), t.dims.clone());
+                                        initializers
+                                            .insert(out_name.clone(), t.clone());
+                                        known_values.insert(out_name.clone(), t);
+                                    } else {
+                                        folded = false;
+                                    }
+                                }
+                            }
+                            if folded {
+                                #[cfg(feature = "xnnpack")]
+                                node_meta.push(None);
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+
             #[cfg(feature = "xnnpack")]
             node_meta.push(Some((op, modified_inputs.clone(), node.clone())));
             nodes.push(build_node(op, node, modified_inputs, &shape_map)?);
@@ -307,6 +381,42 @@ impl Plan {
             tensor_pool.insert(name.clone(), tensor);
         }
 
+        // Log plan summary
+        {
+            let mut cpu_ops = 0usize;
+            #[cfg(feature = "xnnpack")]
+            let mut xnnpack_ops = 0usize;
+            for node in &nodes {
+                match node {
+                    PlanNode::Single { .. } => cpu_ops += 1,
+                    PlanNode::Loop(_)
+                    | PlanNode::Split(_)
+                    | PlanNode::If(_)
+                    | PlanNode::TopK(_)
+                    | PlanNode::Scan(_) => cpu_ops += 1,
+                    #[cfg(feature = "xnnpack")]
+                    PlanNode::XnnpackSubgraph(sg) => {
+                        xnnpack_ops += sg.fallback_nodes.len();
+                    }
+                }
+            }
+            #[cfg(feature = "xnnpack")]
+            {
+                let total = cpu_ops + xnnpack_ops;
+                if total > 0 {
+                    let pct = (xnnpack_ops as f64 / total as f64 * 100.0) as u32;
+                    tracing::info!(
+                        "plan: {total} ops, {xnnpack_ops} XNNPACK ({pct}%), {cpu_ops} CPU"
+                    );
+                }
+            }
+            #[cfg(not(feature = "xnnpack"))]
+            {
+                let folded = graph.nodes.len().saturating_sub(cpu_ops);
+                tracing::info!("plan: {cpu_ops} ops (CPU), {folded} folded");
+            }
+        }
+
         Ok(Self {
             nodes,
             initializers,
@@ -328,7 +438,14 @@ fn try_propagate_value(
 ) -> Option<Tensor> {
     if op == OpType::Shape {
         let name = input_names.first().filter(|s| !s.is_empty())?;
-        let shape = shape_map.get(name)?;
+        let shape = shape_map.get(name);
+        if shape.is_none() {
+            return None;
+        }
+        let shape = shape.unwrap();
+        if shape.iter().any(|&d| d == 0) {
+            return None;
+        }
         let dims: Vec<i64> = shape.iter().map(|&d| d as i64).collect();
         return Some(Tensor::new_i64(dims![dims.len()], dims));
     }
@@ -340,17 +457,12 @@ fn try_propagate_value(
         };
     }
 
+    // Skip multi-output and control-flow ops — those are handled separately
     match op {
-        OpType::Gather
-        | OpType::Unsqueeze
-        | OpType::Squeeze
-        | OpType::Concat
-        | OpType::Cast
-        | OpType::Identity
-        | OpType::Reshape
-        | OpType::Flatten
-        | OpType::Slice => {}
-        _ => return None,
+        OpType::Loop | OpType::Split | OpType::If | OpType::TopK | OpType::Scan => {
+            return None;
+        }
+        _ => {}
     }
 
     let mut temp_values = HashMap::new();
@@ -384,7 +496,7 @@ pub fn build_node(
     if op == OpType::Loop {
         let body = match node.attrs.get("body") {
             Some(Attr::Graph(g)) => (**g).clone(),
-            _ => return Err(InferenceError::InvalidModel("Loop: no body graph".into())),
+            _ => anyhow::bail!("Loop: no body graph"),
         };
         return Ok(PlanNode::Loop(Box::new(loop_op::Loop::new(
             inputs,
@@ -407,11 +519,11 @@ pub fn build_node(
     if op == OpType::If {
         let then_branch = match node.attrs.get("then_branch") {
             Some(Attr::Graph(g)) => (**g).clone(),
-            _ => return Err(InferenceError::InvalidModel("If: no then_branch".into())),
+            _ => anyhow::bail!("If: no then_branch"),
         };
         let else_branch = match node.attrs.get("else_branch") {
             Some(Attr::Graph(g)) => (**g).clone(),
-            _ => return Err(InferenceError::InvalidModel("If: no else_branch".into())),
+            _ => anyhow::bail!("If: no else_branch"),
         };
         return Ok(PlanNode::If(Box::new(if_op::If::new(
             inputs,
@@ -435,7 +547,7 @@ pub fn build_node(
     if op == OpType::Scan {
         let body = match node.attrs.get("body") {
             Some(Attr::Graph(g)) => (**g).clone(),
-            _ => return Err(InferenceError::InvalidModel("Scan: no body graph".into())),
+            _ => anyhow::bail!("Scan: no body graph"),
         };
         let num_scan_inputs = node.attrs.get_int("num_scan_inputs").unwrap_or(0) as usize;
         let scan_input_directions = node.attrs.get_ints("scan_input_directions").unwrap_or_default();
@@ -514,8 +626,8 @@ pub fn build_node(
         OpType::ConstantOfShape => {
             let (fill_f32, fill_i64, dtype) = match node.attrs.get("value") {
                 Some(Attr::Tensor(t)) => match t.dtype() {
-                    DType::Int64 => (0.0, t.ints().first().copied().unwrap_or(0), DType::Int64),
-                    _ => (t.floats().first().copied().unwrap_or(0.0), 0, DType::Float),
+                    DType::Int64 => (0.0, t.ints().unwrap_or(&[]).first().copied().unwrap_or(0), DType::Int64),
+                    _ => (t.floats().unwrap_or(&[]).first().copied().unwrap_or(0.0), 0, DType::Float),
                 },
                 _ => (0.0, 0, DType::Float),
             };
@@ -672,11 +784,7 @@ pub fn build_node(
         OpType::Constant => {
             let tensor = match node.attrs.get("value") {
                 Some(Attr::Tensor(t)) => t.clone(),
-                _ => {
-                    return Err(InferenceError::InvalidModel(
-                        "Constant has no value".into(),
-                    ))
-                }
+                _ => anyhow::bail!("Constant has no value"),
             };
             Box::new(constant::Constant::new(tensor))
         }
@@ -849,7 +957,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
     if op == OpType::Loop {
         let body = match node.attrs.get("body") {
             Some(Attr::Graph(g)) => (**g).clone(),
-            _ => return Err(InferenceError::InvalidModel("Loop: no body graph".into())),
+            _ => anyhow::bail!("Loop: no body graph"),
         };
         let mut loop_layer = loop_op::Loop::new(node.inputs.clone(), node.outputs.clone(), body);
         return loop_layer.execute(values);
@@ -866,11 +974,11 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
     if op == OpType::If {
         let then_branch = match node.attrs.get("then_branch") {
             Some(Attr::Graph(g)) => (**g).clone(),
-            _ => return Err(InferenceError::InvalidModel("If: no then_branch".into())),
+            _ => anyhow::bail!("If: no then_branch"),
         };
         let else_branch = match node.attrs.get("else_branch") {
             Some(Attr::Graph(g)) => (**g).clone(),
-            _ => return Err(InferenceError::InvalidModel("If: no else_branch".into())),
+            _ => anyhow::bail!("If: no else_branch"),
         };
         let mut if_layer = if_op::If::new(
             node.inputs.clone(),
@@ -892,7 +1000,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
     if op == OpType::Scan {
         let body = match node.attrs.get("body") {
             Some(Attr::Graph(g)) => (**g).clone(),
-            _ => return Err(InferenceError::InvalidModel("Scan: no body graph".into())),
+            _ => anyhow::bail!("Scan: no body graph"),
         };
         let num_scan_inputs = node.attrs.get_int("num_scan_inputs").unwrap_or(0) as usize;
         let scan_input_directions = node.attrs.get_ints("scan_input_directions").unwrap_or_default();
@@ -932,7 +1040,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
         let cast_name = format!("__exec_cast_{idx}__");
         let src = values.get(&input_name).unwrap();
         let mut casted = Tensor::default();
-        casted.copy_cast_f32(src);
+        casted.copy_cast_f32(src).context("in plan auto-cast")?;
         values.insert(cast_name.clone(), casted);
         modified_inputs[i] = cast_name;
     }
@@ -955,9 +1063,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
         PlanNode::TopK(topk_layer) => topk_layer.execute(values),
         PlanNode::Scan(scan_layer) => scan_layer.execute(values),
         #[cfg(feature = "xnnpack")]
-        PlanNode::XnnpackSubgraph(_) => Err(InferenceError::InvalidModel(
-            "XnnpackSubgraph cannot be executed via execute_node".into(),
-        )),
+        PlanNode::XnnpackSubgraph(_) => anyhow::bail!("XnnpackSubgraph cannot be executed via execute_node"),
     }
 }
 
@@ -1002,7 +1108,7 @@ fn compile_xnnpack_subgraphs(
             }
             let needs_4d = matches!(
                 op,
-                OpType::Conv | OpType::MaxPool | OpType::GlobalAveragePool
+                OpType::Conv | OpType::MaxPool | OpType::GlobalAveragePool | OpType::QLinearConv
             );
             if needs_4d {
                 let first_input = inputs.first().filter(|s| !s.is_empty());
@@ -1018,16 +1124,62 @@ fn compile_xnnpack_subgraphs(
             }
             if *op == OpType::MaxPool {
                 let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
-                if !auto_pad.is_empty() && auto_pad != "NOTSET" {
-                    return false;
+                if auto_pad.is_empty() || auto_pad == "NOTSET" {
+                    // Explicit pads — XNNPACK requires symmetric
+                    let pads = node.attrs.get_ints("pads").unwrap_or_default();
+                    if pads.len() >= 4 && (pads[0] != pads[2] || pads[1] != pads[3]) {
+                        return false;
+                    }
                 }
-                let pads = node.attrs.get_ints("pads").unwrap_or_default();
-                if pads.len() >= 4 && (pads[0] != pads[2] || pads[1] != pads[3]) {
-                    return false;
-                }
+                // SAME_UPPER / SAME_LOWER are computed at subgraph compile time
             }
             if matches!(op, OpType::Conv | OpType::Gemm) {
                 if inputs.len() < 2 || !initializers.contains_key(&inputs[1]) {
+                    return false;
+                }
+            }
+            // QLinearConv: weights at [3], scales/zp at [1,2,4,5,6,7]
+            if *op == OpType::QLinearConv {
+                if inputs.len() < 8 || !initializers.contains_key(&inputs[3]) {
+                    return false;
+                }
+                for &idx in &[1, 2, 4, 5, 6, 7] {
+                    if !initializers.contains_key(&inputs[idx]) {
+                        return false;
+                    }
+                }
+            }
+            // QLinearMatMul: B at [3], scales/zp at [1,2,4,5,6,7]
+            if *op == OpType::QLinearMatMul {
+                if inputs.len() < 8 || !initializers.contains_key(&inputs[3]) {
+                    return false;
+                }
+                for &idx in &[1, 2, 4, 5, 6, 7] {
+                    if !initializers.contains_key(&inputs[idx]) {
+                        return false;
+                    }
+                }
+            }
+            // QLinearAdd: scales/zp at [1,2,4,5,6,7]
+            if *op == OpType::QLinearAdd {
+                if inputs.len() < 8 {
+                    return false;
+                }
+                for &idx in &[1, 2, 4, 5, 6, 7] {
+                    if !initializers.contains_key(&inputs[idx]) {
+                        return false;
+                    }
+                }
+            }
+            // QuantizeLinear/DequantizeLinear: scale at [1], zp at [2] (optional)
+            if matches!(op, OpType::QuantizeLinear | OpType::DequantizeLinear) {
+                if inputs.len() < 2 || !initializers.contains_key(&inputs[1]) {
+                    return false;
+                }
+                if inputs.len() > 2
+                    && !inputs[2].is_empty()
+                    && !initializers.contains_key(&inputs[2])
+                {
                     return false;
                 }
             }

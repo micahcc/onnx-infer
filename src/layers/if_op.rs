@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::DType;
@@ -32,8 +33,8 @@ impl If {
     pub fn execute(&mut self, values: &mut HashMap<String, Tensor>) -> Result<()> {
         let cond = get_tensor(values, &self.inputs[0])?;
         let is_true = match cond.dtype() {
-            DType::Float => cond.floats().first().copied().unwrap_or(0.0) != 0.0,
-            DType::Int64 => cond.ints().first().copied().unwrap_or(0) != 0,
+            DType::Float => cond.floats().context("in If layer")?.first().copied().unwrap_or(0.0) != 0.0,
+            DType::Int64 => cond.ints().context("in If layer")?.first().copied().unwrap_or(0) != 0,
             DType::String => unreachable!("strings not supported"),
         };
 

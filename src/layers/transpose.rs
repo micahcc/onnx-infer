@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::DType;
@@ -128,12 +129,12 @@ impl Layer for Transpose {
 
         match input.dtype() {
             DType::Float => {
-                let in_data = input.floats();
+                let in_data = input.floats().context("in Transpose layer")?;
                 let buf = output.as_mut_f32(numel);
                 transpose_inner(in_data, buf, &p.out_dims, &p.perm_in_strides, rank, numel);
             }
             DType::Int64 => {
-                let in_data = input.ints();
+                let in_data = input.ints().context("in Transpose layer")?;
                 let buf = output.as_mut_i64(numel);
                 transpose_inner(in_data, buf, &p.out_dims, &p.perm_in_strides, rank, numel);
             }

@@ -1,3 +1,4 @@
+use anyhow::Context;
 pub mod abs;
 pub mod add;
 pub mod argmax;
@@ -114,6 +115,11 @@ pub fn binary_op(
     axis: usize,
     op: fn(f32, f32) -> f32,
 ) -> Result<()> {
+    // Int64 fast path: cast to float, apply op, cast result back to int64
+    if a.dtype() == crate::DType::Int64 || b.dtype() == crate::DType::Int64 {
+        return binary_op_i64(a, b, output, legacy_broadcast, axis, op);
+    }
+
     let mut b_dims_buf = [1usize; 8];
     let b_dims_len = if legacy_broadcast && b.dims.len() < a.dims.len() {
         for (i, &d) in b.dims.iter().enumerate() {
@@ -135,8 +141,8 @@ pub fn binary_op(
     let numel: usize = out_dims.iter().product();
     let buf = output.as_mut_f32(numel);
 
-    let a_f = a.floats();
-    let b_f = b.floats();
+    let a_f = a.floats().context("in binary_op")?;
+    let b_f = b.floats().context("in binary_op")?;
 
     // Fast path: identical shapes — no broadcast needed
     if a.dims.as_slice() == b_dims {
@@ -217,6 +223,98 @@ pub fn binary_op(
         }
     }
 
+    output.set_dims(out_dims);
+    Ok(())
+}
+
+fn binary_op_i64(
+    a: &Tensor,
+    b: &Tensor,
+    output: &mut Tensor,
+    _legacy_broadcast: bool,
+    _axis: usize,
+    op: fn(f32, f32) -> f32,
+) -> Result<()> {
+    let a_vals: Vec<f32> = match a.dtype() {
+        crate::DType::Int64 => a.ints().context("in binary_op")?.iter().map(|&v| v as f32).collect(),
+        _ => a.floats().context("in binary_op")?.to_vec(),
+    };
+    let b_vals: Vec<f32> = match b.dtype() {
+        crate::DType::Int64 => b.ints().context("in binary_op")?.iter().map(|&v| v as f32).collect(),
+        _ => b.floats().context("in binary_op")?.to_vec(),
+    };
+    let ndim = a.dims.len().max(b.dims.len());
+    let mut out_shape = [0usize; 8];
+    broadcast_shape_into(&a.dims, &b.dims, &mut out_shape[..ndim]);
+    let out_dims = &out_shape[..ndim];
+    let numel: usize = out_dims.iter().product();
+
+    // Determine output type: int64 if both inputs are int64
+    let out_is_int = a.dtype() == crate::DType::Int64 && b.dtype() == crate::DType::Int64;
+
+    if out_is_int {
+        let buf = output.as_mut_i64(numel);
+        if a.dims.as_slice() == b.dims.as_slice() {
+            for i in 0..numel {
+                buf[i] = op(a_vals[i], b_vals[i]) as i64;
+            }
+        } else if b_vals.len() == 1 {
+            let bv = b_vals[0];
+            for i in 0..numel {
+                buf[i] = op(a_vals[i], bv) as i64;
+            }
+        } else if a_vals.len() == 1 {
+            let av = a_vals[0];
+            for i in 0..numel {
+                buf[i] = op(av, b_vals[i]) as i64;
+            }
+        } else {
+            let mut index = [0usize; 8];
+            for val in buf.iter_mut() {
+                let ai = broadcast_index(&index[..ndim], &a.dims, out_dims);
+                let bi = broadcast_index(&index[..ndim], &b.dims, out_dims);
+                *val = op(a_vals[ai], b_vals[bi]) as i64;
+                for d in (0..ndim).rev() {
+                    index[d] += 1;
+                    if index[d] < out_dims[d] {
+                        break;
+                    }
+                    index[d] = 0;
+                }
+            }
+        }
+    } else {
+        let buf = output.as_mut_f32(numel);
+        if a.dims.as_slice() == b.dims.as_slice() {
+            for i in 0..numel {
+                buf[i] = op(a_vals[i], b_vals[i]);
+            }
+        } else if b_vals.len() == 1 {
+            let bv = b_vals[0];
+            for i in 0..numel {
+                buf[i] = op(a_vals[i], bv);
+            }
+        } else if a_vals.len() == 1 {
+            let av = a_vals[0];
+            for i in 0..numel {
+                buf[i] = op(av, b_vals[i]);
+            }
+        } else {
+            let mut index = [0usize; 8];
+            for val in buf.iter_mut() {
+                let ai = broadcast_index(&index[..ndim], &a.dims, out_dims);
+                let bi = broadcast_index(&index[..ndim], &b.dims, out_dims);
+                *val = op(a_vals[ai], b_vals[bi]);
+                for d in (0..ndim).rev() {
+                    index[d] += 1;
+                    if index[d] < out_dims[d] {
+                        break;
+                    }
+                    index[d] = 0;
+                }
+            }
+        }
+    }
     output.set_dims(out_dims);
     Ok(())
 }

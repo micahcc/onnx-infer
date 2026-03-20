@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::Dims;
@@ -59,7 +60,7 @@ impl Layer for GlobalAvgPool {
             }
         };
 
-        let input_f = input.floats();
+        let input_f = input.floats().context("in GlobalAvgPool layer")?;
         let buf = output.as_mut_f32(p.n * p.c);
         for batch in 0..p.n {
             for ch in 0..p.c {

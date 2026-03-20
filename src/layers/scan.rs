@@ -1,9 +1,9 @@
+use anyhow::Context;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::DType;
 use crate::Dims;
-use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
@@ -185,9 +185,7 @@ impl Scan {
             let scan_in = get_tensor(outer_values, &self.inputs[num_state])?;
             scan_in.dims[0]
         } else {
-            return Err(InferenceError::InvalidModel(
-                "Scan requires at least one scan input".into(),
-            ));
+            anyhow::bail!("Scan requires at least one scan input");
         };
 
         for (j, _name) in self.state_in_names.iter().enumerate() {
@@ -225,12 +223,12 @@ impl Scan {
             let reverse = self.scan_input_directions.get(j).copied().unwrap_or(0) != 0;
             scan_inputs.push(ScanInputInfo {
                 data_f32: if t.dtype() == DType::Float {
-                    t.floats().to_vec()
+                    t.floats().context("in Scan layer")?.to_vec()
                 } else {
                     Vec::new()
                 },
                 data_i64: if t.dtype() == DType::Int64 {
-                    t.ints().to_vec()
+                    t.ints().context("in Scan layer")?.to_vec()
                 } else {
                     Vec::new()
                 },
@@ -327,8 +325,8 @@ impl Scan {
                         accum_elem_dims[j].extend_from_slice(&t.dims);
                     }
                     match t.dtype() {
-                        DType::Float => accum_f32[j].extend_from_slice(t.floats()),
-                        DType::Int64 => accum_i64[j].extend_from_slice(t.ints()),
+                        DType::Float => accum_f32[j].extend_from_slice(t.floats().context("in Scan layer")?),
+                        DType::Int64 => accum_i64[j].extend_from_slice(t.ints().context("in Scan layer")?),
                         DType::String => unreachable!("strings not supported"),
                     }
                 }

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
+
 use crate::DType;
 use crate::Dims;
-use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
 use crate::layers::OpType;
@@ -183,7 +183,8 @@ fn convert_value_info(vi: &crate::onnx::ValueInfoProto) -> ValueInfo {
 }
 
 fn convert_node(node: &crate::onnx::NodeProto) -> Result<Node> {
-    let op_type = OpType::parse(&node.op_type).map_err(InferenceError::UnsupportedOperator)?;
+    let op_type = OpType::parse(&node.op_type)
+        .map_err(|s| anyhow::anyhow!("unsupported operator: {s}"))?;
     let attrs = node
         .attribute
         .iter()
@@ -206,17 +207,13 @@ fn convert_attr(attr: &crate::onnx::AttributeProto) -> Result<(String, Attr)> {
         3 => Attr::String(String::from_utf8_lossy(&attr.s).to_string()),
         4 => {
             let t = attr.t.as_ref().ok_or_else(|| {
-                InferenceError::InvalidModel(format!(
-                    "Attribute '{name}' has tensor type but no tensor"
-                ))
+                anyhow::anyhow!("Attribute '{name}' has tensor type but no tensor")
             })?;
             Attr::Tensor(Tensor::from_proto(t)?)
         }
         5 => {
             let g = attr.g.as_ref().ok_or_else(|| {
-                InferenceError::InvalidModel(format!(
-                    "Attribute '{name}' has graph type but no graph"
-                ))
+                anyhow::anyhow!("Attribute '{name}' has graph type but no graph")
             })?;
             Attr::Graph(Box::new(convert_graph(g)?))
         }

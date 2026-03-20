@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::DType;
@@ -42,13 +43,13 @@ impl Layer for Less {
             let ai = broadcast_index(&index[..ndim], &a.dims, out_dims);
             let bi = broadcast_index(&index[..ndim], &b.dims, out_dims);
             let va: f64 = match a.dtype() {
-                DType::Float => a.floats()[ai] as f64,
-                DType::Int64 => a.ints()[ai] as f64,
+                DType::Float => a.floats().context("in Less layer")?[ai] as f64,
+                DType::Int64 => a.ints().context("in Less layer")?[ai] as f64,
                 DType::String => unreachable!("strings not supported"),
             };
             let vb: f64 = match b.dtype() {
-                DType::Float => b.floats()[bi] as f64,
-                DType::Int64 => b.ints()[bi] as f64,
+                DType::Float => b.floats().context("in Less layer")?[bi] as f64,
+                DType::Int64 => b.ints().context("in Less layer")?[bi] as f64,
                 DType::String => unreachable!("strings not supported"),
             };
             *val = if va < vb { 1 } else { 0 };

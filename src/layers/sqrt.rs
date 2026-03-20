@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::Result;
@@ -18,7 +19,7 @@ impl Sqrt {
 impl Layer for Sqrt {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
-        let inp = input.floats();
+        let inp = input.floats().context("in Sqrt layer")?;
         let buf = output.as_mut_f32(inp.len());
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
             *o = v.sqrt();

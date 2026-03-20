@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::DType;
@@ -38,8 +39,8 @@ impl Layer for ReduceSum {
         let axes_from_input = if self.inputs.len() > 1 && !self.inputs[1].is_empty() {
             let axes_t = get_tensor(values, &self.inputs[1])?;
             Some(match axes_t.dtype() {
-                DType::Int64 => axes_t.ints().to_vec(),
-                DType::Float => axes_t.floats().iter().map(|&v| v as i64).collect(),
+                DType::Int64 => axes_t.ints().context("in ReduceSum layer")?.to_vec(),
+                DType::Float => axes_t.floats().context("in ReduceSum layer")?.iter().map(|&v| v as i64).collect(),
                 DType::String => unreachable!("strings not supported"),
             })
         } else {
@@ -136,7 +137,7 @@ impl Layer for ReduceSum {
             DType::Float => {
                 let buf = output.as_mut_f32(out_numel);
                 buf.fill(0.0);
-                let input_f = input.floats();
+                let input_f = input.floats().context("in ReduceSum layer")?;
                 for (in_flat, &val) in input_f.iter().enumerate() {
                     let of = calc_out_flat(in_flat);
                     buf[of] += val;
@@ -145,7 +146,7 @@ impl Layer for ReduceSum {
             DType::Int64 => {
                 let buf = output.as_mut_i64(out_numel);
                 buf.fill(0);
-                let input_i = input.ints();
+                let input_i = input.ints().context("in ReduceSum layer")?;
                 for (in_flat, &val) in input_i.iter().enumerate() {
                     let of = calc_out_flat(in_flat);
                     buf[of] += val;

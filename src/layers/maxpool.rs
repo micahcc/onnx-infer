@@ -1,7 +1,7 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::Dims;
-use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
@@ -85,9 +85,7 @@ impl MaxPool {
         initial_shape: &[usize],
     ) -> Result<Self> {
         if kernel_shape.is_empty() {
-            return Err(InferenceError::InvalidModel(
-                "MaxPool missing kernel_shape".into(),
-            ));
+            anyhow::bail!("MaxPool missing kernel_shape");
         }
         let auto_pad_enum = match auto_pad.as_str() {
             "SAME_UPPER" => AutoPad::SameUpper,
@@ -161,7 +159,7 @@ impl Layer for MaxPool {
         let kw = self.kw;
         let sh = self.sh;
         let sw = self.sw;
-        let input_f = input.floats();
+        let input_f = input.floats().context("in MaxPool layer")?;
         let buf = output.as_mut_f32(p.total);
         buf.fill(f32::NEG_INFINITY);
 

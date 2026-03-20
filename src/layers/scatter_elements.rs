@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::DType;
@@ -101,11 +102,12 @@ impl Layer for ScatterElements {
         let idx_numel = indices.numel();
         let idx_is_int = indices.dtype() == DType::Int64;
 
-        let resolve_idx = |flat: usize| -> i64 {
+        let resolve_idx = |flat: usize| -> anyhow::Result<i64> {
+            use anyhow::Context;
             if idx_is_int {
-                indices.ints()[flat]
+                Ok(indices.ints().context("ScatterElements: indices")?[flat])
             } else {
-                indices.floats()[flat] as i64
+                Ok(indices.floats().context("ScatterElements: indices")?[flat] as i64)
             }
         };
 
@@ -113,8 +115,8 @@ impl Layer for ScatterElements {
         match data.dtype() {
             DType::Float => {
                 let buf = output.as_mut_f32(numel);
-                buf.copy_from_slice(data.floats());
-                let upd = updates.floats();
+                buf.copy_from_slice(data.floats().context("in ScatterElements layer")?);
+                let upd = updates.floats().context("in ScatterElements layer")?;
 
                 for flat in 0..idx_numel {
                     let mut remaining = flat;
@@ -123,7 +125,7 @@ impl Layer for ScatterElements {
                         let coord = remaining / p.idx_strides[d];
                         remaining %= p.idx_strides[d];
                         if d == p.axis {
-                            let mut idx = resolve_idx(flat);
+                            let mut idx = resolve_idx(flat).context("in ScatterElements layer: resolving index")?;
                             if idx < 0 {
                                 idx += data.dims[p.axis] as i64;
                             }
@@ -137,8 +139,8 @@ impl Layer for ScatterElements {
             }
             DType::Int64 => {
                 let buf = output.as_mut_i64(numel);
-                buf.copy_from_slice(data.ints());
-                let upd = updates.ints();
+                buf.copy_from_slice(data.ints().context("in ScatterElements layer")?);
+                let upd = updates.ints().context("in ScatterElements layer")?;
 
                 for flat in 0..idx_numel {
                     let mut remaining = flat;
@@ -147,7 +149,7 @@ impl Layer for ScatterElements {
                         let coord = remaining / p.idx_strides[d];
                         remaining %= p.idx_strides[d];
                         if d == p.axis {
-                            let mut idx = resolve_idx(flat);
+                            let mut idx = resolve_idx(flat).context("in ScatterElements layer: resolving index")?;
                             if idx < 0 {
                                 idx += data.dims[p.axis] as i64;
                             }

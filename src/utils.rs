@@ -1,14 +1,13 @@
 use std::collections::HashMap;
 
 use crate::Dims;
-use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
 
 pub fn get_tensor<'a>(values: &'a HashMap<String, Tensor>, name: &str) -> Result<&'a Tensor> {
     values
         .get(name)
-        .ok_or_else(|| InferenceError::InvalidModel(format!("Tensor '{name}' not found")))
+        .ok_or_else(|| anyhow::anyhow!("Tensor '{name}' not found"))
 }
 
 pub fn broadcast_shape(a: &[usize], b: &[usize]) -> Dims {

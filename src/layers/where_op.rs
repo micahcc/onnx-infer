@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::DType;
@@ -39,15 +40,15 @@ impl Layer for Where {
         match x.dtype() {
             DType::Float => {
                 let buf = output.as_mut_f32(numel);
-                let xf = x.floats();
-                let yf = y.floats();
+                let xf = x.floats().context("in Where layer")?;
+                let yf = y.floats().context("in Where layer")?;
                 for val in buf.iter_mut() {
                     let ci = broadcast_index(&index[..ndim], &cond.dims, out_dims);
                     let xi = broadcast_index(&index[..ndim], &x.dims, out_dims);
                     let yi = broadcast_index(&index[..ndim], &y.dims, out_dims);
                     let c = match cond.dtype() {
-                        DType::Float => cond.floats()[ci] != 0.0,
-                        DType::Int64 => cond.ints()[ci] != 0,
+                        DType::Float => cond.floats().context("in Where layer")?[ci] != 0.0,
+                        DType::Int64 => cond.ints().context("in Where layer")?[ci] != 0,
                         DType::String => unreachable!(),
                     };
                     *val = if c { xf[xi] } else { yf[yi] };
@@ -63,15 +64,15 @@ impl Layer for Where {
             }
             DType::Int64 => {
                 let buf = output.as_mut_i64(numel);
-                let xi = x.ints();
-                let yi = y.ints();
+                let xi = x.ints().context("in Where layer")?;
+                let yi = y.ints().context("in Where layer")?;
                 for val in buf.iter_mut() {
                     let ci = broadcast_index(&index[..ndim], &cond.dims, out_dims);
                     let xidx = broadcast_index(&index[..ndim], &x.dims, out_dims);
                     let yidx = broadcast_index(&index[..ndim], &y.dims, out_dims);
                     let c = match cond.dtype() {
-                        DType::Float => cond.floats()[ci] != 0.0,
-                        DType::Int64 => cond.ints()[ci] != 0,
+                        DType::Float => cond.floats().context("in Where layer")?[ci] != 0.0,
+                        DType::Int64 => cond.ints().context("in Where layer")?[ci] != 0,
                         DType::String => unreachable!(),
                     };
                     *val = if c { xi[xidx] } else { yi[yidx] };

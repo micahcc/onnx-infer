@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::Result;
@@ -19,7 +20,7 @@ impl LeakyRelu {
 impl Layer for LeakyRelu {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
-        let inp = input.floats();
+        let inp = input.floats().context("in LeakyRelu layer")?;
         let buf = output.as_mut_f32(inp.len());
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
             *o = if v >= 0.0 { v } else { self.alpha * v };

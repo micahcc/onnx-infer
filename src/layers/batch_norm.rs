@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::Dims;
@@ -63,11 +64,11 @@ impl Layer for BatchNorm {
             }
         };
 
-        let input_f = input.floats();
-        let scale_f = scale.floats();
-        let bias_f = bias.floats();
-        let mean_f = mean.floats();
-        let var_f = var.floats();
+        let input_f = input.floats().context("in BatchNorm layer")?;
+        let scale_f = scale.floats().context("in BatchNorm layer")?;
+        let bias_f = bias.floats().context("in BatchNorm layer")?;
+        let mean_f = mean.floats().context("in BatchNorm layer")?;
+        let var_f = var.floats().context("in BatchNorm layer")?;
 
         let total = input_f.len();
         let buf = output.as_mut_f32(total);
