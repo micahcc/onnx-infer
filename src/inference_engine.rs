@@ -127,6 +127,47 @@ impl InferenceEngine {
         Self::build_from_graph(graph, input_sizes)
     }
 
+    /// Create an engine with XNNPACK acceleration.
+    ///
+    /// Applies full graph optimizations including NHWC layout transposes,
+    /// then compiles eligible op sequences into XNNPACK subgraphs.
+    #[cfg(feature = "xnnpack")]
+    pub fn with_xnnpack(model_bytes: &[u8]) -> Result<Self> {
+        let model = ModelProto::decode(model_bytes).context("decoding model proto")?;
+        let opset_version = model
+            .opset_import
+            .iter()
+            .filter(|o| o.domain.is_empty())
+            .map(|o| o.version)
+            .max()
+            .unwrap_or(0);
+        let graph_proto = model.graph.as_ref().context("model has no graph")?;
+        let mut graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
+
+        crate::graph_opt::optimize(&mut graph);
+
+        let initializer_names: std::collections::HashSet<&str> =
+            graph.initializers.keys().map(|k| k.as_str()).collect();
+
+        let mut input_sizes = HashMap::new();
+        for input in &graph.inputs {
+            if input.name.is_empty() || initializer_names.contains(input.name.as_str()) {
+                continue;
+            }
+            if let Some(shape) = &input.shape {
+                let mut shape = shape.clone();
+                if !shape.is_empty() && shape[0] == 0 {
+                    shape[0] = 1;
+                }
+                if shape.iter().all(|&d| d > 0) {
+                    input_sizes.insert(input.name.clone(), shape);
+                }
+            }
+        }
+
+        Self::build_from_graph(graph, input_sizes)
+    }
+
     /// Dump the current (possibly optimized) IR graph as human-readable text.
     pub fn dump_graph(&self) -> String {
         crate::graph_opt::dump(&self.graph)
@@ -316,6 +357,10 @@ impl InferenceEngine {
                 PlanNode::Scan(scan_layer) => {
                     scan_layer.execute(&mut self.values)?;
                 }
+                #[cfg(feature = "xnnpack")]
+                PlanNode::XnnpackSubgraph(sg) => {
+                    sg.execute(&mut self.values)?;
+                }
             }
         }
 
@@ -370,6 +415,10 @@ impl InferenceEngine {
                 }
                 PlanNode::Scan(scan_layer) => {
                     scan_layer.execute(&mut self.values)?;
+                }
+                #[cfg(feature = "xnnpack")]
+                PlanNode::XnnpackSubgraph(sg) => {
+                    sg.execute(&mut self.values)?;
                 }
             }
         }

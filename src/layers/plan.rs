@@ -103,6 +103,8 @@ pub enum PlanNode {
     If(Box<if_op::If>),
     TopK(Box<topk::TopK>),
     Scan(Box<scan::Scan>),
+    #[cfg(feature = "xnnpack")]
+    XnnpackSubgraph(Box<super::xnnpack_subgraph::XnnpackSubgraph>),
 }
 
 pub struct Plan {
@@ -189,6 +191,8 @@ impl Plan {
         }
 
         let mut nodes = Vec::new();
+        #[cfg(feature = "xnnpack")]
+        let mut node_meta: Vec<Option<(OpType, Vec<String>, Node)>> = Vec::new();
         let mut cast_counter = 0usize;
         for node in &graph.nodes {
             let op = node.op_type;
@@ -216,6 +220,8 @@ impl Plan {
                                 output: cast_name.clone(),
                                 layer: Box::new(auto_cast::AutoCastF32::new(input_name.clone())),
                             });
+                            #[cfg(feature = "xnnpack")]
+                            node_meta.push(None);
                             type_map.insert(cast_name.clone(), DType::Float);
                             modified_inputs[i] = cast_name;
                         }
@@ -244,6 +250,8 @@ impl Plan {
                 }
                 // Skip adding to plan — output is already in initializers
                 // and will be available at runtime via the values map.
+                #[cfg(feature = "xnnpack")]
+                node_meta.push(None);
                 continue;
             }
             if let Some(shape) =
@@ -349,6 +357,8 @@ impl Plan {
                                 }
                             }
                             if folded {
+                                #[cfg(feature = "xnnpack")]
+                                node_meta.push(None);
                                 continue;
                             }
                         }
@@ -356,6 +366,8 @@ impl Plan {
                 }
             }
 
+            #[cfg(feature = "xnnpack")]
+            node_meta.push(Some((op, modified_inputs.clone(), node.clone())));
             nodes.push(build_node_with_opset(
                 op,
                 node,
@@ -363,6 +375,19 @@ impl Plan {
                 &shape_map,
                 graph.opset_version,
             )?);
+        }
+
+        // XNNPACK subgraph compilation
+        #[cfg(feature = "xnnpack")]
+        {
+            nodes = compile_xnnpack_subgraphs(
+                nodes,
+                node_meta,
+                &shape_map,
+                &type_map,
+                &initializers,
+                graph.opset_version,
+            )?;
         }
 
         // Pre-allocate tensors for all known shapes/types
@@ -384,6 +409,8 @@ impl Plan {
         // Log plan summary
         {
             let mut cpu_ops = 0usize;
+            #[allow(unused_mut)]
+            let mut xnnpack_ops = 0usize;
             for node in &nodes {
                 match node {
                     PlanNode::Single { .. } => cpu_ops += 1,
@@ -392,10 +419,26 @@ impl Plan {
                     | PlanNode::If(_)
                     | PlanNode::TopK(_)
                     | PlanNode::Scan(_) => cpu_ops += 1,
+                    #[cfg(feature = "xnnpack")]
+                    PlanNode::XnnpackSubgraph(sg) => {
+                        xnnpack_ops += sg.fallback_nodes.len();
+                    }
                 }
             }
-            let folded = graph.nodes.len().saturating_sub(cpu_ops);
-            tracing::info!("plan: {cpu_ops} ops (CPU), {folded} folded");
+            #[cfg(feature = "xnnpack")]
+            {
+                let total = cpu_ops + xnnpack_ops;
+                if total > 0 {
+                    let pct = (xnnpack_ops as f64 / total as f64 * 100.0) as u32;
+                    tracing::info!("plan: {total} ops, {xnnpack_ops} XNNPACK ({pct}%), {cpu_ops} CPU");
+                }
+            }
+            #[cfg(not(feature = "xnnpack"))]
+            {
+                let _ = xnnpack_ops;
+                let folded = graph.nodes.len().saturating_sub(cpu_ops);
+                tracing::info!("plan: {cpu_ops} ops (CPU), {folded} folded");
+            }
         }
 
         Ok(Self {
@@ -1128,5 +1171,158 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
         PlanNode::If(if_layer) => if_layer.execute(values),
         PlanNode::TopK(topk_layer) => topk_layer.execute(values),
         PlanNode::Scan(scan_layer) => scan_layer.execute(values),
+        #[cfg(feature = "xnnpack")]
+        PlanNode::XnnpackSubgraph(_) => {
+            anyhow::bail!("XnnpackSubgraph cannot be executed via execute_node")
+        }
     }
+}
+
+#[cfg(feature = "xnnpack")]
+fn compile_xnnpack_subgraphs(
+    mut nodes: Vec<PlanNode>,
+    node_meta: Vec<Option<(OpType, Vec<String>, Node)>>,
+    shape_map: &HashMap<String, Dims>,
+    type_map: &HashMap<String, DType>,
+    initializers: &HashMap<String, Tensor>,
+    _opset_version: i64,
+) -> Result<Vec<PlanNode>> {
+    use super::xnnpack_subgraph::{CapturedOp, is_xnnpack_compatible};
+
+    if std::env::var("XNNPACK_DISABLE").is_ok() {
+        tracing::info!("XNNPACK disabled via XNNPACK_DISABLE env var");
+        return Ok(nodes);
+    }
+
+    // Identify which plan nodes are XNNPACK-compatible
+    let is_eligible = |idx: usize| -> bool {
+        if let Some(Some((op, _inputs, node))) = node_meta.get(idx) {
+            if !is_xnnpack_compatible(*op) {
+                return false;
+            }
+            // Only float outputs
+            for out in &node.outputs {
+                if !out.is_empty() {
+                    if let Some(&dt) = type_map.get(out) {
+                        if dt != DType::Float {
+                            return false;
+                        }
+                    }
+                }
+            }
+            true
+        } else {
+            false
+        }
+    };
+
+    // Find maximal runs of consecutive eligible ops
+    let n = nodes.len();
+    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut i = 0;
+    while i < n {
+        if is_eligible(i) {
+            let start = i;
+            while i < n && is_eligible(i) {
+                i += 1;
+            }
+            if i - start >= 2 {
+                runs.push(start..i);
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    // Process runs in reverse order (to preserve indices)
+    for run in runs.into_iter().rev() {
+        // Identify which outputs are consumed outside this run
+        let mut produced: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut consumed_after: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        for idx in run.clone() {
+            if let Some(Some((_, _, node))) = node_meta.get(idx) {
+                for out in &node.outputs {
+                    produced.insert(out.clone());
+                }
+            }
+        }
+
+        // Check what's consumed after the run
+        for idx in run.end..n {
+            if let Some(Some((_, inputs, _))) = node_meta.get(idx) {
+                for inp in inputs {
+                    if !inp.is_empty() && produced.contains(inp) {
+                        consumed_after.insert(inp.clone());
+                    }
+                }
+            }
+        }
+
+        // Also check graph outputs
+        // (any produced value that is a graph output is required)
+        // We don't have output_names here, so check all produced values
+        // against the shape_map (conservative)
+
+        let required_outputs: Vec<String> = produced
+            .iter()
+            .filter(|name| {
+                consumed_after.contains(name.as_str())
+                    || shape_map.contains_key(name.as_str())
+            })
+            .cloned()
+            .collect();
+
+        if required_outputs.is_empty() {
+            continue;
+        }
+
+        // Capture ops
+        let captured: Vec<CapturedOp> = node_meta[run.clone()]
+            .iter()
+            .filter_map(|meta| {
+                let (op, inputs, node) = meta.as_ref()?;
+                Some(CapturedOp {
+                    op: *op,
+                    inputs: inputs.clone(),
+                    outputs: node.outputs.clone(),
+                    node: node.clone(),
+                })
+            })
+            .collect();
+
+        // Collect initializers referenced by these ops
+        let mut sub_initializers: HashMap<String, Tensor> = HashMap::new();
+        for cap in &captured {
+            for inp in &cap.inputs {
+                if !inp.is_empty() && !sub_initializers.contains_key(inp) {
+                    if let Some(tensor) = initializers.get(inp) {
+                        sub_initializers.insert(inp.clone(), tensor.clone());
+                    }
+                }
+            }
+        }
+
+        // Shape hints from shape_map (convert Dims to Vec<usize>)
+        let shape_map_vec: HashMap<String, Vec<usize>> = shape_map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_vec()))
+            .collect();
+
+        // Extract fallback CPU nodes
+        let fallback_nodes: Vec<PlanNode> = nodes.drain(run.clone()).collect();
+
+        let mut subgraph = super::xnnpack_subgraph::XnnpackSubgraph::new(
+            captured,
+            required_outputs,
+            shape_map_vec,
+            sub_initializers,
+        );
+        subgraph.fallback_nodes = fallback_nodes;
+
+        nodes.insert(run.start, PlanNode::XnnpackSubgraph(Box::new(subgraph)));
+    }
+
+    Ok(nodes)
 }

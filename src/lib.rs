@@ -73,6 +73,8 @@ pub mod layers;
 pub mod onnx_ir;
 pub mod tensor_data;
 pub mod utils;
+#[cfg(feature = "xnnpack")]
+pub mod xnnpack_ffi;
 pub use dtype::DType;
 pub use dtype::ONNX_DOUBLE;
 pub use dtype::ONNX_FLOAT;
