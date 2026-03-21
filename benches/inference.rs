@@ -16,6 +16,14 @@ fn fixture(name: &str) -> std::path::PathBuf {
 }
 
 fn load_single_input(base: &Path, model_file: &str) -> (InferenceEngine, HashMap<String, Tensor>) {
+    load_single_input_opt(base, model_file, false)
+}
+
+fn load_single_input_opt(
+    base: &Path,
+    model_file: &str,
+    graph_opt: bool,
+) -> (InferenceEngine, HashMap<String, Tensor>) {
     let model_bytes = fs::read(base.join(model_file)).expect("read model");
 
     let model = onnx_infer::onnx::ModelProto::decode(&model_bytes[..]).unwrap();
@@ -26,7 +34,11 @@ fn load_single_input(base: &Path, model_file: &str) -> (InferenceEngine, HashMap
     let input_bytes = fs::read(test_dir.join("input_0.pb")).expect("read input");
     let input = Tensor::from_proto_bytes(&input_bytes).expect("parse input");
 
-    let engine = InferenceEngine::new(&model_bytes).expect("load model");
+    let engine = if graph_opt {
+        InferenceEngine::with_graph_opt(&model_bytes).expect("load model")
+    } else {
+        InferenceEngine::new(&model_bytes).expect("load model")
+    };
 
     let mut inputs = HashMap::new();
     inputs.insert(input_name, input);
@@ -34,6 +46,14 @@ fn load_single_input(base: &Path, model_file: &str) -> (InferenceEngine, HashMap
 }
 
 fn load_multi_input(base: &Path, model_file: &str) -> (InferenceEngine, HashMap<String, Tensor>) {
+    load_multi_input_opt(base, model_file, false)
+}
+
+fn load_multi_input_opt(
+    base: &Path,
+    model_file: &str,
+    graph_opt: bool,
+) -> (InferenceEngine, HashMap<String, Tensor>) {
     let model_bytes = fs::read(base.join(model_file)).expect("read model");
 
     let model = onnx_infer::onnx::ModelProto::decode(&model_bytes[..]).unwrap();
@@ -50,7 +70,11 @@ fn load_multi_input(base: &Path, model_file: &str) -> (InferenceEngine, HashMap<
         }
     }
 
-    let engine = InferenceEngine::new(&model_bytes).expect("load model");
+    let engine = if graph_opt {
+        InferenceEngine::with_graph_opt(&model_bytes).expect("load model")
+    } else {
+        InferenceEngine::new(&model_bytes).expect("load model")
+    };
     (engine, inputs)
 }
 
@@ -117,6 +141,53 @@ fn bench_yolov4_11(c: &mut Criterion) {
     });
 }
 
+// --- graph-opt variants (BN fold + dead node removal) ---
+
+fn bench_mnist12_graphopt(c: &mut Criterion) {
+    let (mut engine, inputs) = load_single_input_opt(&fixture("mnist-12"), "mnist-12.onnx", true);
+    c.bench_function("mnist-12-graphopt", |b| {
+        b.iter(|| engine.run(inputs.clone()).unwrap())
+    });
+}
+
+fn bench_mobilenetv2_7_graphopt(c: &mut Criterion) {
+    let (mut engine, inputs) =
+        load_single_input_opt(&fixture("mobilenetv2-7"), "mobilenetv2-7.onnx", true);
+    c.bench_function("mobilenetv2-7-graphopt", |b| {
+        b.iter(|| engine.run(inputs.clone()).unwrap())
+    });
+}
+
+fn bench_mobilenetv2_12_graphopt(c: &mut Criterion) {
+    let (mut engine, inputs) =
+        load_single_input_opt(&fixture("mobilenetv2-12"), "mobilenetv2-12.onnx", true);
+    c.bench_function("mobilenetv2-12-graphopt", |b| {
+        b.iter(|| engine.run(inputs.clone()).unwrap())
+    });
+}
+
+fn bench_tinyyolov2_7_graphopt(c: &mut Criterion) {
+    let (mut engine, inputs) = load_single_input_opt(&fixture("tinyyolov2-7"), "model.onnx", true);
+    c.bench_function("tinyyolov2-7-graphopt", |b| {
+        b.iter(|| engine.run(inputs.clone()).unwrap())
+    });
+}
+
+fn bench_tinyyolov3_11_graphopt(c: &mut Criterion) {
+    let (mut engine, inputs) =
+        load_multi_input_opt(&fixture("tiny-yolov3-11"), "yolov3-tiny.onnx", true);
+    c.bench_function("tiny-yolov3-11-graphopt", |b| {
+        b.iter(|| engine.run(inputs.clone()).unwrap())
+    });
+}
+
+fn bench_yolov4_11_graphopt(c: &mut Criterion) {
+    let (mut engine, inputs) = load_single_input_opt(&fixture("yolov4-11"), "yolov4.onnx", true);
+    c.bench_function("yolov4-11-graphopt", |b| {
+        b.iter(|| engine.run(inputs.clone()).unwrap())
+    });
+}
+
 criterion_group!(
     benches,
     bench_mnist1,
@@ -128,5 +199,11 @@ criterion_group!(
     bench_tinyyolov2_7,
     bench_tinyyolov3_11,
     bench_yolov4_11,
+    bench_mnist12_graphopt,
+    bench_mobilenetv2_7_graphopt,
+    bench_mobilenetv2_12_graphopt,
+    bench_tinyyolov2_7_graphopt,
+    bench_tinyyolov3_11_graphopt,
+    bench_yolov4_11_graphopt,
 );
 criterion_main!(benches);

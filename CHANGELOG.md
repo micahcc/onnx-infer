@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-03-21 — Add graph-level layout optimization pass
+
+New `graph_opt` module that transforms the IR graph before plan building:
+
+- **Insert layout transposes**: Automatically wraps spatial ops (Conv, MaxPool,
+  AveragePool, GlobalAveragePool, Resize, BatchNorm, LRN) with NCHW→NHWC /
+  NHWC→NCHW transposes so they operate in the correct layout for XNNPACK.
+- **Fold BatchNorm into Conv**: Fuses BN scale/bias into preceding Conv weights
+  and bias, eliminating the BN node entirely.
+- **Eliminate inverse transposes**: Cancels adjacent NCHW→NHWC / NHWC→NCHW pairs.
+- **Push transposes through unary ops**: Moves layout transposes past elementwise
+  ops (Relu, Sigmoid, Cast, etc.) to reach and cancel with inverse transposes.
+- **Push transposes through binary ops**: When both inputs to Add/Mul/etc come
+  from the same transpose, removes both and adds one on the output.
+- **Dead node removal**: Cleans up any nodes whose outputs are unused.
+- **Dead node removal**: Respects sub-graph references (Loop/If/Scan bodies)
+  so nodes referenced by inner graphs are never removed.
+- **Graph dump**: `graph_opt::dump()` produces human-readable text for debugging
+  optimized graphs, showing node connectivity and transpose annotations.
+- **API**: `InferenceEngine::with_graph_opt()` runs CPU-safe optimizations (BN fold).
+  `dump_graph()`, `dump_graph_opt()`, and `dump_graph_opt_cpu()` for inspecting
+  pre/post-optimization graphs.
+- **Two optimization modes**: `optimize()` for XNNPACK (includes NHWC transposes),
+  `optimize_cpu()` for CPU-only (BN fold + dead node removal, no layout changes).
+- **Tests**: 25 graph-opt tests across all model families (MNIST, MobileNet, ResNet,
+  DenseNet, GoogLeNet, Inception, ShuffleNet, SqueezeNet, VGG, EfficientNet,
+  ArcFace, EmotionFERPlus, YOLO variants, SSD, Faster R-CNN, RetinaNet, BiDAF).
+
 ## 2026-03-20 — Use matrixmultiply crate for default GEMM
 
 Replaced the naive triple-loop fallback sgemm with the `matrixmultiply` crate,

@@ -90,6 +90,90 @@ impl InferenceEngine {
         Self::build_from_graph(graph, input_sizes)
     }
 
+    /// Create an engine with CPU-safe graph optimizations applied (e.g. BN fold into Conv).
+    pub fn with_graph_opt(model_bytes: &[u8]) -> Result<Self> {
+        let model = ModelProto::decode(model_bytes).context("decoding model proto")?;
+        let opset_version = model
+            .opset_import
+            .iter()
+            .filter(|o| o.domain.is_empty())
+            .map(|o| o.version)
+            .max()
+            .unwrap_or(0);
+        let graph_proto = model.graph.as_ref().context("model has no graph")?;
+        let mut graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
+
+        crate::graph_opt::optimize_cpu(&mut graph);
+
+        let initializer_names: std::collections::HashSet<&str> =
+            graph.initializers.keys().map(|k| k.as_str()).collect();
+
+        let mut input_sizes = HashMap::new();
+        for input in &graph.inputs {
+            if input.name.is_empty() || initializer_names.contains(input.name.as_str()) {
+                continue;
+            }
+            if let Some(shape) = &input.shape {
+                let mut shape = shape.clone();
+                if !shape.is_empty() && shape[0] == 0 {
+                    shape[0] = 1;
+                }
+                if shape.iter().all(|&d| d > 0) {
+                    input_sizes.insert(input.name.clone(), shape);
+                }
+            }
+        }
+
+        Self::build_from_graph(graph, input_sizes)
+    }
+
+    /// Dump the current (possibly optimized) IR graph as human-readable text.
+    pub fn dump_graph(&self) -> String {
+        crate::graph_opt::dump(&self.graph)
+    }
+
+    /// Parse a model and return the pre-optimization and post-optimization graph dumps.
+    /// The optimization includes NHWC layout transposes (for XNNPACK).
+    pub fn dump_graph_opt(model_bytes: &[u8]) -> Result<(String, String)> {
+        let model = ModelProto::decode(model_bytes).context("decoding model proto")?;
+        let opset_version = model
+            .opset_import
+            .iter()
+            .filter(|o| o.domain.is_empty())
+            .map(|o| o.version)
+            .max()
+            .unwrap_or(0);
+        let graph_proto = model.graph.as_ref().context("model has no graph")?;
+        let mut graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
+
+        let before = crate::graph_opt::dump(&graph);
+        crate::graph_opt::optimize(&mut graph);
+        let after = crate::graph_opt::dump(&graph);
+
+        Ok((before, after))
+    }
+
+    /// Parse a model and return the pre-optimization and post-CPU-optimization graph dumps.
+    /// CPU optimization includes BN folding but no layout transposes.
+    pub fn dump_graph_opt_cpu(model_bytes: &[u8]) -> Result<(String, String)> {
+        let model = ModelProto::decode(model_bytes).context("decoding model proto")?;
+        let opset_version = model
+            .opset_import
+            .iter()
+            .filter(|o| o.domain.is_empty())
+            .map(|o| o.version)
+            .max()
+            .unwrap_or(0);
+        let graph_proto = model.graph.as_ref().context("model has no graph")?;
+        let mut graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
+
+        let before = crate::graph_opt::dump(&graph);
+        crate::graph_opt::optimize_cpu(&mut graph);
+        let after = crate::graph_opt::dump(&graph);
+
+        Ok((before, after))
+    }
+
     fn build_from_graph(graph: onnx_ir::Graph, input_sizes: HashMap<String, Dims>) -> Result<Self> {
         let initializer_names: std::collections::HashSet<&str> =
             graph.initializers.keys().map(|k| k.as_str()).collect();
