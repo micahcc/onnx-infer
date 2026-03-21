@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
@@ -137,9 +139,9 @@ impl Layer for Lstm {
         let w_tensor = get_tensor(values, &self.inputs[1])?;
         let r_tensor = get_tensor(values, &self.inputs[2])?;
 
-        let x = x_tensor.floats();
-        let w = w_tensor.floats();
-        let r = r_tensor.floats();
+        let x = x_tensor.floats().context("in Lstm layer")?;
+        let w = w_tensor.floats().context("in Lstm layer")?;
+        let r = r_tensor.floats().context("in Lstm layer")?;
 
         let seq_len = x_tensor.dims[0];
         let batch = x_tensor.dims[1];
@@ -151,7 +153,9 @@ impl Layer for Lstm {
         // Bias: optional input[3], shape [num_dir, 8*hs]
         let zero_bias = vec![0.0f32; num_dir * 8 * hs];
         let bias = if self.inputs.len() > 3 && !self.inputs[3].is_empty() {
-            get_tensor(values, &self.inputs[3])?.floats()
+            get_tensor(values, &self.inputs[3])?
+                .floats()
+                .context("in Lstm layer")?
         } else {
             &zero_bias
         };
@@ -159,14 +163,18 @@ impl Layer for Lstm {
         // Initial hidden state: optional input[5], shape [num_dir, batch, hs]
         let zero_h = vec![0.0f32; num_dir * batch * hs];
         let init_h = if self.inputs.len() > 5 && !self.inputs[5].is_empty() {
-            get_tensor(values, &self.inputs[5])?.floats()
+            get_tensor(values, &self.inputs[5])?
+                .floats()
+                .context("in Lstm layer")?
         } else {
             &zero_h
         };
 
         // Initial cell state: optional input[6], shape [num_dir, batch, hs]
         let init_c = if self.inputs.len() > 6 && !self.inputs[6].is_empty() {
-            get_tensor(values, &self.inputs[6])?.floats()
+            get_tensor(values, &self.inputs[6])?
+                .floats()
+                .context("in Lstm layer")?
         } else {
             &zero_h
         };

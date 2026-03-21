@@ -12,7 +12,10 @@ cli = ["dep:clap", "dep:image", "dep:prost-reflect", "dep:serde_json"]
 accelerate = []
 blas = []
 
+
 [dependencies]
+anyhow = "1"
+matrixmultiply = "0.3"
 prost = "0"
 smallvec = "1"
 clap = { version = "4", features = ["derive"], optional = true }
@@ -34,6 +37,9 @@ harness = false
 [[bench]]
 name = "kernels"
 harness = false
+
+[lints.clippy]
+collapsible_if = "allow"
 
 [build-dependencies]
 prost = "0"

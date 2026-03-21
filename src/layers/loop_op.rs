@@ -1,21 +1,22 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use anyhow::Context;
+
 use crate::DType;
 use crate::Dims;
-use crate::InferenceError;
 use crate::Result;
 use crate::Tensor;
 use crate::dims;
 use crate::get_tensor;
 use crate::layers::Plan;
 use crate::layers::PlanNode;
-use crate::onnx::GraphProto;
+use crate::onnx_ir::Graph;
 
 pub struct Loop {
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
-    body: GraphProto,
+    body: Graph,
     plan: Option<Plan>,
     values: HashMap<String, Tensor>,
     outer_refs: Vec<String>,
@@ -35,7 +36,7 @@ pub struct Loop {
 }
 
 impl Loop {
-    pub fn new(inputs: Vec<String>, outputs: Vec<String>, body: GraphProto) -> Self {
+    pub fn new(inputs: Vec<String>, outputs: Vec<String>, body: Graph) -> Self {
         Self {
             inputs,
             outputs,
@@ -60,38 +61,38 @@ impl Loop {
 
     fn init(&mut self, outer_values: &HashMap<String, Tensor>) -> Result<()> {
         let num_carried = self.inputs.len() - 2;
-        let num_scan = self.body.output.len() - 1 - num_carried;
+        let num_scan = self.body.outputs.len() - 1 - num_carried;
 
         // Pre-compute names
-        self.iter_name = self.body.input[0].name.clone();
-        self.cond_name = self.body.input[1].name.clone();
-        self.cond_out_name = self.body.output[0].name.clone();
+        self.iter_name = self.body.inputs[0].name.clone();
+        self.cond_name = self.body.inputs[1].name.clone();
+        self.cond_out_name = self.body.outputs[0].name.clone();
         self.carried_in_names = (0..num_carried)
-            .map(|j| self.body.input[j + 2].name.clone())
+            .map(|j| self.body.inputs[j + 2].name.clone())
             .collect();
         self.carried_out_names = (0..num_carried)
-            .map(|j| self.body.output[j + 1].name.clone())
+            .map(|j| self.body.outputs[j + 1].name.clone())
             .collect();
         self.scan_out_names = (0..num_scan)
-            .map(|j| self.body.output[1 + num_carried + j].name.clone())
+            .map(|j| self.body.outputs[1 + num_carried + j].name.clone())
             .collect();
 
         // Determine outer references
         let mut body_local: HashSet<&str> = HashSet::new();
-        for inp in &self.body.input {
+        for inp in &self.body.inputs {
             body_local.insert(&inp.name);
         }
-        for init in &self.body.initializer {
-            body_local.insert(&init.name);
+        for name in self.body.initializers.keys() {
+            body_local.insert(name);
         }
-        for node in &self.body.node {
-            for out in &node.output {
+        for node in &self.body.nodes {
+            for out in &node.outputs {
                 body_local.insert(out);
             }
         }
         let mut outer_ref_set: HashSet<String> = HashSet::new();
-        for node in &self.body.node {
-            for inp in &node.input {
+        for node in &self.body.nodes {
+            for inp in &node.inputs {
                 if !inp.is_empty() && !body_local.contains(inp.as_str()) {
                     outer_ref_set.insert(inp.clone());
                 }
@@ -118,8 +119,6 @@ impl Loop {
         let probe = Plan::build_with_types(&self.body, &HashMap::new(), &type_hints)?;
 
         // Determine steady-state carried types from output inference
-        // Carried outputs feed back as carried inputs on subsequent iterations,
-        // so the input type should match the output type.
         let mut needs_rebuild = false;
         self.carried_types = Vec::with_capacity(num_carried);
         for j in 0..num_carried {
@@ -177,7 +176,7 @@ impl Loop {
                     // Cast to steady-state type if needed
                     if t.dtype() != self.carried_types[j] && self.carried_types[j] == DType::Float {
                         let mut casted = Tensor::default();
-                        casted.copy_cast_f32(&t);
+                        casted.copy_cast_f32(&t).context("in Loop layer")?;
                         t = casted;
                     }
                     self.values.insert(name.clone(), t);
@@ -205,14 +204,18 @@ impl Loop {
         }
 
         let trip_tensor = get_tensor(outer_values, &self.inputs[0])?;
-        let trip_count = trip_tensor.i64_at(0) as usize;
+        let trip_count = trip_tensor
+            .i64_at(0)
+            .context("in Loop layer: reading trip count")? as usize;
         let num_carried = self.inputs.len() - 2;
 
         // Copy initial carried state, casting to steady-state type
         for j in 0..num_carried {
             let src = get_tensor(outer_values, &self.inputs[j + 2])?;
             if src.dtype() != self.carried_types[j] && self.carried_types[j] == DType::Float {
-                self.carried[j].copy_cast_f32(src);
+                self.carried[j]
+                    .copy_cast_f32(src)
+                    .context("in Loop layer")?;
             } else {
                 self.carried[j].copy_from(src);
             }
@@ -318,8 +321,22 @@ impl Loop {
             // Check condition output
             let keep_going = if let Some(cond) = values.get(cond_out_name) {
                 match cond.dtype() {
-                    DType::Float => cond.floats().first().copied().unwrap_or(0.0) != 0.0,
-                    DType::Int64 => cond.ints().first().copied().unwrap_or(0) != 0,
+                    DType::Float => {
+                        cond.floats()
+                            .context("in Loop layer")?
+                            .first()
+                            .copied()
+                            .unwrap_or(0.0)
+                            != 0.0
+                    }
+                    DType::Int64 => {
+                        cond.ints()
+                            .context("in Loop layer")?
+                            .first()
+                            .copied()
+                            .unwrap_or(0)
+                            != 0
+                    }
                     DType::String => unreachable!("strings not supported"),
                 }
             } else {
@@ -330,14 +347,14 @@ impl Loop {
             for (j, out_name) in carried_out_names.iter().enumerate() {
                 if let Some(t) = values.get(out_name) {
                     if t.dtype() != carried_types[j] {
-                        return Err(InferenceError::InvalidModel(format!(
+                        anyhow::bail!(
                             "Loop carried output '{}' changed type from {:?} to {:?} at iteration {}. \
                              Loop body outputs must have consistent types across iterations.",
                             out_name,
                             carried_types[j],
                             t.dtype(),
                             i
-                        )));
+                        );
                     }
                     carried[j].copy_from(t);
                 }
@@ -348,21 +365,24 @@ impl Loop {
                 if let Some(t) = values.get(scan_name) {
                     if let Some(expected_dt) = scan_dtypes[j] {
                         if t.dtype() != expected_dt {
-                            return Err(InferenceError::InvalidModel(format!(
+                            anyhow::bail!(
                                 "Loop scan output '{}' changed type from {:?} to {:?} at iteration {}. \
                                  Loop body outputs must have consistent types across iterations.",
                                 scan_name,
                                 expected_dt,
                                 t.dtype(),
                                 i
-                            )));
+                            );
                         }
                         if t.dims != scan_elem_dims[j] {
-                            return Err(InferenceError::InvalidModel(format!(
+                            anyhow::bail!(
                                 "Loop scan output '{}' changed shape from {:?} to {:?} at iteration {}. \
                                  Loop body outputs must have consistent shapes across iterations.",
-                                scan_name, scan_elem_dims[j], t.dims, i
-                            )));
+                                scan_name,
+                                scan_elem_dims[j],
+                                t.dims,
+                                i
+                            );
                         }
                     } else {
                         scan_dtypes[j] = Some(t.dtype());
@@ -370,8 +390,12 @@ impl Loop {
                         scan_elem_dims[j].extend_from_slice(&t.dims);
                     }
                     match t.dtype() {
-                        DType::Float => scan_f32[j].extend_from_slice(t.floats()),
-                        DType::Int64 => scan_i64[j].extend_from_slice(t.ints()),
+                        DType::Float => {
+                            scan_f32[j].extend_from_slice(t.floats().context("in Loop layer")?)
+                        }
+                        DType::Int64 => {
+                            scan_i64[j].extend_from_slice(t.ints().context("in Loop layer")?)
+                        }
                         DType::String => unreachable!("strings not supported"),
                     }
                 }

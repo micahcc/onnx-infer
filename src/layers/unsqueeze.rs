@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::Result;
 use crate::Tensor;
-use crate::get_attr_ints;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::onnx::NodeProto;
 
 pub struct Unsqueeze {
     pub inputs: Vec<String>,
@@ -13,11 +13,8 @@ pub struct Unsqueeze {
 }
 
 impl Unsqueeze {
-    pub fn new(inputs: Vec<String>, node: &NodeProto) -> Self {
-        Self {
-            inputs,
-            axes_attr: get_attr_ints(node, "axes").unwrap_or_default(),
-        }
+    pub fn new(inputs: Vec<String>, axes_attr: Vec<i64>) -> Self {
+        Self { inputs, axes_attr }
     }
 }
 
@@ -27,7 +24,7 @@ impl Layer for Unsqueeze {
 
         let axes: &[i64] = if self.inputs.len() > 1 && !self.inputs[1].is_empty() {
             let axes_tensor = get_tensor(values, &self.inputs[1])?;
-            axes_tensor.ints()
+            axes_tensor.ints().context("in Unsqueeze layer")?
         } else {
             &self.axes_attr
         };

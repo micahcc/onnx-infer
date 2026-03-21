@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
@@ -25,9 +27,9 @@ impl Layer for Range {
 
         match start.dtype() {
             DType::Float => {
-                let s = start.floats()[0];
-                let l = limit.floats()[0];
-                let d = delta.floats()[0];
+                let s = start.floats().context("in Range layer")?[0];
+                let l = limit.floats().context("in Range layer")?[0];
+                let d = delta.floats().context("in Range layer")?[0];
                 let n = ((l - s) / d).ceil().max(0.0) as usize;
                 let buf = output.as_mut_f32(n);
                 for (i, v) in buf.iter_mut().enumerate() {
@@ -36,9 +38,9 @@ impl Layer for Range {
                 output.set_dims(&[n]);
             }
             DType::Int64 => {
-                let s = start.ints()[0];
-                let l = limit.ints()[0];
-                let d = delta.ints()[0];
+                let s = start.ints().context("in Range layer")?[0];
+                let l = limit.ints().context("in Range layer")?[0];
+                let d = delta.ints().context("in Range layer")?[0];
                 let n = match d.cmp(&0) {
                     Ordering::Greater => ((l - s + d - 1) / d).max(0) as usize,
                     Ordering::Less => ((s - l - d - 1) / (-d)).max(0) as usize,

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
@@ -84,7 +86,7 @@ impl Split {
             match dtype {
                 DType::Float => {
                     let in_t = values.get(&self.inputs[0]).unwrap();
-                    let in_data = in_t.floats();
+                    let in_data = in_t.floats().context("in Split layer")?;
                     let buf = out.as_mut_f32(numel);
                     let mut idx = 0;
                     for o in 0..outer {
@@ -98,7 +100,7 @@ impl Split {
                 }
                 DType::Int64 => {
                     let in_t = values.get(&self.inputs[0]).unwrap();
-                    let in_data = in_t.ints();
+                    let in_data = in_t.ints().context("in Split layer")?;
                     let buf = out.as_mut_i64(numel);
                     let mut idx = 0;
                     for o in 0..outer {

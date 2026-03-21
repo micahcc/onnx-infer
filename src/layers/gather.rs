@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::DType;
 use crate::Dims;
 use crate::Result;
@@ -113,22 +115,23 @@ impl Layer for Gather {
         let numel = p.outer * num_indices * p.inner;
 
         let idx_is_int = indices.dtype() == DType::Int64;
-        let resolve_idx = |i: usize| -> i64 {
+        let resolve_idx = |i: usize| -> anyhow::Result<i64> {
+            use anyhow::Context;
             if idx_is_int {
-                indices.ints()[i]
+                Ok(indices.ints().context("Gather: indices")?[i])
             } else {
-                indices.floats()[i] as i64
+                Ok(indices.floats().context("Gather: indices")?[i] as i64)
             }
         };
 
         match input.dtype() {
             DType::Float => {
-                let d = input.floats();
+                let d = input.floats().context("in Gather layer")?;
                 let buf = output.as_mut_f32(numel);
                 let mut dst = 0;
                 for o in 0..p.outer {
                     for j in 0..num_indices {
-                        let raw_idx = resolve_idx(j);
+                        let raw_idx = resolve_idx(j).context("in Gather layer: resolving index")?;
                         let idx = if raw_idx < 0 {
                             (p.axis_size as i64 + raw_idx) as usize
                         } else {
@@ -141,12 +144,12 @@ impl Layer for Gather {
                 }
             }
             DType::Int64 => {
-                let d = input.ints();
+                let d = input.ints().context("in Gather layer")?;
                 let buf = output.as_mut_i64(numel);
                 let mut dst = 0;
                 for o in 0..p.outer {
                     for j in 0..num_indices {
-                        let raw_idx = resolve_idx(j);
+                        let raw_idx = resolve_idx(j).context("in Gather layer: resolving index")?;
                         let idx = if raw_idx < 0 {
                             (p.axis_size as i64 + raw_idx) as usize
                         } else {

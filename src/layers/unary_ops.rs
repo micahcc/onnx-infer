@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
@@ -24,7 +26,7 @@ macro_rules! unary_op {
                 output: &mut Tensor,
             ) -> Result<()> {
                 let input = get_tensor(values, &self.inputs[0])?;
-                let inp = input.floats();
+                let inp = input.floats().context("in UnaryOps layer")?;
                 let buf = output.as_mut_f32(inp.len());
                 for (o, &$v) in buf.iter_mut().zip(inp.iter()) {
                     *o = $body;
@@ -89,7 +91,7 @@ impl Elu {
 impl Layer for Elu {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
-        let inp = input.floats();
+        let inp = input.floats().context("in UnaryOps layer")?;
         let buf = output.as_mut_f32(inp.len());
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
             *o = if v >= 0.0 {
@@ -117,7 +119,7 @@ impl Celu {
 impl Layer for Celu {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
-        let inp = input.floats();
+        let inp = input.floats().context("in UnaryOps layer")?;
         let buf = output.as_mut_f32(inp.len());
         let a = self.alpha;
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
@@ -147,7 +149,7 @@ impl Selu {
 impl Layer for Selu {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
-        let inp = input.floats();
+        let inp = input.floats().context("in UnaryOps layer")?;
         let buf = output.as_mut_f32(inp.len());
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
             *o = self.gamma
@@ -181,7 +183,7 @@ impl HardSigmoid {
 impl Layer for HardSigmoid {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
-        let inp = input.floats();
+        let inp = input.floats().context("in UnaryOps layer")?;
         let buf = output.as_mut_f32(inp.len());
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
             *o = (self.alpha * v + self.beta).clamp(0.0, 1.0);
@@ -205,7 +207,7 @@ impl ThresholdedRelu {
 impl Layer for ThresholdedRelu {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
-        let inp = input.floats();
+        let inp = input.floats().context("in UnaryOps layer")?;
         let buf = output.as_mut_f32(inp.len());
         for (o, &v) in buf.iter_mut().zip(inp.iter()) {
             *o = if v > self.alpha { v } else { 0.0 };

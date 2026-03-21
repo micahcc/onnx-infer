@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
@@ -22,11 +24,11 @@ impl Layer for Sum {
         let numel = first.numel();
         let out_dims = first.dims.clone();
         let buf = output.as_mut_f32(numel);
-        buf.copy_from_slice(first.floats());
+        buf.copy_from_slice(first.floats().context("in Sum layer")?);
 
         for name in &self.inputs[1..] {
             let t = get_tensor(values, name)?;
-            let f = t.floats();
+            let f = t.floats().context("in Sum layer")?;
             for (o, &v) in buf.iter_mut().zip(f.iter()) {
                 *o += v;
             }

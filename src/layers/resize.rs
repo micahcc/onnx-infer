@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use crate::InferenceError;
+use anyhow::Context;
+
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
@@ -107,7 +108,7 @@ impl Layer for Resize {
         // Result: output shape will be exactly [1, 64, 52, 52]
         if self.inputs.len() > 3 && !self.inputs[3].is_empty() {
             let sizes = get_tensor(values, &self.inputs[3])?;
-            for (i, &v) in sizes.ints().iter().enumerate() {
+            for (i, &v) in sizes.ints().context("in Resize layer")?.iter().enumerate() {
                 out_dims[i] = v as usize;
             }
         }
@@ -121,7 +122,7 @@ impl Layer for Resize {
         // Result: output shape will be [1×1.0, 64×1.0, 26×2.0, 26×2.0] = [1, 64, 52, 52]
         else if self.inputs.len() > 2 && !self.inputs[2].is_empty() {
             let scales = get_tensor(values, &self.inputs[2])?;
-            let scales_f = scales.floats();
+            let scales_f = scales.floats().context("in Resize layer")?;
             for (i, (&d, &s)) in input.dims.iter().zip(scales_f.iter()).enumerate() {
                 out_dims[i] = (d as f32 * s) as usize;
             }
@@ -141,8 +142,8 @@ impl Layer for Resize {
         // Result: output shape will be [1, 128, 80, 80]
         else if self.inputs.len() > 1 && !self.inputs[1].is_empty() {
             let scales = get_tensor(values, &self.inputs[1])?;
-            if !scales.floats().is_empty() {
-                let scales_f = scales.floats();
+            if !scales.floats().context("in Resize layer")?.is_empty() {
+                let scales_f = scales.floats().context("in Resize layer")?;
                 for (i, (&d, &s)) in input.dims.iter().zip(scales_f.iter()).enumerate() {
                     out_dims[i] = (d as f32 * s) as usize;
                 }
@@ -171,9 +172,7 @@ impl Layer for Resize {
         }
         // Error case: No valid sizing information provided
         else {
-            return Err(InferenceError::InvalidModel(
-                "Resize: no scales or sizes".into(),
-            ));
+            anyhow::bail!("Resize: no scales or sizes");
         }
 
         let numel: usize = out_dims[..rank].iter().product();
@@ -223,7 +222,7 @@ impl Layer for Resize {
                 .collect();
         }
 
-        let input_f = input.floats();
+        let input_f = input.floats().context("in Resize layer")?;
         let buf = output.as_mut_f32(numel);
 
         // Use incrementing coordinate array to avoid division/modulo

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
@@ -107,13 +109,13 @@ impl Layer for Gemm {
         let k = p.k;
         let n = p.n;
 
-        let a_f = a.floats();
-        let b_f = b.floats();
+        let a_f = a.floats().context("in Gemm layer")?;
+        let b_f = b.floats().context("in Gemm layer")?;
         let buf = output.as_mut_f32(m * n);
 
         // If we have a bias, pre-fill the output with beta*C, then accumulate with sgemm
         if let Some(c_tensor) = c_tensor {
-            let c_f = c_tensor.floats();
+            let c_f = c_tensor.floats().context("in Gemm layer")?;
             if c_tensor.dims.as_slice() == [m, n] {
                 // C is already m x n, copy directly
                 buf[..m * n].copy_from_slice(&c_f[..m * n]);

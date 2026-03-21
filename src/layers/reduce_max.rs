@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
-use crate::get_attr_ints;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::onnx::NodeProto;
 
 pub struct ReduceMax {
     pub inputs: Vec<String>,
@@ -15,8 +15,7 @@ pub struct ReduceMax {
 }
 
 impl ReduceMax {
-    pub fn new(inputs: Vec<String>, keepdims: bool, node: &NodeProto) -> Self {
-        let axes_attr = get_attr_ints(node, "axes");
+    pub fn new(inputs: Vec<String>, keepdims: bool, axes_attr: Option<Vec<i64>>) -> Self {
         Self {
             inputs,
             keepdims,
@@ -34,7 +33,7 @@ impl Layer for ReduceMax {
         let axes_mask = if self.inputs.len() > 1 && !self.inputs[1].is_empty() {
             let axes_t = get_tensor(values, &self.inputs[1])?;
             let mut mask = [false; 8];
-            for &a in axes_t.ints() {
+            for &a in axes_t.ints().context("in ReduceMax layer")? {
                 let idx = if a < 0 {
                     (rank_i64 + a) as usize
                 } else {
@@ -118,7 +117,7 @@ impl Layer for ReduceMax {
             DType::Float => {
                 let buf = output.as_mut_f32(out_numel);
                 buf.fill(f32::NEG_INFINITY);
-                let input_f = input.floats();
+                let input_f = input.floats().context("in ReduceMax layer")?;
                 for (in_flat, &val) in input_f.iter().enumerate() {
                     let of = calc_out_flat(in_flat);
                     buf[of] = buf[of].max(val);
@@ -127,7 +126,7 @@ impl Layer for ReduceMax {
             DType::Int64 => {
                 let buf = output.as_mut_i64(out_numel);
                 buf.fill(i64::MIN);
-                let input_i = input.ints();
+                let input_i = input.ints().context("in ReduceMax layer")?;
                 for (in_flat, &val) in input_i.iter().enumerate() {
                     let of = calc_out_flat(in_flat);
                     buf[of] = buf[of].max(val);

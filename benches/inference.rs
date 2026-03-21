@@ -110,6 +110,13 @@ fn bench_tinyyolov3_11(c: &mut Criterion) {
     });
 }
 
+fn bench_yolov4_11(c: &mut Criterion) {
+    let (mut engine, inputs) = load_single_input(&fixture("yolov4-11"), "yolov4.onnx");
+    c.bench_function("yolov4-11", |b| {
+        b.iter(|| engine.run(inputs.clone()).unwrap())
+    });
+}
+
 criterion_group!(
     benches,
     bench_mnist1,
@@ -120,5 +127,6 @@ criterion_group!(
     bench_mobilenetv2_12,
     bench_tinyyolov2_7,
     bench_tinyyolov3_11,
+    bench_yolov4_11,
 );
 criterion_main!(benches);

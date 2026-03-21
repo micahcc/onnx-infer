@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
@@ -39,8 +41,8 @@ impl Layer for Equal {
         let mut index = [0usize; 8];
 
         if a.dtype() == DType::Int64 && b.dtype() == DType::Int64 {
-            let ad = a.ints();
-            let bd = b.ints();
+            let ad = a.ints().context("in Equal layer")?;
+            let bd = b.ints().context("in Equal layer")?;
             for val in buf.iter_mut() {
                 let ai = broadcast_index(&index[..ndim], &a.dims, out_dims);
                 let bi = broadcast_index(&index[..ndim], &b.dims, out_dims);
@@ -54,8 +56,8 @@ impl Layer for Equal {
                 }
             }
         } else if a.dtype() == DType::Float && b.dtype() == DType::Float {
-            let ad = a.floats();
-            let bd = b.floats();
+            let ad = a.floats().context("in Equal layer")?;
+            let bd = b.floats().context("in Equal layer")?;
             for val in buf.iter_mut() {
                 let ai = broadcast_index(&index[..ndim], &a.dims, out_dims);
                 let bi = broadcast_index(&index[..ndim], &b.dims, out_dims);
@@ -74,13 +76,13 @@ impl Layer for Equal {
                 let ai = broadcast_index(&index[..ndim], &a.dims, out_dims);
                 let bi = broadcast_index(&index[..ndim], &b.dims, out_dims);
                 let va: f64 = match a.dtype() {
-                    DType::Float => a.floats()[ai] as f64,
-                    DType::Int64 => a.ints()[ai] as f64,
+                    DType::Float => a.floats().context("in Equal layer")?[ai] as f64,
+                    DType::Int64 => a.ints().context("in Equal layer")?[ai] as f64,
                     DType::String => unreachable!("strings not supported"),
                 };
                 let vb: f64 = match b.dtype() {
-                    DType::Float => b.floats()[bi] as f64,
-                    DType::Int64 => b.ints()[bi] as f64,
+                    DType::Float => b.floats().context("in Equal layer")?[bi] as f64,
+                    DType::Int64 => b.ints().context("in Equal layer")?[bi] as f64,
                     DType::String => unreachable!("strings not supported"),
                 };
                 *val = if va == vb { 1 } else { 0 };

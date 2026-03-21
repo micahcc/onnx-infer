@@ -176,8 +176,8 @@ unsafe fn i16_gemm_neon(
         }
 
         // Remaining columns: scalar
-        for pk in 0..k {
-            let a_val = a_row[pk] as i32;
+        for (pk, &a_val) in a_row.iter().enumerate().take(k) {
+            let a_val = a_val as i32;
             let b_base = pk * ldb;
             for jj in j..n {
                 c_row[jj] += a_val * b[b_base + jj] as i32;
@@ -186,7 +186,7 @@ unsafe fn i16_gemm_neon(
     }
 }
 
-/// Fallback: naive sgemm for platforms without system BLAS (e.g. wasm).
+/// Default sgemm using the matrixmultiply crate (optimized SIMD kernels).
 #[cfg(not(any(feature = "accelerate", feature = "blas")))]
 pub fn sgemm(
     m: usize,
@@ -203,38 +203,28 @@ pub fn sgemm(
     c: &mut [f32],
     ldc: usize,
 ) {
-    // Apply beta to C first
-    if beta == 0.0 {
-        for i in 0..m {
-            for j in 0..n {
-                c[i * ldc + j] = 0.0;
-            }
-        }
-    } else if beta != 1.0 {
-        for i in 0..m {
-            for j in 0..n {
-                c[i * ldc + j] *= beta;
-            }
-        }
-    }
+    // matrixmultiply::sgemm uses column/row strides.
+    // Row-major A[m,k]: row stride = lda, col stride = 1
+    // Transposed A: logical A is A^T, so physical layout has row stride = 1, col stride = lda
+    let (a_rs, a_cs) = if trans_a { (1, lda) } else { (lda, 1) };
+    let (b_rs, b_cs) = if trans_b { (1, ldb) } else { (ldb, 1) };
 
-    // Accumulate alpha * op(A) * op(B) using i-k-j loop order for better cache behavior
-    for i in 0..m {
-        for pk in 0..k {
-            let a_val = if trans_a {
-                a[pk * lda + i]
-            } else {
-                a[i * lda + pk]
-            };
-            let a_scaled = alpha * a_val;
-            for j in 0..n {
-                let b_val = if trans_b {
-                    b[j * ldb + pk]
-                } else {
-                    b[pk * ldb + j]
-                };
-                c[i * ldc + j] += a_scaled * b_val;
-            }
-        }
+    unsafe {
+        matrixmultiply::sgemm(
+            m,
+            k,
+            n,
+            alpha,
+            a.as_ptr(),
+            a_rs as isize,
+            a_cs as isize,
+            b.as_ptr(),
+            b_rs as isize,
+            b_cs as isize,
+            beta,
+            c.as_mut_ptr(),
+            ldc as isize,
+            1,
+        );
     }
 }

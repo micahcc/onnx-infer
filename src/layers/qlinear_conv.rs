@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
@@ -79,13 +81,21 @@ fn im2col_i16(
 impl Layer for QLinearConv {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let x_quant = get_tensor(values, &self.inputs[0])?;
-        let x_scale = get_tensor(values, &self.inputs[1])?.floats()[0];
-        let x_zp = get_tensor(values, &self.inputs[2])?.floats()[0];
+        let x_scale = get_tensor(values, &self.inputs[1])?
+            .floats()
+            .context("in QLinearConv layer")?[0];
+        let x_zp = get_tensor(values, &self.inputs[2])?
+            .floats()
+            .context("in QLinearConv layer")?[0];
         let w_quant = get_tensor(values, &self.inputs[3])?;
         let w_scale_t = get_tensor(values, &self.inputs[4])?;
         let w_zp_t = get_tensor(values, &self.inputs[5])?;
-        let y_scale = get_tensor(values, &self.inputs[6])?.floats()[0];
-        let y_zp = get_tensor(values, &self.inputs[7])?.floats()[0];
+        let y_scale = get_tensor(values, &self.inputs[6])?
+            .floats()
+            .context("in QLinearConv layer")?[0];
+        let y_zp = get_tensor(values, &self.inputs[7])?
+            .floats()
+            .context("in QLinearConv layer")?[0];
         let bias = if self.inputs.len() > 8 && !self.inputs[8].is_empty() {
             Some(get_tensor(values, &self.inputs[8])?)
         } else {
@@ -126,16 +136,16 @@ impl Layer for QLinearConv {
         let gemm_n = spatial_out;
 
         // Convert weight f32→i16 (subtract per-channel zero point)
-        let w_quant_f = w_quant.floats();
-        let w_scale_f = w_scale_t.floats();
+        let w_quant_f = w_quant.floats().context("in QLinearConv layer")?;
+        let w_scale_f = w_scale_t.floats().context("in QLinearConv layer")?;
         let per_channel = w_scale_f.len() > 1;
         let elems_per_oc = w_quant.numel() / p.c_out;
         self.w_buf.resize(w_quant.numel(), 0);
         for oc in 0..p.c_out {
             let zp = if per_channel {
-                w_zp_t.f32_at(oc).round() as i16
+                w_zp_t.f32_at(oc).context("in QLinearConv layer")?.round() as i16
             } else {
-                w_zp_t.f32_at(0).round() as i16
+                w_zp_t.f32_at(0).context("in QLinearConv layer")?.round() as i16
             };
             let base = oc * elems_per_oc;
             for i in 0..elems_per_oc {
@@ -148,7 +158,7 @@ impl Layer for QLinearConv {
         self.col_buf.resize(col_size, 0);
         self.gemm_buf.resize(gemm_m * gemm_n, 0);
 
-        let x_quant_f = x_quant.floats();
+        let x_quant_f = x_quant.floats().context("in QLinearConv layer")?;
         let total = p.n * p.c_out * spatial_out;
         let buf = output.as_mut_f32(total);
         let inv_y_scale = 1.0 / y_scale;
@@ -208,7 +218,7 @@ impl Layer for QLinearConv {
                         } else {
                             w_scale_f[0]
                         };
-                        b.f32_at(abs_oc) * x_scale * ws
+                        b.f32_at(abs_oc).context("in QLinearConv layer")? * x_scale * ws
                     } else {
                         0.0
                     };

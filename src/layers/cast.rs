@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::DType;
-use crate::ONNX_INT32;
-use crate::ONNX_INT64;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
+use crate::onnx_ir::ElemType;
 
 pub struct Cast {
     pub inputs: Vec<String>,
@@ -15,10 +16,9 @@ pub struct Cast {
 
 impl Cast {
     pub fn new(inputs: Vec<String>, to: i64) -> Self {
-        let to32 = to as i32;
         Self {
             inputs,
-            to_int: to32 == ONNX_INT32 || to32 == ONNX_INT64,
+            to_int: ElemType::from_onnx(to as i32).is_int(),
         }
     }
 }
@@ -31,9 +31,12 @@ impl Layer for Cast {
             true => {
                 let buf = output.as_mut_i64(numel);
                 match input.dtype() {
-                    DType::Int64 => buf.copy_from_slice(input.ints()),
+                    DType::Int64 => buf.copy_from_slice(input.ints().context("in Cast layer")?),
                     DType::Float => {
-                        for (o, &v) in buf.iter_mut().zip(input.floats().iter()) {
+                        for (o, &v) in buf
+                            .iter_mut()
+                            .zip(input.floats().context("in Cast layer")?.iter())
+                        {
                             *o = v as i64;
                         }
                     }
@@ -44,9 +47,12 @@ impl Layer for Cast {
             false => {
                 let buf = output.as_mut_f32(numel);
                 match input.dtype() {
-                    DType::Float => buf.copy_from_slice(input.floats()),
+                    DType::Float => buf.copy_from_slice(input.floats().context("in Cast layer")?),
                     DType::Int64 => {
-                        for (o, &v) in buf.iter_mut().zip(input.ints().iter()) {
+                        for (o, &v) in buf
+                            .iter_mut()
+                            .zip(input.ints().context("in Cast layer")?.iter())
+                        {
                             *o = v as f32;
                         }
                     }

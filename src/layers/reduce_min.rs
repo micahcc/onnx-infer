@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::DType;
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
-use crate::get_attr_ints;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::onnx::NodeProto;
 
 pub struct ReduceMinPrecomp {
     pub axes_mask: [bool; 8],
@@ -80,10 +80,9 @@ impl ReduceMin {
     pub fn new(
         inputs: Vec<String>,
         keepdims: bool,
-        node: &NodeProto,
+        axes_attr: Option<Vec<i64>>,
         initial_shape: &[usize],
     ) -> Self {
-        let axes_attr = get_attr_ints(node, "axes");
         let has_negative = axes_attr.as_ref().is_some_and(|a| a.iter().any(|&v| v < 0));
         let axes_attr_mask = if !has_negative {
             axes_attr.as_ref().map(|a| {
@@ -163,7 +162,7 @@ impl Layer for ReduceMin {
                 DType::Float => {
                     let buf = output.as_mut_f32(p.out_numel);
                     buf.fill(f32::INFINITY);
-                    let input_f = input.floats();
+                    let input_f = input.floats().context("in ReduceMin layer")?;
                     for (in_flat, &val) in input_f.iter().enumerate() {
                         let of = calc_out_flat(in_flat);
                         buf[of] = buf[of].min(val);
@@ -172,7 +171,7 @@ impl Layer for ReduceMin {
                 DType::Int64 => {
                     let buf = output.as_mut_i64(p.out_numel);
                     buf.fill(i64::MAX);
-                    let input_i = input.ints();
+                    let input_i = input.ints().context("in ReduceMin layer")?;
                     for (in_flat, &val) in input_i.iter().enumerate() {
                         let of = calc_out_flat(in_flat);
                         buf[of] = buf[of].min(val);
@@ -192,7 +191,7 @@ impl Layer for ReduceMin {
         let axes_mask = if self.inputs.len() > 1 && !self.inputs[1].is_empty() {
             let axes_t = get_tensor(values, &self.inputs[1])?;
             let mut mask = [false; 8];
-            for &a in axes_t.ints() {
+            for &a in axes_t.ints().context("in ReduceMin layer")? {
                 let idx = if a < 0 {
                     (rank_i64 + a) as usize
                 } else {
@@ -241,7 +240,7 @@ impl Layer for ReduceMin {
             DType::Float => {
                 let buf = output.as_mut_f32(p.out_numel);
                 buf.fill(f32::INFINITY);
-                let input_f = input.floats();
+                let input_f = input.floats().context("in ReduceMin layer")?;
                 for (in_flat, &val) in input_f.iter().enumerate() {
                     let of = calc_out_flat(in_flat);
                     buf[of] = buf[of].min(val);
@@ -250,7 +249,7 @@ impl Layer for ReduceMin {
             DType::Int64 => {
                 let buf = output.as_mut_i64(p.out_numel);
                 buf.fill(i64::MAX);
-                let input_i = input.ints();
+                let input_i = input.ints().context("in ReduceMin layer")?;
                 for (in_flat, &val) in input_i.iter().enumerate() {
                     let of = calc_out_flat(in_flat);
                     buf[of] = buf[of].min(val);

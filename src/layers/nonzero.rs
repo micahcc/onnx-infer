@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
@@ -22,18 +24,18 @@ impl Layer for NonZero {
         let rank = input.dims.len();
         let numel = input.numel();
 
-        let is_nonzero = |i: usize| -> bool {
+        let is_nonzero = |i: usize| -> anyhow::Result<bool> {
             match input.dtype() {
-                DType::Float => input.floats()[i] != 0.0,
-                DType::Int64 => input.ints()[i] != 0,
-                DType::String => unreachable!("strings not supported"),
+                DType::Float => Ok(input.floats().context("in NonZero layer")?[i] != 0.0),
+                DType::Int64 => Ok(input.ints().context("in NonZero layer")?[i] != 0),
+                DType::String => anyhow::bail!("strings not supported in NonZero"),
             }
         };
 
         // Pass 1: count non-zero elements
         let mut nnz = 0usize;
         for flat in 0..numel {
-            if is_nonzero(flat) {
+            if is_nonzero(flat).context("in NonZero layer")? {
                 nnz += 1;
             }
         }
@@ -45,7 +47,7 @@ impl Layer for NonZero {
         // Layout is [rank, nnz] — row r contains axis-r coords for all non-zero elements
         let mut col = 0;
         for flat in 0..numel {
-            if is_nonzero(flat) {
+            if is_nonzero(flat).context("in NonZero layer")? {
                 let mut remaining = flat;
                 for ax in (0..rank).rev() {
                     buf[ax * nnz + col] = (remaining % input.dims[ax]) as i64;

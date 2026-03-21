@@ -1,8 +1,8 @@
+use anyhow::Context;
 use prost::Message;
 use smallvec::SmallVec;
 
 use crate::DType;
-use crate::InferenceError;
 use crate::ONNX_DOUBLE;
 use crate::ONNX_INT8;
 use crate::ONNX_INT32;
@@ -63,56 +63,56 @@ impl Tensor {
         }
     }
 
-    pub fn floats(&self) -> &[f32] {
+    pub fn floats(&self) -> anyhow::Result<&[f32]> {
         match &self.data {
-            TensorData::F32(buf) => buf,
-            _ => panic!("expected float tensor, got {:?}", self.dtype()),
+            TensorData::F32(buf) => Ok(buf),
+            _ => anyhow::bail!("expected float tensor, got {:?}", self.dtype()),
         }
     }
 
-    pub fn ints(&self) -> &[i64] {
+    pub fn ints(&self) -> anyhow::Result<&[i64]> {
         match &self.data {
-            TensorData::I64(buf) => buf,
-            _ => panic!("expected int64 tensor, got {:?}", self.dtype()),
+            TensorData::I64(buf) => Ok(buf),
+            _ => anyhow::bail!("expected int64 tensor, got {:?}", self.dtype()),
         }
     }
 
-    pub fn strings(&self) -> &[Vec<u8>] {
+    pub fn strings(&self) -> anyhow::Result<&[Vec<u8>]> {
         match &self.data {
-            TensorData::Strings(buf) => buf,
-            _ => panic!("expected string tensor, got {:?}", self.dtype()),
+            TensorData::Strings(buf) => Ok(buf),
+            _ => anyhow::bail!("expected string tensor, got {:?}", self.dtype()),
         }
     }
 
-    pub fn into_f32_vec(self) -> Vec<f32> {
+    pub fn into_f32_vec(self) -> anyhow::Result<Vec<f32>> {
         match self.data {
-            TensorData::F32(buf) => buf,
-            TensorData::I64(buf) => buf.iter().map(|&v| v as f32).collect(),
-            TensorData::Strings(_) => panic!("string tensor not supported here"),
+            TensorData::F32(buf) => Ok(buf),
+            TensorData::I64(buf) => Ok(buf.iter().map(|&v| v as f32).collect()),
+            TensorData::Strings(_) => anyhow::bail!("string tensor not supported here"),
         }
     }
 
-    pub fn into_i64_vec(self) -> Vec<i64> {
+    pub fn into_i64_vec(self) -> anyhow::Result<Vec<i64>> {
         match self.data {
-            TensorData::F32(buf) => buf.iter().map(|&v| v as i64).collect(),
-            TensorData::I64(buf) => buf,
-            TensorData::Strings(_) => panic!("string tensor not supported here"),
+            TensorData::F32(buf) => Ok(buf.iter().map(|&v| v as i64).collect()),
+            TensorData::I64(buf) => Ok(buf),
+            TensorData::Strings(_) => anyhow::bail!("string tensor not supported here"),
         }
     }
 
-    pub fn f32_at(&self, idx: usize) -> f32 {
+    pub fn f32_at(&self, idx: usize) -> anyhow::Result<f32> {
         match &self.data {
-            TensorData::F32(buf) => buf[idx],
-            TensorData::I64(buf) => buf[idx] as f32,
-            TensorData::Strings(_) => panic!("string tensor not supported here"),
+            TensorData::F32(buf) => Ok(buf[idx]),
+            TensorData::I64(buf) => Ok(buf[idx] as f32),
+            TensorData::Strings(_) => anyhow::bail!("string tensor not supported here"),
         }
     }
 
-    pub fn i64_at(&self, idx: usize) -> i64 {
+    pub fn i64_at(&self, idx: usize) -> anyhow::Result<i64> {
         match &self.data {
-            TensorData::F32(buf) => buf[idx] as i64,
-            TensorData::I64(buf) => buf[idx],
-            TensorData::Strings(_) => panic!("string tensor not supported here"),
+            TensorData::F32(buf) => Ok(buf[idx] as i64),
+            TensorData::I64(buf) => Ok(buf[idx]),
+            TensorData::Strings(_) => anyhow::bail!("string tensor not supported here"),
         }
     }
 
@@ -131,7 +131,7 @@ impl Tensor {
     }
 
     pub fn from_proto_bytes(bytes: &[u8]) -> Result<Self> {
-        let proto = TensorProto::decode(bytes).map_err(InferenceError::ParseError)?;
+        let proto = TensorProto::decode(bytes).context("decoding tensor proto")?;
         Self::from_proto(&proto)
     }
 
@@ -187,7 +187,7 @@ impl Tensor {
         }
     }
 
-    pub fn copy_cast_f32(&mut self, src: &Tensor) {
+    pub fn copy_cast_f32(&mut self, src: &Tensor) -> anyhow::Result<()> {
         self.dims.clone_from(&src.dims);
         let len = src.numel();
         let buf = self.as_mut_f32(len);
@@ -200,8 +200,9 @@ impl Tensor {
                     buf[i] = s[i] as f32;
                 }
             }
-            TensorData::Strings(_) => panic!("string tensor not supported here"),
+            TensorData::Strings(_) => anyhow::bail!("string tensor not supported here"),
         }
+        Ok(())
     }
 }
 

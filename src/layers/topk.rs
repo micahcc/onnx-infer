@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
@@ -28,7 +30,7 @@ impl TopK {
     pub fn execute(&mut self, values: &mut HashMap<String, Tensor>) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
         let k_tensor = get_tensor(values, &self.inputs[1])?;
-        let k = k_tensor.i64_at(0) as usize;
+        let k = k_tensor.i64_at(0).context("in TopK layer: reading k")? as usize;
 
         let rank = input.dims.len() as i64;
         let axis = if self.axis < 0 {
@@ -46,7 +48,8 @@ impl TopK {
 
         // Copy input data to local buffer to release borrow on values
         self.in_buf.clear();
-        self.in_buf.extend_from_slice(input.floats());
+        self.in_buf
+            .extend_from_slice(input.floats().context("in TopK layer")?);
 
         let mut out_dims = [0usize; 8];
         out_dims[..in_rank].copy_from_slice(&in_dims[..in_rank]);

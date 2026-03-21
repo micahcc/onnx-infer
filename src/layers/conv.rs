@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
@@ -266,13 +268,13 @@ impl Conv {
             }
         };
 
-        let input_f = input.floats();
-        let weight_f = weight.floats();
+        let input_f = input.floats().context("in Conv layer")?;
+        let weight_f = weight.floats().context("in Conv layer")?;
         let buf = output.as_mut_f32(p.total);
         conv_naive(
             input_f,
             weight_f,
-            bias.map(|b| b.floats()),
+            bias.map(|b| b.floats()).transpose()?,
             buf,
             p.n,
             p.c_in,
@@ -336,8 +338,8 @@ impl Layer for Conv {
         let dw = self.dw;
         let spatial_out = p.h_out * p.w_out;
 
-        let input_f = input.floats();
-        let weight_f = weight.floats();
+        let input_f = input.floats().context("in Conv layer")?;
+        let weight_f = weight.floats().context("in Conv layer")?;
         let buf = output.as_mut_f32(p.total);
 
         // im2col + sgemm approach
@@ -379,7 +381,7 @@ impl Layer for Conv {
 
                 // Fill output with bias if present
                 if let Some(bias) = bias {
-                    let bias_f = bias.floats();
+                    let bias_f = bias.floats().context("in Conv layer")?;
                     for oc in 0..gemm_m {
                         let abs_oc = g * p.c_out_per_group + oc;
                         let row_start = out_group + oc * spatial_out;

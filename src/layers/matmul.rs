@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
@@ -102,8 +104,8 @@ impl MatMul {
             }
         };
 
-        let a_f = a.floats();
-        let b_f = b.floats();
+        let a_f = a.floats().context("in MatMul layer")?;
+        let b_f = b.floats().context("in MatMul layer")?;
         let total = p.batch_size * p.m * p.n;
         let buf = output.as_mut_f32(total);
 
@@ -150,8 +152,8 @@ impl Layer for MatMul {
             }
         };
 
-        let a_f = a.floats();
-        let b_f = b.floats();
+        let a_f = a.floats().context("in MatMul layer")?;
+        let b_f = b.floats().context("in MatMul layer")?;
         let total = p.batch_size * p.m * p.n;
         let buf = output.as_mut_f32(total);
         buf.fill(0.0);

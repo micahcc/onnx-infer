@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
@@ -22,26 +24,29 @@ pub struct DequantizeLinear {
 }
 
 impl DequantizeLinear {
-    pub fn compute_shapes(axis: i64, shape: &[usize]) -> DequantizePrecomp {
+    pub fn compute_shapes(axis: i64, shape: &[usize]) -> Option<DequantizePrecomp> {
         let rank = shape.len() as i64;
         let a = if axis < 0 {
             (rank + axis) as usize
         } else {
             axis as usize
         };
-        DequantizePrecomp {
+        if a >= shape.len() {
+            return None;
+        }
+        Some(DequantizePrecomp {
             axis: a,
             outer: shape[..a].iter().product(),
             ch: shape[a],
             inner: shape[a + 1..].iter().product(),
-        }
+        })
     }
 
     pub fn new(inputs: Vec<String>, axis: i64, initial_shape: &[usize]) -> Self {
         let (shape_cache, precomp) = if !initial_shape.is_empty() {
             (
                 Dims::from_slice(initial_shape),
-                Some(Self::compute_shapes(axis, initial_shape)),
+                Self::compute_shapes(axis, initial_shape),
             )
         } else {
             (Dims::new(), None)
@@ -68,9 +73,9 @@ impl Layer for DequantizeLinear {
         };
 
         let numel = input.numel();
-        let scale_f = scale.floats();
-        let input_f = input.floats();
-        let zp_f = zp.floats();
+        let scale_f = scale.floats().context("in DequantizeLinear layer")?;
+        let input_f = input.floats().context("in DequantizeLinear layer")?;
+        let zp_f = zp.floats().context("in DequantizeLinear layer")?;
 
         if scale_f.len() == 1 {
             let s = scale_f[0];
@@ -84,9 +89,15 @@ impl Layer for DequantizeLinear {
             let p = match &self.precomp {
                 Some(p) if self.shape_cache.as_slice() == input.dims.as_slice() => p,
                 _ => {
-                    self.precomp = Some(Self::compute_shapes(self.axis, &input.dims));
+                    self.precomp = Self::compute_shapes(self.axis, &input.dims);
                     self.shape_cache.clone_from(&input.dims);
-                    self.precomp.as_ref().expect("just set")
+                    self.precomp.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "DequantizeLinear: axis {} out of bounds for shape {:?}",
+                            self.axis,
+                            input.dims
+                        )
+                    })?
                 }
             };
 

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
@@ -33,7 +35,7 @@ impl Layer for ArgMax {
             self.axis as usize
         };
 
-        let data = input.floats();
+        let data = input.floats().context("in ArgMax layer")?;
         let axis_len = input.dims[axis];
 
         // Compute outer and inner strides
