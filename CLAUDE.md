@@ -14,16 +14,15 @@ src/
   onnx_ir.rs                - ONNX protobuf → internal IR (Graph, Node, Attrs)
   layers/
     mod.rs                  - Layer trait, binary_op helper, quantize/dequantize helpers
-    plan.rs                 - Builds execution plan from IR graph, constant-folding, XNNPACK compilation
+    plan.rs                 - Builds execution plan from IR graph, constant-folding
     op_type.rs              - OpType enum, dtype/shape inference
-    xnnpack_subgraph.rs     - XNNPACK subgraph compilation and execution (feature-gated)
     *.rs                    - One file per ONNX operator (conv.rs, matmul.rs, etc.)
   blas.rs                   - BLAS/Accelerate bindings for GEMM
   bin/                      - CLI tools (infer, dump_onnx, inspect_model, load_onnx)
 proto/                      - ONNX protobuf definitions
 fixtures/                   - Test models from onnx/models (Git LFS)
 benches/                    - Criterion benchmarks
-build.rs                    - Protobuf codegen, XNNPACK bindgen (when feature enabled)
+build.rs                    - Protobuf codegen
 ```
 
 ## Key Patterns
@@ -31,14 +30,12 @@ build.rs                    - Protobuf codegen, XNNPACK bindgen (when feature en
 - **Layer trait**: Each op implements `Layer::execute(&mut self, values, output)`
 - **Precomputation**: Layers cache shape-dependent data, recompute if input shape changes
 - **Constant folding**: `try_propagate_value()` in plan.rs folds Shape/Constant/Gather/etc. at build time; folded values go directly into initializers (skipping the plan)
-- **XNNPACK**: Feature-gated (`xnnpack`). Subgraphs of consecutive compatible ops compiled into XNNPACK runtime. Handles NCHW↔NHWC internally. Supports float and quantized (qint8) ops. Requires `XNNPACK` env var pointing to built XNNPACK directory.
 
 ## Build & Test
 
 ```bash
 cargo test --release              # Run all tests (needs Git LFS fixtures)
 cargo test test_mnist12_set_0     # Run a single test
-XNNPACK=/path/to/xnnpack cargo test --features xnnpack  # With XNNPACK
 ```
 
 ## Workflow Rules

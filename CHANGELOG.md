@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-03-20 — Remove XNNPACK support
+
+Removed the `xnnpack` feature and all associated code. XNNPACK subgraph
+compilation had unresolved numerical accuracy issues across detection models
+and layout-sensitive ops (Softmax axis, NHWC cascading errors). The feature
+may return in the future once these are addressed.
+
+Removed files: `xnnpack_subgraph.rs`, `xnnpack_ffi.rs`, `nix/xnnpack.nix`.
+Removed `bindgen` build dependency. Cleaned up CI, nix flake, and CLAUDE.md.
+
 ## 2026-03-20 — CI for XNNPACK and BLAS, XNNPACK bug fixes, runtime disable flag
 
 ### CI

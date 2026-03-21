@@ -30,7 +30,7 @@ impl InferenceEngine {
     /// Models with dynamic batch dimensions (common in ONNX exports) use
     /// symbolic dimension names like `"N"` or `"batch"`. This method resolves
     /// all such dimensions to the given `batch_size`, enabling full shape
-    /// inference at build time and unlocking XNNPACK acceleration for spatial
+    /// inference at build time, enabling full shape inference for spatial
     /// ops like Conv and MaxPool.
     ///
     /// ```no_run
@@ -247,10 +247,6 @@ impl InferenceEngine {
                 PlanNode::Scan(scan_layer) => {
                     scan_layer.execute(&mut self.values)?;
                 }
-                #[cfg(feature = "xnnpack")]
-                PlanNode::XnnpackSubgraph(subgraph) => {
-                    subgraph.execute(&mut self.values)?;
-                }
             }
         }
 
@@ -305,10 +301,6 @@ impl InferenceEngine {
                 }
                 PlanNode::Scan(scan_layer) => {
                     scan_layer.execute(&mut self.values)?;
-                }
-                #[cfg(feature = "xnnpack")]
-                PlanNode::XnnpackSubgraph(subgraph) => {
-                    subgraph.execute(&mut self.values)?;
                 }
             }
         }

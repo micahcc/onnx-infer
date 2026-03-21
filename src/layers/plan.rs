@@ -1,7 +1,3 @@
-// TODO: Convert model to NHWC layout at parse time instead of operating in NCHW.
-// This would eliminate the NCHW↔NHWC conversion logic in xnnpack_subgraph.rs,
-// improve CPU cache locality for spatial ops, and simplify the codebase.
-
 use std::collections::HashMap;
 
 use anyhow::Context;
@@ -104,8 +100,6 @@ pub enum PlanNode {
     If(Box<if_op::If>),
     TopK(Box<topk::TopK>),
     Scan(Box<scan::Scan>),
-    #[cfg(feature = "xnnpack")]
-    XnnpackSubgraph(Box<super::xnnpack_subgraph::XnnpackSubgraph>),
 }
 
 pub struct Plan {
@@ -196,8 +190,6 @@ impl Plan {
 
         let mut nodes = Vec::new();
         let mut cast_counter = 0usize;
-        #[cfg(feature = "xnnpack")]
-        let mut node_meta: Vec<Option<(OpType, Vec<String>, Node)>> = Vec::new();
         for node in &graph.nodes {
             let op = node.op_type;
 
@@ -224,8 +216,6 @@ impl Plan {
                                 output: cast_name.clone(),
                                 layer: Box::new(auto_cast::AutoCastF32::new(input_name.clone())),
                             });
-                            #[cfg(feature = "xnnpack")]
-                            node_meta.push(None);
                             type_map.insert(cast_name.clone(), DType::Float);
                             modified_inputs[i] = cast_name;
                         }
@@ -354,8 +344,6 @@ impl Plan {
                                 }
                             }
                             if folded {
-                                #[cfg(feature = "xnnpack")]
-                                node_meta.push(None);
                                 continue;
                             }
                         }
@@ -363,16 +351,7 @@ impl Plan {
                 }
             }
 
-            #[cfg(feature = "xnnpack")]
-            node_meta.push(Some((op, modified_inputs.clone(), node.clone())));
             nodes.push(build_node_with_opset(op, node, modified_inputs, &shape_map, graph.opset_version)?);
-        }
-
-        // XNNPACK subgraph compilation
-        #[cfg(feature = "xnnpack")]
-        {
-            nodes =
-                compile_xnnpack_subgraphs(nodes, node_meta, &shape_map, &type_map, &initializers, graph.opset_version)?;
         }
 
         // Pre-allocate tensors for all known shapes/types
@@ -394,8 +373,6 @@ impl Plan {
         // Log plan summary
         {
             let mut cpu_ops = 0usize;
-            #[cfg(feature = "xnnpack")]
-            let mut xnnpack_ops = 0usize;
             for node in &nodes {
                 match node {
                     PlanNode::Single { .. } => cpu_ops += 1,
@@ -404,27 +381,10 @@ impl Plan {
                     | PlanNode::If(_)
                     | PlanNode::TopK(_)
                     | PlanNode::Scan(_) => cpu_ops += 1,
-                    #[cfg(feature = "xnnpack")]
-                    PlanNode::XnnpackSubgraph(sg) => {
-                        xnnpack_ops += sg.fallback_nodes.len();
-                    }
                 }
             }
-            #[cfg(feature = "xnnpack")]
-            {
-                let total = cpu_ops + xnnpack_ops;
-                if total > 0 {
-                    let pct = (xnnpack_ops as f64 / total as f64 * 100.0) as u32;
-                    tracing::info!(
-                        "plan: {total} ops, {xnnpack_ops} XNNPACK ({pct}%), {cpu_ops} CPU"
-                    );
-                }
-            }
-            #[cfg(not(feature = "xnnpack"))]
-            {
-                let folded = graph.nodes.len().saturating_sub(cpu_ops);
-                tracing::info!("plan: {cpu_ops} ops (CPU), {folded} folded");
-            }
+            let folded = graph.nodes.len().saturating_sub(cpu_ops);
+            tracing::info!("plan: {cpu_ops} ops (CPU), {folded} folded");
         }
 
         Ok(Self {
@@ -1118,305 +1078,5 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
         PlanNode::If(if_layer) => if_layer.execute(values),
         PlanNode::TopK(topk_layer) => topk_layer.execute(values),
         PlanNode::Scan(scan_layer) => scan_layer.execute(values),
-        #[cfg(feature = "xnnpack")]
-        PlanNode::XnnpackSubgraph(_) => anyhow::bail!("XnnpackSubgraph cannot be executed via execute_node"),
     }
-}
-
-#[cfg(feature = "xnnpack")]
-fn compile_xnnpack_subgraphs(
-    mut nodes: Vec<PlanNode>,
-    node_meta: Vec<Option<(OpType, Vec<String>, Node)>>,
-    shape_map: &HashMap<String, Dims>,
-    type_map: &HashMap<String, DType>,
-    initializers: &HashMap<String, Tensor>,
-    opset_version: i64,
-) -> Result<Vec<PlanNode>> {
-    use super::xnnpack_subgraph::{CapturedOp, is_xnnpack_compatible};
-
-    if std::env::var("XNNPACK_DISABLE").is_ok() {
-        tracing::info!("XNNPACK disabled via XNNPACK_DISABLE env var");
-        return Ok(nodes);
-    }
-
-    assert_eq!(nodes.len(), node_meta.len());
-
-    let compatible: Vec<bool> = node_meta
-        .iter()
-        .map(|meta| {
-            let Some((op, inputs, node)) = meta else {
-                return false;
-            };
-            if !is_xnnpack_compatible(*op) {
-                return false;
-            }
-            for out in &node.outputs {
-                if !out.is_empty() {
-                    if let Some(&dt) = type_map.get(out) {
-                        if dt != DType::Float {
-                            return false;
-                        }
-                    }
-                }
-            }
-            for inp in inputs {
-                if !inp.is_empty() && !initializers.contains_key(inp) {
-                    if let Some(&dt) = type_map.get(inp) {
-                        if dt != DType::Float {
-                            return false;
-                        }
-                    }
-                }
-            }
-            let needs_4d = matches!(
-                op,
-                OpType::Conv | OpType::MaxPool | OpType::GlobalAveragePool | OpType::QLinearConv
-            );
-            if needs_4d {
-                let first_input = inputs.first().filter(|s| !s.is_empty());
-                if let Some(name) = first_input {
-                    if let Some(s) = shape_map.get(name) {
-                        if s.len() != 4 {
-                            return false;
-                        }
-                    }
-                } else {
-                    return false;
-                }
-            }
-            if *op == OpType::MaxPool {
-                let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
-                if auto_pad.is_empty() || auto_pad == "NOTSET" {
-                    // Explicit pads — XNNPACK requires symmetric
-                    let pads = node.attrs.get_ints("pads").unwrap_or_default();
-                    if pads.len() >= 4 && (pads[0] != pads[2] || pads[1] != pads[3]) {
-                        return false;
-                    }
-                }
-                // SAME_UPPER / SAME_LOWER are computed at subgraph compile time
-            }
-            if matches!(op, OpType::Conv | OpType::Gemm) {
-                if inputs.len() < 2 || !initializers.contains_key(&inputs[1]) {
-                    return false;
-                }
-            }
-            // QLinearConv: weights at [3], scales/zp at [1,2,4,5,6,7]
-            if *op == OpType::QLinearConv {
-                if inputs.len() < 8 || !initializers.contains_key(&inputs[3]) {
-                    return false;
-                }
-                for &idx in &[1, 2, 4, 5, 6, 7] {
-                    if !initializers.contains_key(&inputs[idx]) {
-                        return false;
-                    }
-                }
-            }
-            // QLinearMatMul: B at [3], scales/zp at [1,2,4,5,6,7]
-            if *op == OpType::QLinearMatMul {
-                if inputs.len() < 8 || !initializers.contains_key(&inputs[3]) {
-                    return false;
-                }
-                for &idx in &[1, 2, 4, 5, 6, 7] {
-                    if !initializers.contains_key(&inputs[idx]) {
-                        return false;
-                    }
-                }
-            }
-            // QLinearAdd: scales/zp at [1,2,4,5,6,7]
-            if *op == OpType::QLinearAdd {
-                if inputs.len() < 8 {
-                    return false;
-                }
-                for &idx in &[1, 2, 4, 5, 6, 7] {
-                    if !initializers.contains_key(&inputs[idx]) {
-                        return false;
-                    }
-                }
-            }
-            // QuantizeLinear/DequantizeLinear: scale at [1], zp at [2] (optional)
-            if matches!(op, OpType::QuantizeLinear | OpType::DequantizeLinear) {
-                if inputs.len() < 2 || !initializers.contains_key(&inputs[1]) {
-                    return false;
-                }
-                if inputs.len() > 2
-                    && !inputs[2].is_empty()
-                    && !initializers.contains_key(&inputs[2])
-                {
-                    return false;
-                }
-            }
-            if *op == OpType::MatMul && inputs.len() >= 2 && !initializers.contains_key(&inputs[1])
-            {
-                let a = inputs.first().and_then(|n| shape_map.get(n));
-                let b = inputs.get(1).and_then(|n| shape_map.get(n));
-                if a.is_none() || b.is_none() {
-                    return false;
-                }
-            }
-            if *op == OpType::BatchNormalization {
-                if inputs.len() < 5 {
-                    return false;
-                }
-                for i in 1..5 {
-                    if !initializers.contains_key(&inputs[i]) {
-                        return false;
-                    }
-                }
-            }
-            // XNNPACK xnn_define_softmax always operates on the last dimension.
-            // Reject Softmax when the ONNX axis is not the last dimension.
-            if *op == OpType::Softmax {
-                let default_axis = if opset_version >= 13 { -1 } else { 1 };
-                let axis = node.attrs.get_int("axis").unwrap_or(default_axis);
-                if let Some(s) = inputs.first().and_then(|n| shape_map.get(n)) {
-                    let ndim = s.len() as i64;
-                    let resolved = if axis < 0 { axis + ndim } else { axis };
-                    if resolved != ndim - 1 {
-                        return false;
-                    }
-                }
-            }
-            if *op == OpType::Concat {
-                for name in inputs.iter().chain(node.outputs.iter()) {
-                    if name.is_empty() {
-                        continue;
-                    }
-                    if let Some(s) = shape_map.get(name) {
-                        if s.len() != 4 {
-                            return false;
-                        }
-                    }
-                }
-            }
-            true
-        })
-        .collect();
-
-    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
-    let mut i = 0;
-    while i < compatible.len() {
-        if compatible[i] {
-            let start = i;
-            while i < compatible.len() && compatible[i] {
-                i += 1;
-            }
-            if i - start >= 2 {
-                runs.push(start..i);
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    if runs.is_empty() {
-        return Ok(nodes);
-    }
-
-    let shape_map_vec: HashMap<String, Vec<usize>> = shape_map
-        .iter()
-        .map(|(k, v)| (k.clone(), v.to_vec()))
-        .collect();
-
-    let all_node_inputs: Vec<std::collections::HashSet<&str>> = node_meta
-        .iter()
-        .map(|meta| {
-            if let Some((_, inputs, _)) = meta {
-                inputs.iter().map(|s| s.as_str()).collect()
-            } else {
-                std::collections::HashSet::new()
-            }
-        })
-        .collect();
-
-    for run in runs.into_iter().rev() {
-        let mut run_outputs: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for meta in &node_meta[run.clone()] {
-            if let Some((_, _, node)) = meta {
-                for out in &node.outputs {
-                    if !out.is_empty() {
-                        run_outputs.insert(out.as_str());
-                    }
-                }
-            }
-        }
-
-        let mut required_output_set: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        for i in 0..node_meta.len() {
-            if run.contains(&i) {
-                continue;
-            }
-            for name in &all_node_inputs[i] {
-                if run_outputs.contains(name) {
-                    required_output_set.insert(name.to_string());
-                }
-            }
-        }
-        if let Some(meta) = node_meta[run.end - 1].as_ref() {
-            for out in &meta.2.outputs {
-                if !out.is_empty() {
-                    required_output_set.insert(out.clone());
-                }
-            }
-        }
-        let required_outputs: Vec<String> = required_output_set.into_iter().collect();
-
-        let captured: Vec<CapturedOp> = node_meta[run.clone()]
-            .iter()
-            .map(|meta| {
-                let (op, inputs, node) = meta.as_ref().unwrap();
-                CapturedOp {
-                    op: *op,
-                    inputs: inputs.clone(),
-                    outputs: node.outputs.clone(),
-                    node: node.clone(),
-                }
-            })
-            .collect();
-
-        let op_names: Vec<&str> = captured
-            .iter()
-            .map(|c| match c.op {
-                OpType::Conv => "Conv",
-                OpType::Relu => "Relu",
-                OpType::Add => "Add",
-                OpType::MaxPool => "MaxPool",
-                OpType::GlobalAveragePool => "GlobalAvgPool",
-                OpType::Flatten => "Flatten",
-                OpType::Gemm => "Gemm",
-                OpType::Softmax => "Softmax",
-                OpType::BatchNormalization => "BatchNorm",
-                _ => "other",
-            })
-            .collect();
-        tracing::info!(
-            "XNNPACK: planning subgraph of {} ops: {:?}",
-            captured.len(),
-            op_names
-        );
-
-        let mut sub_initializers: HashMap<String, Tensor> = HashMap::new();
-        for cap in &captured {
-            for inp in &cap.inputs {
-                if !inp.is_empty() && initializers.contains_key(inp) {
-                    if let Some(t) = initializers.get(inp) {
-                        sub_initializers.insert(inp.clone(), t.clone());
-                    }
-                }
-            }
-        }
-
-        let mut subgraph = super::xnnpack_subgraph::XnnpackSubgraph::new(
-            captured,
-            required_outputs,
-            shape_map_vec.clone(),
-            sub_initializers,
-        );
-
-        let removed: Vec<_> = nodes.drain(run.clone()).collect();
-        subgraph.fallback_nodes = removed;
-        nodes.insert(run.start, PlanNode::XnnpackSubgraph(Box::new(subgraph)));
-    }
-
-    Ok(nodes)
 }

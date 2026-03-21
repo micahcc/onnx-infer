@@ -2,9 +2,7 @@
   lib,
   stdenv,
   rustPlatform,
-  libclang,
   flakeInputs,
-  xnnpack,
 }:
 let
   pname = "onnx-infer";
@@ -19,11 +17,6 @@ rustPlatform.buildRustPackage {
 
   cargoLock.lockFile = "${flakeInputs.${pname}}/Cargo.lock";
 
-  nativeBuildInputs = [ libclang ];
-
   cargoBuildFlags = [ "--package=${pname}" ];
   cargoTestFlags = [ "--package=${pname}" ];
-
-  XNNPACK = "${xnnpack}";
-  LIBCLANG_PATH = "${libclang.lib}/lib";
 }

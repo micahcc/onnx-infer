@@ -86,8 +86,6 @@ fn run_fixture(base: &Path, model_file: &str, test_set: usize) {
 
     let out_data = output.floats().expect("output should be float tensor");
     let exp_data = expected.floats().expect("expected output should be float tensor");
-    // XNNPACK uses optimized kernels that may accumulate differently,
-    // so allow slightly higher tolerance when xnnpack feature is enabled.
     let mut max_err: f32 = 0.0;
     let mut max_err_idx = 0;
     for (i, (got, want)) in out_data.iter().zip(exp_data.iter()).enumerate() {
@@ -361,13 +359,13 @@ fn test_mobilenetv2_12_int8_set_0() {
 #[test]
 fn test_mobilenetv2_12_qdq_set_0() {
     let _t = setup_tracing("mobilenetv2_12_qdq_set_0");
-    // QDQ models use float Conv which has FP ordering sensitivity;
-    // XNNPACK NHWC layout increases divergence slightly vs NCHW CPU path.
+    // QDQ models use float Conv (BLAS) which has FP ordering sensitivity;
+    // slightly relaxed tolerance vs QLinearConv's integer GEMM path.
     run_quantized_fixture_with_tol(
         &fixture("mobilenetv2-12-qdq"),
         "mobilenetv2-12-qdq.onnx",
         0,
-        0.20,
+        0.15,
     );
 }
 
