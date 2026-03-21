@@ -967,7 +967,6 @@ fn test_zfnet512_12_set_0() {
 // --- ResNet101-DUC models ---
 
 #[test]
-#[ignore] // numerical divergence in segmentation output — needs investigation
 fn test_resnet101_duc_12_set_0() {
     let _t = setup_tracing("resnet101_duc_12_set_0");
     run_fixture_argmax(&fixture("ResNet101-DUC-12"), "ResNet101-DUC-12.onnx", 0);
@@ -982,7 +981,6 @@ fn test_fcn_resnet50_12_set_0() {
 }
 
 #[test]
-#[ignore] // deep segmentation model with accumulated FP divergence — needs investigation
 fn test_fcn_resnet101_11_set_0() {
     let _t = setup_tracing("fcn_resnet101_11_set_0");
     run_multi_io_fixture(&fixture("fcn-resnet101-11"), "model.onnx", 0);

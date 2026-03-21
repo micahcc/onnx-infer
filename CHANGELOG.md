@@ -18,9 +18,14 @@
 - **Graph-opt updates**: `insert_layout_transposes` now creates `LayoutTranspose`
   nodes. `requires_nhwc` limited to XNNPACK-compatible spatial ops only (Conv,
   MaxPool, AveragePool, GlobalAveragePool, Resize).
+- **Graph-opt bug fix**: `eliminate_inverse_transposes`, `push_transposes_through_unary`,
+  and `push_transposes_through_binary` now only operate on `LayoutTranspose` nodes,
+  not regular `Transpose` nodes. Previously, original model transposes (e.g., TF→ONNX
+  NHWC→NCHW conversions) could be cancelled with graph-opt LayoutTransposes, leaving
+  spatial ops with incorrect input layout. EfficientNet-lite4 was the main affected model.
 - **Tests**: XNNPACK tests pass for MNIST, MobileNetV2-7, MobileNetV2-12,
-  ResNet18, SqueezeNet, GoogleNet, ShuffleNetV2. EfficientNet-lite4 ignored
-  (XNNPACK reshape fails for depthwise convolutions).
+  ResNet18, SqueezeNet, GoogleNet, ShuffleNetV2, EfficientNet-lite4 (94 total,
+  3 pre-existing ignores).
 
 ## 2026-03-21 — Add graph-level layout optimization pass
 
