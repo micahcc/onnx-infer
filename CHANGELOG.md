@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-03-20 — Use matrixmultiply crate for default GEMM
+
+Replaced the naive triple-loop fallback sgemm with the `matrixmultiply` crate,
+which provides optimized SIMD kernels. This is the new default when neither
+`accelerate` nor `blas` features are enabled.
+
+Kernel speedups: matmul 4-9x faster, conv 2.5-3x faster.
+Inference speedups: MNIST 1.4x, MobileNetV2 1.3-1.5x, TinyYOLOv2 3.5x, YOLOv4 2.4x.
+
 ## 2026-03-20 — Remove XNNPACK support
 
 Removed the `xnnpack` feature and all associated code. XNNPACK subgraph
