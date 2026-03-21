@@ -372,7 +372,7 @@ impl Plan {
         #[cfg(feature = "xnnpack")]
         {
             nodes =
-                compile_xnnpack_subgraphs(nodes, node_meta, &shape_map, &type_map, &initializers)?;
+                compile_xnnpack_subgraphs(nodes, node_meta, &shape_map, &type_map, &initializers, graph.opset_version)?;
         }
 
         // Pre-allocate tensors for all known shapes/types
@@ -1130,6 +1130,7 @@ fn compile_xnnpack_subgraphs(
     shape_map: &HashMap<String, Dims>,
     type_map: &HashMap<String, DType>,
     initializers: &HashMap<String, Tensor>,
+    opset_version: i64,
 ) -> Result<Vec<PlanNode>> {
     use super::xnnpack_subgraph::{CapturedOp, is_xnnpack_compatible};
 
@@ -1258,6 +1259,19 @@ fn compile_xnnpack_subgraphs(
                 }
                 for i in 1..5 {
                     if !initializers.contains_key(&inputs[i]) {
+                        return false;
+                    }
+                }
+            }
+            // XNNPACK xnn_define_softmax always operates on the last dimension.
+            // Reject Softmax when the ONNX axis is not the last dimension.
+            if *op == OpType::Softmax {
+                let default_axis = if opset_version >= 13 { -1 } else { 1 };
+                let axis = node.attrs.get_int("axis").unwrap_or(default_axis);
+                if let Some(s) = inputs.first().and_then(|n| shape_map.get(n)) {
+                    let ndim = s.len() as i64;
+                    let resolved = if axis < 0 { axis + ndim } else { axis };
+                    if resolved != ndim - 1 {
                         return false;
                     }
                 }

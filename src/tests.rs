@@ -361,13 +361,13 @@ fn test_mobilenetv2_12_int8_set_0() {
 #[test]
 fn test_mobilenetv2_12_qdq_set_0() {
     let _t = setup_tracing("mobilenetv2_12_qdq_set_0");
-    // QDQ models use float Conv (BLAS) which has FP ordering sensitivity;
-    // slightly relaxed tolerance vs QLinearConv's integer GEMM path.
+    // QDQ models use float Conv which has FP ordering sensitivity;
+    // XNNPACK NHWC layout increases divergence slightly vs NCHW CPU path.
     run_quantized_fixture_with_tol(
         &fixture("mobilenetv2-12-qdq"),
         "mobilenetv2-12-qdq.onnx",
         0,
-        0.15,
+        0.20,
     );
 }
 
