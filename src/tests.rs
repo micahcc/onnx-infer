@@ -304,6 +304,325 @@ fn run_multi_io_fixture_with_tol(base: &Path, model_file: &str, test_set: usize,
     }
 }
 
+// --- Graph-optimized fixture runners ---
+
+fn run_fixture_graphopt(base: &Path, model_file: &str, test_set: usize) {
+    let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
+    let mut engine =
+        InferenceEngine::with_graph_opt(&model_bytes).expect("load model with graph opt");
+
+    let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
+    let graph = model.graph.as_ref().expect("model has no graph");
+    let output_name = graph.output[0].name.clone();
+
+    let test_dir = base.join(format!("test_data_set_{test_set}"));
+    let output_bytes = fs::read(test_dir.join("output_0.pb")).expect("read output");
+    let expected = Tensor::from_proto_bytes(&output_bytes).expect("parse output");
+
+    engine.run(inputs).expect("inference with graph opt");
+    let output = &engine.outputs[&output_name];
+
+    assert_eq!(output.dims, expected.dims, "shape mismatch after graph opt");
+
+    let out_data = output.floats().expect("output should be float tensor");
+    let exp_data = expected
+        .floats()
+        .expect("expected output should be float tensor");
+    let mut max_err: f32 = 0.0;
+    let mut max_err_idx = 0;
+    for (i, (got, want)) in out_data.iter().zip(exp_data.iter()).enumerate() {
+        let err = (got - want).abs();
+        if err > max_err {
+            max_err = err;
+            max_err_idx = i;
+        }
+    }
+    if max_err > 1e-3 {
+        eprintln!(
+            "[graphopt] max absolute error: {max_err} at index {max_err_idx} (got={}, want={}), output len={}",
+            out_data[max_err_idx],
+            exp_data[max_err_idx],
+            out_data.len()
+        );
+    }
+    for (got, want) in out_data.iter().zip(exp_data.iter()) {
+        assert_relative_eq!(got, want, max_relative = 1e-3, epsilon = 1e-5);
+    }
+}
+
+fn run_multi_io_fixture_graphopt(base: &Path, model_file: &str, test_set: usize) {
+    run_multi_io_fixture_graphopt_with_tol(base, model_file, test_set, 5e-3);
+}
+
+fn run_multi_io_fixture_graphopt_with_tol(
+    base: &Path,
+    model_file: &str,
+    test_set: usize,
+    tol: f32,
+) {
+    let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
+    let mut engine =
+        InferenceEngine::with_graph_opt(&model_bytes).expect("load model with graph opt");
+
+    let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
+    let graph = model.graph.as_ref().expect("model has no graph");
+
+    let test_dir = base.join(format!("test_data_set_{test_set}"));
+    engine.run(inputs).expect("inference with graph opt");
+
+    for i in 0..graph.output.len() {
+        let pb_path = test_dir.join(format!("output_{i}.pb"));
+        if pb_path.exists() {
+            let expected = Tensor::from_proto_bytes(&fs::read(&pb_path).expect("read output"))
+                .expect("parse output");
+            let name = &graph.output[i].name;
+            let output = engine
+                .outputs
+                .get(name)
+                .unwrap_or_else(|| panic!("missing output {name}"));
+            assert_eq!(
+                output.dims, expected.dims,
+                "[graphopt] shape mismatch for {name}"
+            );
+
+            match (output.dtype(), expected.dtype()) {
+                (DType::Float, DType::Float) => {
+                    let got = output.floats().expect("output should be float tensor");
+                    let want = expected
+                        .floats()
+                        .expect("expected output should be float tensor");
+                    for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                        assert!(
+                            (g - w).abs() < tol || (g - w).abs() / w.abs().max(1e-6) < tol,
+                            "[graphopt] output {name}[{j}]: got {g}, want {w}"
+                        );
+                    }
+                }
+                (DType::Int64, DType::Int64) => {
+                    let got = output.ints().expect("output should be int64 tensor");
+                    let want = expected
+                        .ints()
+                        .expect("expected output should be int64 tensor");
+                    for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                        assert_eq!(g, w, "[graphopt] output {name}[{j}]: got {g}, want {w}");
+                    }
+                }
+                (DType::Float, DType::Int64) => {
+                    let got = output.floats().expect("output should be float tensor");
+                    let want = expected
+                        .ints()
+                        .expect("expected output should be int64 tensor");
+                    for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                        assert!(
+                            (*g as i64 - w).abs() <= 1,
+                            "[graphopt] output {name}[{j}]: got {g}, want {w}"
+                        );
+                    }
+                }
+                (DType::Int64, DType::Float) => {
+                    let got = output.ints().expect("output should be int64 tensor");
+                    let want = expected
+                        .floats()
+                        .expect("expected output should be float tensor");
+                    for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                        assert!(
+                            (*g as f32 - w).abs() < tol,
+                            "[graphopt] output {name}[{j}]: got {g}, want {w}"
+                        );
+                    }
+                }
+                _ => panic!("[graphopt] unexpected output dtype for {name}"),
+            }
+        }
+    }
+}
+
+fn run_quantized_fixture_graphopt(base: &Path, model_file: &str, test_set: usize) {
+    let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
+    let mut engine =
+        InferenceEngine::with_graph_opt(&model_bytes).expect("load model with graph opt");
+
+    let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
+    let graph = model.graph.as_ref().expect("model has no graph");
+    let output_name = graph.output[0].name.clone();
+
+    let test_dir = base.join(format!("test_data_set_{test_set}"));
+    let output_bytes = fs::read(test_dir.join("output_0.pb")).expect("read output");
+    let expected = Tensor::from_proto_bytes(&output_bytes).expect("parse output");
+
+    engine.run(inputs).expect("inference with graph opt");
+    let output = &engine.outputs[&output_name];
+
+    assert_eq!(output.dims, expected.dims, "[graphopt] shape mismatch");
+
+    fn softmax(logits: &[f32]) -> Vec<f32> {
+        let max = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let exps: Vec<f32> = logits.iter().map(|&v| (v - max).exp()).collect();
+        let sum: f32 = exps.iter().sum();
+        exps.iter().map(|&e| e / sum).collect()
+    }
+
+    let got_probs = softmax(output.floats().expect("output should be float tensor"));
+    let want_probs = softmax(
+        expected
+            .floats()
+            .expect("expected output should be float tensor"),
+    );
+
+    let expected_class = want_probs
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).expect("NaN in expected output"))
+        .expect("empty expected output")
+        .0;
+    let mut indexed: Vec<(usize, &f32)> = got_probs.iter().enumerate().collect();
+    indexed.sort_by(|a, b| b.1.partial_cmp(a.1).expect("NaN in output"));
+    let top5: Vec<usize> = indexed.iter().take(5).map(|&(i, _)| i).collect();
+    assert!(
+        top5.contains(&expected_class),
+        "[graphopt] expected class {expected_class} not in top-5: {top5:?}"
+    );
+}
+
+// --- Graph-opt tests for all model families ---
+
+#[test]
+fn test_graphopt_mnist12_set_0() {
+    run_fixture_graphopt(&fixture("mnist-12"), "mnist-12.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_mnist12_int8_set_0() {
+    run_quantized_fixture_graphopt(&fixture("mnist-12-int8"), "mnist-12-int8.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_mobilenetv2_7_set_0() {
+    run_fixture_graphopt(&fixture("mobilenetv2-7"), "mobilenetv2-7.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_mobilenetv2_12_set_0() {
+    run_fixture_graphopt(&fixture("mobilenetv2-12"), "mobilenetv2-12.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_mobilenetv2_12_int8_set_0() {
+    run_quantized_fixture_graphopt(
+        &fixture("mobilenetv2-12-int8"),
+        "mobilenetv2-12-int8.onnx",
+        0,
+    );
+}
+
+#[test]
+fn test_graphopt_tinyyolov2_8_set_0() {
+    run_fixture_graphopt(&fixture("tinyyolov2-8"), "model.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_resnet18_v1_7_set_0() {
+    run_fixture_graphopt(&fixture("resnet18-v1-7"), "resnet18-v1-7.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_resnet50_v1_12_set_0() {
+    run_fixture_graphopt(&fixture("resnet50-v1-12"), "resnet50-v1-12.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_densenet_12_set_0() {
+    run_fixture_graphopt(&fixture("densenet-12"), "densenet-12.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_googlenet_12_set_0() {
+    run_fixture_graphopt(&fixture("googlenet-12"), "googlenet-12.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_inception_v1_12_set_0() {
+    run_fixture_graphopt(&fixture("inception-v1-12"), "inception-v1-12.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_squeezenet11_7_set_0() {
+    run_fixture_graphopt(&fixture("squeezenet1.1-7"), "squeezenet1.1.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_shufflenet_v2_12_set_0() {
+    run_fixture_graphopt(&fixture("shufflenet-v2-12"), "shufflenet-v2-12.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_vgg16_bn_7_set_0() {
+    run_fixture_graphopt(&fixture("vgg16-bn-7"), "vgg16-bn.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_efficientnet_lite4_11_set_0() {
+    run_fixture_graphopt(
+        &fixture("efficientnet-lite4-11"),
+        "efficientnet-lite4.onnx",
+        0,
+    );
+}
+
+#[test]
+fn test_graphopt_arcfaceresnet100_8_set_0() {
+    run_fixture_graphopt(&fixture("arcfaceresnet100-8"), "resnet100.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_emotion_ferplus_8_set_0() {
+    run_fixture_graphopt(&fixture("emotion-ferplus-8"), "model.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_faster_rcnn_12_set_0() {
+    run_multi_io_fixture_graphopt(&fixture("faster-rcnn-12"), "FasterRCNN-12.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_ssd_mobilenet_v1_12_set_0() {
+    run_multi_io_fixture_graphopt(
+        &fixture("ssd-mobilenet-v1-12"),
+        "ssd_mobilenet_v1_12.onnx",
+        0,
+    );
+}
+
+#[test]
+fn test_graphopt_yolov4_11_set_0() {
+    run_multi_io_fixture_graphopt(&fixture("yolov4-11"), "yolov4.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_tinyyolov3_11_set_0() {
+    run_multi_io_fixture_graphopt(&fixture("tiny-yolov3-11"), "yolov3-tiny.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_yolov3_12_set_0() {
+    run_multi_io_fixture_graphopt(&fixture("yolov3-12"), "yolov3-12.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_version_rfb_320_set_0() {
+    run_multi_io_fixture_graphopt(&fixture("version-RFB-320"), "version-RFB-320.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_retinanet_9_set_0() {
+    run_multi_io_fixture_graphopt(&fixture("retinanet-9"), "retinanet-9.onnx", 0);
+}
+
+#[test]
+fn test_graphopt_bidaf_9_set_0() {
+    run_multi_io_fixture_graphopt(&fixture("bidaf-9"), "bidaf.onnx", 0);
+}
+
 // --- MNIST models ---
 
 #[test]

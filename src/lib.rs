@@ -66,6 +66,7 @@ pub mod onnx {
 
 pub mod blas;
 pub mod dtype;
+pub mod graph_opt;
 pub mod inference_engine;
 pub mod inference_error;
 pub mod layers;
