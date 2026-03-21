@@ -1,3 +1,7 @@
+// TODO: Convert model to NHWC layout at parse time instead of operating in NCHW.
+// This would eliminate the NCHW↔NHWC conversion logic in xnnpack_subgraph.rs,
+// improve CPU cache locality for spatial ops, and simplify the codebase.
+
 use std::collections::HashMap;
 
 use anyhow::Context;
@@ -1128,6 +1132,11 @@ fn compile_xnnpack_subgraphs(
     initializers: &HashMap<String, Tensor>,
 ) -> Result<Vec<PlanNode>> {
     use super::xnnpack_subgraph::{CapturedOp, is_xnnpack_compatible};
+
+    if std::env::var("XNNPACK_DISABLE").is_ok() {
+        tracing::info!("XNNPACK disabled via XNNPACK_DISABLE env var");
+        return Ok(nodes);
+    }
 
     assert_eq!(nodes.len(), node_meta.len());
 

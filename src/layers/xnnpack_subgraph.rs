@@ -31,7 +31,7 @@ fn scalar_f32(initializers: &HashMap<String, Tensor>, name: &str) -> Option<f32>
 
 /// Extract a f32 vector from an initializer tensor.
 fn vec_f32(initializers: &HashMap<String, Tensor>, name: &str) -> Option<Vec<f32>> {
-    initializers.get(name).map(|t| t.floats().ok()?.to_vec())
+    initializers.get(name).and_then(|t| t.floats().ok().map(|f| f.to_vec()))
 }
 
 /// 2D padding values (top, left, bottom, right).
@@ -1237,11 +1237,9 @@ impl SubgraphBuilder {
 
         let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
 
-        let flags = if trans_b {
-            XNN_FLAG_TRANSPOSE_WEIGHTS
-        } else {
-            0
-        };
+        // ONNX transB=1: weight is [O,I] — matches XNNPACK default [output_channels, input_channels]
+        // ONNX transB=0: weight is [I,O] — needs XNN_FLAG_TRANSPOSE_WEIGHTS
+        let flags = if trans_b { 0 } else { XNN_FLAG_TRANSPOSE_WEIGHTS };
         let status = unsafe {
             xnn_define_fully_connected(
                 self.subgraph,
@@ -1528,7 +1526,7 @@ impl SubgraphBuilder {
         // For now, compute offsets as zeros (common case: slicing from start).
         // The output shape already encodes the sizes.
         let ndim = in_shape.len();
-        let mut offsets = vec![0usize; ndim];
+        let offsets = vec![0usize; ndim];
 
         // Try to extract starts from the node's inputs if available in initializers
         // For the XNNPACK path, we only handle the case where output shape is known.
@@ -1935,7 +1933,7 @@ impl SubgraphBuilder {
                 &filter_shape,
                 channel_dim,
                 filter_bytes,
-                w_scales,
+                w_scales.clone(),
             )?
         } else {
             let w_zp_i8 = w_zp_raw[0].round() as i32 - 128;

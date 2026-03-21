@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-03-20 — CI for XNNPACK and BLAS, XNNPACK bug fixes, runtime disable flag
+
+### CI
+- Added separate CI jobs for no-features, BLAS (OpenBLAS), and XNNPACK
+- All test jobs fetch Git LFS fixtures
+- XNNPACK job uses `nix develop` to get pre-built XNNPACK
+- Removed `--all-features` from clippy (was broken without native libs)
+
+### XNNPACK bug fixes
+- Fixed Gemm `XNN_FLAG_TRANSPOSE_WEIGHTS` logic (was inverted): ONNX `transB=1`
+  means weight is `[O,I]` matching XNNPACK default, `transB=0` means `[I,O]`
+  needing the transpose flag. This fixed all ResNet models producing all-zero
+  output (48 XNNPACK tests pass, up from 46)
+- Fixed compile errors: `vec_f32` closure return type, unused `mut`,
+  moved `w_scales` value in QLinearConv
+
+### Runtime flag
+- `XNNPACK_DISABLE=1` env var disables XNNPACK acceleration at runtime
+  (falls back to CPU for all ops), useful for testing and debugging
+
 ## 2026-03-20 — 41 new vision model fixtures, 6 new operators, Softmax opset fix
 
 Added 41 vision models from ONNX Model Zoo (classification, object detection,
