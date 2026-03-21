@@ -176,8 +176,8 @@ unsafe fn i16_gemm_neon(
         }
 
         // Remaining columns: scalar
-        for pk in 0..k {
-            let a_val = a_row[pk] as i32;
+        for (pk, &a_val) in a_row.iter().enumerate().take(k) {
+            let a_val = a_val as i32;
             let b_base = pk * ldb;
             for jj in j..n {
                 c_row[jj] += a_val * b[b_base + jj] as i32;

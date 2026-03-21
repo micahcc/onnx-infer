@@ -38,6 +38,9 @@ harness = false
 name = "kernels"
 harness = false
 
+[lints.clippy]
+collapsible_if = "allow"
+
 [build-dependencies]
 prost = "0"
 prost-build = "0"

@@ -57,7 +57,7 @@
 //! println!("shapes: {:?}", engine.shape_map());
 //! ```
 
-#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments, clippy::collapsible_if)]
 
 pub mod onnx {
     #![allow(clippy::doc_overindented_list_items)]

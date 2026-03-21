@@ -408,12 +408,8 @@ fn try_propagate_value(
 ) -> Option<Tensor> {
     if op == OpType::Shape {
         let name = input_names.first().filter(|s| !s.is_empty())?;
-        let shape = shape_map.get(name);
-        if shape.is_none() {
-            return None;
-        }
-        let shape = shape.unwrap();
-        if shape.iter().any(|&d| d == 0) {
+        let shape = shape_map.get(name)?;
+        if shape.contains(&0) {
             return None;
         }
         let dims: Vec<i64> = shape.iter().map(|&d| d as i64).collect();

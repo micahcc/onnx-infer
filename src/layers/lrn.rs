@@ -43,7 +43,7 @@ impl Layer for Lrn {
 
         let half_size = (self.size - 1) / 2;
         // ceil((size-1)/2) — for even size this differs from floor
-        let half_size_ceil = (self.size - 1 + 1) / 2; // == size/2
+        let half_size_ceil = (self.size - 1).div_ceil(2);
 
         for batch in 0..n {
             for ch in 0..c {

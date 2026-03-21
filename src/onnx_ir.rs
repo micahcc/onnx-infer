@@ -228,10 +228,10 @@ fn convert_attr(attr: &crate::onnx::AttributeProto) -> Result<(String, Attr)> {
         8 => Attr::Strings(attr.strings.clone()),
         _ => {
             // type 0 (UNDEFINED) or unknown: detect from populated fields
-            if attr.t.is_some() {
-                Attr::Tensor(Tensor::from_proto(attr.t.as_ref().unwrap())?)
-            } else if attr.g.is_some() {
-                Attr::Graph(Box::new(convert_graph(attr.g.as_ref().unwrap())?))
+            if let Some(t) = &attr.t {
+                Attr::Tensor(Tensor::from_proto(t)?)
+            } else if let Some(g) = &attr.g {
+                Attr::Graph(Box::new(convert_graph(g)?))
             } else if !attr.ints.is_empty() {
                 Attr::Ints(attr.ints.clone())
             } else if !attr.floats.is_empty() {

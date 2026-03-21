@@ -157,7 +157,7 @@ impl InferenceEngine {
                 inputs.iter().any(|(name, tensor)| {
                     self.input_sizes
                         .get(name)
-                        .map_or(true, |s| s.as_slice() != tensor.dims.as_slice())
+                        .is_none_or(|s| s.as_slice() != tensor.dims.as_slice())
                 })
             }
         };
