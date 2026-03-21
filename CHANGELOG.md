@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-03-21 — Re-add XNNPACK support with Layout tracking
+
+- **Layout enum**: New `Layout` enum (NCHW, NHWC, Unknown) on `Tensor` and
+  `ShapeLayout`. Every tensor carries its data layout through the pipeline.
+- **LayoutTranspose op**: New `OpType::LayoutTranspose` variant for graph-opt-
+  inserted transposes. Unlike regular Transpose, these explicitly change the
+  semantic layout (NCHW↔NHWC). Original model transposes remain as `Transpose`
+  and degrade layout to `Unknown`.
+- **Layout-aware shape inference**: `op_type.rs` Conv, MaxPool, AveragePool, and
+  GlobalAveragePool now check input layout and compute output shapes accordingly
+  (NCHW or NHWC conventions). Eliminates the old NHWC shape propagation workaround.
+- **XNNPACK subgraph compilation**: Groups consecutive XNNPACK-compatible ops into
+  subgraphs compiled to `xnn_runtime_t`. Fixed node_meta/plan alignment bug where
+  constant-folded nodes caused index mismatches. Fixed required_outputs to include
+  graph outputs (not just shape_map entries).
+- **Graph-opt updates**: `insert_layout_transposes` now creates `LayoutTranspose`
+  nodes. `requires_nhwc` limited to XNNPACK-compatible spatial ops only (Conv,
+  MaxPool, AveragePool, GlobalAveragePool, Resize).
+- **Tests**: XNNPACK tests pass for MNIST, MobileNetV2-7, MobileNetV2-12,
+  ResNet18, SqueezeNet, GoogleNet, ShuffleNetV2. EfficientNet-lite4 ignored
+  (XNNPACK reshape fails for depthwise convolutions).
+
 ## 2026-03-21 — Add graph-level layout optimization pass
 
 New `graph_opt` module that transforms the IR graph before plan building:

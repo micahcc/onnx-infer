@@ -495,6 +495,7 @@ impl InferenceEngine {
             .filter_map(|name| {
                 shape_map
                     .and_then(|sm| sm.get(name))
+                    .map(|sl| &sl.dims)
                     .or_else(|| self.input_sizes.get(name))
                     .map(|dims| (name.clone(), dims.clone()))
             })
@@ -508,7 +509,12 @@ impl InferenceEngine {
     pub fn shape_map(&self) -> HashMap<String, Dims> {
         self.plan
             .as_ref()
-            .map(|p| p.shape_map.clone())
+            .map(|p| {
+                p.shape_map
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.dims.clone()))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }

@@ -1152,7 +1152,7 @@ fn test_xnnpack_shufflenet_v2_12_set_0() {
 fn test_xnnpack_efficientnet_lite4_11_set_0() {
     run_fixture_xnnpack(
         &fixture("efficientnet-lite4-11"),
-        "efficientnet-lite4-11.onnx",
+        "efficientnet-lite4.onnx",
         0,
     );
 }

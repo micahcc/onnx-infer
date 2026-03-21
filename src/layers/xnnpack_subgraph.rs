@@ -124,6 +124,7 @@ pub fn is_xnnpack_compatible(op: OpType) -> bool {
             | OpType::Reshape
             | OpType::Concat
             | OpType::Transpose
+            | OpType::LayoutTranspose
             | OpType::Identity
             | OpType::Unsqueeze
             | OpType::Squeeze
@@ -311,7 +312,7 @@ impl SubgraphBuilder {
             OpType::Flatten => self.add_flatten(cap, shape_map),
             OpType::Reshape => self.add_reshape(cap, shape_map),
             OpType::Concat => self.add_concat(cap, shape_map),
-            OpType::Transpose => self.add_transpose(cap, shape_map),
+            OpType::Transpose | OpType::LayoutTranspose => self.add_transpose(cap, shape_map),
             OpType::Identity => self.add_identity(cap, shape_map),
             OpType::Unsqueeze => self.add_static_reshape(cap, shape_map),
             OpType::Squeeze => self.add_static_reshape(cap, shape_map),
@@ -366,7 +367,7 @@ impl SubgraphBuilder {
         let is_depthwise = group > 1 && c_in_per_group == 1;
         let c_out_per_group = c_out / group;
 
-        // Input is NHWC: [N, H, W, C]
+        // Input is NHWC: [N, H, W, C] (graph_opt inserted transposes)
         let in_shape = shape_map.get(input_name).cloned().unwrap_or_default();
         let (h_in, w_in) = if in_shape.len() == 4 {
             (in_shape[1], in_shape[2])
@@ -376,7 +377,7 @@ impl SubgraphBuilder {
 
         let pad = compute_padding(&auto_pad, h_in, w_in, kh, kw, &stride, &dilation, &pads_attr);
 
-        // Input value (already NHWC)
+        // Input value (already NHWC from graph_opt Transpose)
         let input_id = self.get_or_define_value(input_name, shape_map)?;
 
         // Transpose weights OIHW → OHWI (or depthwise OIHW → HWGo) and define as static
@@ -490,7 +491,7 @@ impl SubgraphBuilder {
         };
         let dilation = Dilation2D { h: 1, w: 1 };
 
-        // Input is NHWC: [N, H, W, C]
+        // Input is NHWC: [N, H, W, C] (graph_opt inserted transposes)
         let in_shape = shape_map.get(&cap.inputs[0]).cloned().unwrap_or_default();
         let (h_in, w_in) = if in_shape.len() == 4 {
             (in_shape[1], in_shape[2])
@@ -515,7 +516,7 @@ impl SubgraphBuilder {
                 stride.h,
                 stride.w,
                 1,
-                1, // dilation
+                1,
                 f32::NEG_INFINITY,
                 f32::INFINITY,
                 input_id,
@@ -548,6 +549,7 @@ impl SubgraphBuilder {
         };
         let dilation = Dilation2D { h: 1, w: 1 };
 
+        // Input is NHWC: [N, H, W, C] (graph_opt inserted transposes)
         let in_shape = shape_map.get(&cap.inputs[0]).cloned().unwrap_or_default();
         let (h_in, w_in) = if in_shape.len() == 4 {
             (in_shape[1], in_shape[2])
@@ -589,6 +591,7 @@ impl SubgraphBuilder {
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
+        // Input is NHWC: [N, H, W, C] (graph_opt inserted transposes)
         let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
         let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
 
@@ -613,17 +616,17 @@ impl SubgraphBuilder {
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
-        // After graph-opt, Resize input is NHWC: [N, H, W, C]
-        // Output shape is also NHWC: [N, H_new, W_new, C]
-        let out_shape = shape_map.get(&cap.outputs[0]).cloned().unwrap_or_default();
+        // Input is NHWC: [N, H, W, C] (graph_opt inserted transposes)
+        let output_name = &cap.outputs[0];
+        let out_shape = shape_map.get(output_name).cloned().unwrap_or_default();
         if out_shape.len() != 4 {
-            anyhow::bail!("XNNPACK Resize: expected 4D NHWC output, got {:?}", out_shape);
+            anyhow::bail!("XNNPACK Resize: expected 4D output shape, got {:?}", out_shape);
         }
         let new_height = out_shape[1];
         let new_width = out_shape[2];
 
         let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
-        let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
+        let output_id = self.get_or_define_value(output_name, shape_map)?;
 
         let status = unsafe {
             xnn_define_static_resize_bilinear_2d(
@@ -1187,7 +1190,7 @@ fn compute_padding(
 /// Propagate shapes forward through a sequence of ops.
 /// External input shapes + initializer shapes must already be in the map.
 /// For spatial ops, shapes are NHWC (graph-opt inserted transposes).
-fn propagate_shapes(
+pub fn propagate_shapes(
     ops: &[CapturedOp],
     shape_map: &mut HashMap<String, Vec<usize>>,
     initializers: &HashMap<String, Tensor>,
@@ -1195,9 +1198,9 @@ fn propagate_shapes(
     for op in ops {
         let shapes = infer_op_output_shapes(op, shape_map, initializers);
         for (name, shape) in shapes {
-            if !shape_map.contains_key(&name) {
-                shape_map.insert(name, shape);
-            }
+            // Only fill in missing shapes — don't overwrite shapes that are
+            // already correct from layout-aware op_type.rs inference.
+            shape_map.entry(name).or_insert(shape);
         }
     }
 }
@@ -1214,7 +1217,7 @@ fn infer_op_output_shapes(
     let mut result = Vec::new();
 
     match op.op {
-        OpType::Transpose => {
+        OpType::Transpose | OpType::LayoutTranspose => {
             if let Some(x) = get(0) {
                 let perm = op.node.attrs.get_ints("perm");
                 let out = if let Some(p) = perm {
@@ -1227,14 +1230,14 @@ fn infer_op_output_shapes(
         }
 
         OpType::Conv => {
-            // Input is NHWC: [N, H, W, C_in]
+            // Input is NHWC: [N, H, W, C_in] (graph_opt inserted transposes)
             if let (Some(x), Some(w_name)) = (get(0), op.inputs.get(1)) {
                 if let Some(w) = initializers.get(w_name.as_str()) {
                     if x.len() == 4 && w.dims.len() == 4 {
                         let n = x[0];
                         let h_in = x[1];
                         let w_in = x[2];
-                        let c_out = w.dims[0];
+                        let c_out = w.dims[0]; // weights are still OIHW
                         let kh = w.dims[2];
                         let kw = w.dims[3];
                         let strides = op.node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
@@ -1244,6 +1247,7 @@ fn infer_op_output_shapes(
 
                         let h_out = compute_spatial_out(h_in, kh, strides[0] as usize, dilations[0] as usize, pads[0] as usize + pads[2] as usize, &auto_pad);
                         let w_out = compute_spatial_out(w_in, kw, strides[1] as usize, dilations[1] as usize, pads[1] as usize + pads[3] as usize, &auto_pad);
+                        // Output is NHWC: [N, H_out, W_out, C_out]
                         result.push((op.outputs[0].clone(), vec![n, h_out, w_out, c_out]));
                     }
                 }
@@ -1251,7 +1255,7 @@ fn infer_op_output_shapes(
         }
 
         OpType::MaxPool | OpType::AveragePool => {
-            // Input is NHWC: [N, H, W, C]
+            // Input is NHWC: [N, H, W, C] (graph_opt inserted transposes)
             if let Some(x) = get(0) {
                 if x.len() == 4 {
                     let ks = op.node.attrs.get_ints("kernel_shape").unwrap_or_default();
@@ -1261,6 +1265,7 @@ fn infer_op_output_shapes(
                     if ks.len() >= 2 {
                         let h_out = compute_spatial_out(x[1], ks[0] as usize, strides[0] as usize, 1, pads[0] as usize + pads[2] as usize, &auto_pad);
                         let w_out = compute_spatial_out(x[2], ks[1] as usize, strides[1] as usize, 1, pads[1] as usize + pads[3] as usize, &auto_pad);
+                        // Output is NHWC: [N, H_out, W_out, C]
                         result.push((op.outputs[0].clone(), vec![x[0], h_out, w_out, x[3]]));
                     }
                 }
@@ -1268,6 +1273,7 @@ fn infer_op_output_shapes(
         }
 
         OpType::GlobalAveragePool => {
+            // Input is NHWC: [N, H, W, C] → output is NHWC: [N, 1, 1, C]
             if let Some(x) = get(0) {
                 if x.len() == 4 {
                     result.push((op.outputs[0].clone(), vec![x[0], 1, 1, x[3]]));
@@ -1543,11 +1549,10 @@ impl Drop for CompiledSubgraph {
 pub struct XnnpackSubgraph {
     compiled: Option<CompiledSubgraph>,
     compile_failed: bool,
-    ops: Vec<CapturedOp>,
+    pub ops: Vec<CapturedOp>,
     required_outputs: Vec<String>,
     initializers: HashMap<String, Tensor>,
     shape_hints: HashMap<String, Vec<usize>>,
-    pub fallback_nodes: Vec<super::PlanNode>,
 }
 
 unsafe impl Send for XnnpackSubgraph {}
@@ -1566,7 +1571,6 @@ impl XnnpackSubgraph {
             required_outputs,
             initializers,
             shape_hints,
-            fallback_nodes: Vec::new(),
         }
     }
 
@@ -1727,6 +1731,7 @@ impl XnnpackSubgraph {
                     {
                         if let Some(t) = values.get(inp) {
                             if t.dtype() != crate::DType::Float {
+                                tracing::debug!("XNNPACK: non-float input '{inp}' dtype={:?}", t.dtype());
                                 self.compile_failed = true;
                                 return Ok(());
                             }
@@ -1736,7 +1741,7 @@ impl XnnpackSubgraph {
             }
         }
 
-        // Propagate shapes through ops
+        // Fill in any missing shapes (e.g. for Reshape outputs not in hints)
         propagate_shapes(&self.ops, &mut shape_map, &self.initializers);
 
         // Verify all shapes are known
@@ -1756,6 +1761,7 @@ impl XnnpackSubgraph {
             }
         }
         if missing_shape {
+            tracing::debug!("XNNPACK: missing shapes, falling back");
             self.compile_failed = true;
             return Ok(());
         }
@@ -1777,41 +1783,21 @@ impl XnnpackSubgraph {
                 Ok(())
             }
             Err(e) => {
-                tracing::debug!("XNNPACK: compile failed: {e}");
+                tracing::debug!("XNNPACK: compile failed: {e:#}");
                 self.compile_failed = true;
                 Ok(())
             }
         }
     }
 
-    fn execute_fallback(&mut self, values: &mut HashMap<String, Tensor>) -> Result<()> {
-        tracing::debug!(
-            "XNNPACK: falling back to CPU for {} ops",
-            self.fallback_nodes.len()
+    fn execute_fallback(&mut self, _values: &mut HashMap<String, Tensor>) -> Result<()> {
+        // CPU fallback cannot safely run graph-opt-transformed ops because
+        // they expect NHWC data layout but CPU layers assume NCHW.
+        anyhow::bail!(
+            "XNNPACK: subgraph compilation/execution failed for {} ops; \
+             CPU fallback is not supported for graph-opt-transformed graphs",
+            self.ops.len()
         );
-        for node in &mut self.fallback_nodes {
-            match node {
-                super::PlanNode::Single { output, layer } => {
-                    if output.is_empty() {
-                        continue;
-                    }
-                    let (key, mut out) = values
-                        .remove_entry(output.as_str())
-                        .unwrap_or_else(|| (output.clone(), Tensor::default()));
-                    let result = layer.execute(values, &mut out);
-                    values.insert(key, out);
-                    result?;
-                }
-                super::PlanNode::Loop(l) => l.execute(values)?,
-                super::PlanNode::Split(s) => s.execute(values)?,
-                super::PlanNode::If(i) => i.execute(values)?,
-                super::PlanNode::TopK(t) => t.execute(values)?,
-                super::PlanNode::Scan(s) => s.execute(values)?,
-                #[cfg(feature = "xnnpack")]
-                super::PlanNode::XnnpackSubgraph(sg) => sg.execute(values)?,
-            }
-        }
-        Ok(())
     }
 }
 
@@ -1846,12 +1832,17 @@ fn compile_subgraph(
     let num_external = (external_inputs.len() + required_outputs.len()) as u32;
     let mut builder = SubgraphBuilder::new(num_external)?;
 
+    const MAX_BUF_ELEMS: usize = 256 * 1024 * 1024 / 4; // 256 MB cap
+
     // Define external inputs
     let mut input_shapes = Vec::new();
     let mut input_bufs = Vec::new();
     for (i, name) in external_inputs.iter().enumerate() {
         let shape = shape_map.get(name).cloned().unwrap_or_default();
-        let numel: usize = shape.iter().product();
+        let numel: usize = shape.iter().try_fold(1usize, |a, &d| a.checked_mul(d)).unwrap_or(0);
+        if numel == 0 || numel > MAX_BUF_ELEMS {
+            anyhow::bail!("XNNPACK: input '{name}' has unreasonable shape {shape:?} (numel={numel})");
+        }
         builder.define_external_input(name, i as u32, &shape)?;
         input_bufs.push(vec![0.0f32; numel + XNN_EXTRA_BYTES as usize / 4]);
         input_shapes.push(shape);
@@ -1862,7 +1853,10 @@ fn compile_subgraph(
     let mut output_bufs = Vec::new();
     for (i, name) in required_outputs.iter().enumerate() {
         let shape = shape_map.get(name).cloned().unwrap_or_default();
-        let numel: usize = shape.iter().product();
+        let numel: usize = shape.iter().try_fold(1usize, |a, &d| a.checked_mul(d)).unwrap_or(0);
+        if numel == 0 || numel > MAX_BUF_ELEMS {
+            anyhow::bail!("XNNPACK: output '{name}' has unreasonable shape {shape:?} (numel={numel})");
+        }
         let ext_id = (external_inputs.len() + i) as u32;
         builder.define_external_output(name, ext_id, &shape)?;
         output_bufs.push(vec![0.0f32; numel + XNN_EXTRA_BYTES as usize / 4]);

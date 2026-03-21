@@ -56,6 +56,7 @@ pub enum OpType {
     IsNaN,
     Lstm,
     LeakyRelu,
+    LayoutTranspose,
     Less,
     Log,
     Loop,
@@ -306,6 +307,7 @@ impl OpType {
             | Self::Unsqueeze
             | Self::Flatten
             | Self::Transpose
+            | Self::LayoutTranspose
             | Self::Slice
             | Self::Tile
             | Self::Gather
@@ -327,7 +329,7 @@ impl OpType {
         self,
         node: &Node,
         input_names: &[String],
-        shape_map: &HashMap<String, Dims>,
+        shape_map: &HashMap<String, crate::ShapeLayout>,
         known_values: &HashMap<String, Tensor>,
     ) -> Option<Dims> {
         let get_shape = |idx: usize| -> Option<&Dims> {
@@ -335,6 +337,15 @@ impl OpType {
                 .get(idx)
                 .filter(|s| !s.is_empty())
                 .and_then(|name| shape_map.get(name))
+                .map(|sl| &sl.dims)
+        };
+        let get_layout = |idx: usize| -> crate::Layout {
+            input_names
+                .get(idx)
+                .filter(|s| !s.is_empty())
+                .and_then(|name| shape_map.get(name))
+                .map(|sl| sl.layout)
+                .unwrap_or_default()
         };
         let get_value = |idx: usize| -> Option<&Tensor> {
             input_names
@@ -423,8 +434,11 @@ impl OpType {
                 if x.len() != 4 || w.len() != 4 {
                     return None;
                 }
+                let layout = get_layout(0);
+                let is_nhwc = layout == crate::Layout::NHWC;
                 let n = x[0];
-                let c_out = w[0];
+                let c_out = w[0]; // weights are always OIHW
+                let (h_idx, w_idx) = if is_nhwc { (1, 2) } else { (2, 3) };
                 let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
                 let strides = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
                 let dilations = node
@@ -437,9 +451,9 @@ impl OpType {
                     .unwrap_or_else(|| vec![0, 0, 0, 0]);
                 let ks_attr = node.attrs.get_ints("kernel_shape");
 
-                let mut out_dims: Dims = dims![n, c_out];
+                let mut spatial_out = [0usize; 2];
                 for i in 0..2 {
-                    let in_dim = x[2 + i];
+                    let in_dim = x[[h_idx, w_idx][i]];
                     let k = ks_attr
                         .as_ref()
                         .map(|ks| ks[i] as usize)
@@ -447,7 +461,7 @@ impl OpType {
                     let s = strides[i] as usize;
                     let d = dilations[i] as usize;
                     let ek = d * (k - 1) + 1;
-                    let out_dim = match auto_pad.as_str() {
+                    spatial_out[i] = match auto_pad.as_str() {
                         "SAME_UPPER" | "SAME_LOWER" => in_dim.div_ceil(s),
                         "VALID" => (in_dim.saturating_sub(ek)) / s + 1,
                         _ => {
@@ -455,9 +469,12 @@ impl OpType {
                             (in_dim + p - ek) / s + 1
                         }
                     };
-                    out_dims.push(out_dim);
                 }
-                Some(out_dims)
+                if is_nhwc {
+                    Some(dims![n, spatial_out[0], spatial_out[1], c_out])
+                } else {
+                    Some(dims![n, c_out, spatial_out[0], spatial_out[1]])
+                }
             }
 
             Self::MatMul => {
@@ -504,6 +521,9 @@ impl OpType {
                 if x.len() != 4 {
                     return None;
                 }
+                let layout = get_layout(0);
+                let is_nhwc = layout == crate::Layout::NHWC;
+                let (h_idx, w_idx, c_idx) = if is_nhwc { (1, 2, 3) } else { (2, 3, 1) };
                 let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
                 let ks = node.attrs.get_ints("kernel_shape")?;
                 let strides = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
@@ -512,12 +532,12 @@ impl OpType {
                     .get_ints("pads")
                     .unwrap_or_else(|| vec![0, 0, 0, 0]);
 
-                let mut out_dims: Dims = dims![x[0], x[1]];
+                let mut spatial_out = [0usize; 2];
                 for i in 0..2 {
-                    let in_dim = x[2 + i];
+                    let in_dim = x[[h_idx, w_idx][i]];
                     let k = ks[i] as usize;
                     let s = strides[i] as usize;
-                    let out_dim = match auto_pad.as_str() {
+                    spatial_out[i] = match auto_pad.as_str() {
                         "SAME_UPPER" | "SAME_LOWER" => in_dim.div_ceil(s),
                         "VALID" => (in_dim.saturating_sub(k)) / s + 1,
                         _ => {
@@ -525,9 +545,12 @@ impl OpType {
                             (in_dim + p - k) / s + 1
                         }
                     };
-                    out_dims.push(out_dim);
                 }
-                Some(out_dims)
+                if is_nhwc {
+                    Some(dims![x[0], spatial_out[0], spatial_out[1], x[c_idx]])
+                } else {
+                    Some(dims![x[0], x[c_idx], spatial_out[0], spatial_out[1]])
+                }
             }
 
             Self::AveragePool => {
@@ -535,6 +558,9 @@ impl OpType {
                 if x.len() != 4 {
                     return None;
                 }
+                let layout = get_layout(0);
+                let is_nhwc = layout == crate::Layout::NHWC;
+                let (h_idx, w_idx, c_idx) = if is_nhwc { (1, 2, 3) } else { (2, 3, 1) };
                 let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
                 let ks = node.attrs.get_ints("kernel_shape")?;
                 let strides = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
@@ -543,12 +569,12 @@ impl OpType {
                     .get_ints("pads")
                     .unwrap_or_else(|| vec![0, 0, 0, 0]);
 
-                let mut out_dims: Dims = dims![x[0], x[1]];
+                let mut spatial_out = [0usize; 2];
                 for i in 0..2 {
-                    let in_dim = x[2 + i];
+                    let in_dim = x[[h_idx, w_idx][i]];
                     let k = ks[i] as usize;
                     let s = strides[i] as usize;
-                    let out_dim = match auto_pad.as_str() {
+                    spatial_out[i] = match auto_pad.as_str() {
                         "SAME_UPPER" | "SAME_LOWER" => in_dim.div_ceil(s),
                         "VALID" => (in_dim.saturating_sub(k)) / s + 1,
                         _ => {
@@ -556,9 +582,12 @@ impl OpType {
                             (in_dim + p - k) / s + 1
                         }
                     };
-                    out_dims.push(out_dim);
                 }
-                Some(out_dims)
+                if is_nhwc {
+                    Some(dims![x[0], spatial_out[0], spatial_out[1], x[c_idx]])
+                } else {
+                    Some(dims![x[0], x[c_idx], spatial_out[0], spatial_out[1]])
+                }
             }
 
             Self::GlobalAveragePool => {
@@ -566,9 +595,17 @@ impl OpType {
                 if x.len() < 2 {
                     return None;
                 }
-                let mut out: Dims = dims![x[0], x[1]];
-                out.resize(x.len(), 1);
-                Some(out)
+                let layout = get_layout(0);
+                let is_nhwc = layout == crate::Layout::NHWC;
+                if is_nhwc && x.len() == 4 {
+                    // NHWC: [N, H, W, C] → [N, 1, 1, C]
+                    Some(dims![x[0], 1, 1, x[3]])
+                } else {
+                    // NCHW: [N, C, H, W] → [N, C, 1, 1]
+                    let mut out: Dims = dims![x[0], x[1]];
+                    out.resize(x.len(), 1);
+                    Some(out)
+                }
             }
 
             Self::Flatten => {
@@ -616,7 +653,7 @@ impl OpType {
                 Some(out)
             }
 
-            Self::Transpose => {
+            Self::Transpose | Self::LayoutTranspose => {
                 let x = get_shape(0)?;
                 match node.attrs.get_ints("perm") {
                     Some(p) => Some(p.iter().map(|&i| x[i as usize]).collect()),
