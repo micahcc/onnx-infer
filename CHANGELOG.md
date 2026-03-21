@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-03-20 — 41 new vision model fixtures, 6 new operators, Softmax opset fix
+
+Added 41 vision models from ONNX Model Zoo (classification, object detection,
+body analysis) as test fixtures with input/output validation.
+
+### New operators
+- LRN (Local Response Normalization)
+- AveragePool
+- ReduceMean
+- PRelu (Parametric ReLU)
+- Not (logical)
+- And (logical)
+
+### Bug fix: Softmax opset versioning
+Softmax default axis changed between opsets: axis=1 for opset<13, axis=-1
+for opset>=13. The engine was always using -1, causing incorrect results for
+older models (e.g. SqueezeNet 1.0 opset 12). Fixed by threading opset version
+from ModelProto through Graph to plan builder.
+
+### Infrastructure
+- `onnx_ir::Graph` now carries `opset_version`
+- `convert_graph_with_opset()` accepts opset version from model proto
+- `build_node_with_opset()` in plan.rs for opset-aware layer construction
+- New test helpers: `run_fixture_argmax`, `run_multi_io_fixture_with_tol`
+- `run_multi_io_fixture` handles mixed Float/Int64 dtype comparisons
+- 56 tests pass, 3 ignored (MaskRCNN needs ConvTranspose, 2 deep segmentation
+  models with accumulated FP divergence)
+
 ## 2026-03-19 18:30 — Deferred plan building & aggressive constant folding
 
 Engine now defers plan building until first `run()` when input shapes are

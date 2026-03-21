@@ -13,7 +13,9 @@ pub enum OpType {
     Acos,
     Acosh,
     Add,
+    And,
     ArgMax,
+    AveragePool,
     Asin,
     Asinh,
     Atan,
@@ -56,6 +58,7 @@ pub enum OpType {
     Less,
     Log,
     Loop,
+    Lrn,
     MatMul,
     Max,
     MaxPool,
@@ -64,6 +67,8 @@ pub enum OpType {
     Neg,
     NonMaxSuppression,
     NonZero,
+    Not,
+    PRelu,
     QLinearAdd,
     QLinearConv,
     QLinearGlobalAveragePool,
@@ -72,6 +77,7 @@ pub enum OpType {
     Range,
     Reciprocal,
     ReduceMax,
+    ReduceMean,
     ReduceMin,
     ReduceSum,
     Relu,
@@ -114,7 +120,9 @@ impl OpType {
             "Acos" => Ok(Self::Acos),
             "Acosh" => Ok(Self::Acosh),
             "Add" => Ok(Self::Add),
+            "And" => Ok(Self::And),
             "ArgMax" => Ok(Self::ArgMax),
+            "AveragePool" => Ok(Self::AveragePool),
             "Asin" => Ok(Self::Asin),
             "Asinh" => Ok(Self::Asinh),
             "Atan" => Ok(Self::Atan),
@@ -157,6 +165,7 @@ impl OpType {
             "Less" => Ok(Self::Less),
             "Log" => Ok(Self::Log),
             "Loop" => Ok(Self::Loop),
+            "LRN" => Ok(Self::Lrn),
             "MatMul" => Ok(Self::MatMul),
             "Max" => Ok(Self::Max),
             "MaxPool" => Ok(Self::MaxPool),
@@ -165,6 +174,8 @@ impl OpType {
             "Neg" => Ok(Self::Neg),
             "NonMaxSuppression" => Ok(Self::NonMaxSuppression),
             "NonZero" => Ok(Self::NonZero),
+            "Not" => Ok(Self::Not),
+            "PRelu" => Ok(Self::PRelu),
             "QLinearAdd" => Ok(Self::QLinearAdd),
             "QLinearConv" => Ok(Self::QLinearConv),
             "QLinearGlobalAveragePool" => Ok(Self::QLinearGlobalAveragePool),
@@ -173,6 +184,7 @@ impl OpType {
             "Range" => Ok(Self::Range),
             "Reciprocal" => Ok(Self::Reciprocal),
             "ReduceMax" => Ok(Self::ReduceMax),
+            "ReduceMean" => Ok(Self::ReduceMean),
             "ReduceMin" => Ok(Self::ReduceMin),
             "ReduceSum" => Ok(Self::ReduceSum),
             "Relu" => Ok(Self::Relu),
@@ -257,7 +269,7 @@ impl OpType {
             Self::MatMul => &[F, F],
             Self::Gemm => &[F, F, F],
             Self::BatchNormalization => &[F, F, F, F, F],
-            Self::MaxPool | Self::GlobalAveragePool => &[F],
+            Self::MaxPool | Self::AveragePool | Self::GlobalAveragePool => &[F],
             Self::Resize | Self::Upsample => &[F],
             Self::DequantizeLinear => &[F, F, F],
             Self::QuantizeLinear => &[F, F, F],
@@ -274,9 +286,11 @@ impl OpType {
             | Self::Greater
             | Self::NonZero
             | Self::ArgMax
+            | Self::And
             | Self::CategoryMapper
             | Self::IsNaN
-            | Self::IsInf => DType::Int64,
+            | Self::IsInf
+            | Self::Not => DType::Int64,
             Self::Constant => match node.attrs.get("value") {
                 Some(Attr::Tensor(t)) => t.dtype(),
                 _ => DType::Float,
@@ -297,6 +311,7 @@ impl OpType {
             | Self::Concat
             | Self::ReduceMin
             | Self::ReduceMax
+            | Self::ReduceMean
             | Self::ReduceSum
             | Self::Compress
             | Self::Where
@@ -371,8 +386,11 @@ impl OpType {
             | Self::Selu
             | Self::HardSigmoid
             | Self::ThresholdedRelu
+            | Self::And
             | Self::IsNaN
-            | Self::IsInf => get_shape(0).cloned(),
+            | Self::IsInf
+            | Self::Lrn
+            | Self::Not => get_shape(0).cloned(),
 
             Self::Add
             | Self::Sub
@@ -380,7 +398,8 @@ impl OpType {
             | Self::Div
             | Self::Less
             | Self::Equal
-            | Self::Greater => {
+            | Self::Greater
+            | Self::PRelu => {
                 let a = get_shape(0)?;
                 let b = get_shape(1)?;
                 Some(broadcast_shape(a, b))
@@ -474,6 +493,34 @@ impl OpType {
             }
 
             Self::MaxPool => {
+                let x = get_shape(0)?;
+                if x.len() != 4 {
+                    return None;
+                }
+                let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
+                let ks = node.attrs.get_ints("kernel_shape")?;
+                let strides = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
+                let pads = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+
+                let mut out_dims: Dims = dims![x[0], x[1]];
+                for i in 0..2 {
+                    let in_dim = x[2 + i];
+                    let k = ks[i] as usize;
+                    let s = strides[i] as usize;
+                    let out_dim = match auto_pad.as_str() {
+                        "SAME_UPPER" | "SAME_LOWER" => in_dim.div_ceil(s),
+                        "VALID" => (in_dim.saturating_sub(k)) / s + 1,
+                        _ => {
+                            let p = pads[i] as usize + pads[i + 2] as usize;
+                            (in_dim + p - k) / s + 1
+                        }
+                    };
+                    out_dims.push(out_dim);
+                }
+                Some(out_dims)
+            }
+
+            Self::AveragePool => {
                 let x = get_shape(0)?;
                 if x.len() != 4 {
                     return None;
@@ -905,7 +952,7 @@ impl OpType {
                 Some(broadcast_shape(x, y))
             }
 
-            Self::ReduceMax | Self::ReduceSum => {
+            Self::ReduceMax | Self::ReduceMean | Self::ReduceSum => {
                 let x = get_shape(0)?;
                 let keepdims = node.attrs.get_int("keepdims").unwrap_or(1) != 0;
                 let axes: Option<Vec<i64>> = node.attrs.get_ints("axes");

@@ -10,8 +10,10 @@ use crate::layers::Layer;
 use crate::layers::OpType;
 use crate::layers::abs;
 use crate::layers::add;
+use crate::layers::and;
 use crate::layers::argmax;
 use crate::layers::auto_cast;
+use crate::layers::average_pool;
 use crate::layers::batch_norm;
 use crate::layers::cast;
 use crate::layers::category_mapper;
@@ -41,6 +43,7 @@ use crate::layers::leaky_relu;
 use crate::layers::less;
 use crate::layers::log;
 use crate::layers::loop_op;
+use crate::layers::lrn;
 use crate::layers::lstm;
 use crate::layers::matmul;
 use crate::layers::max_op;
@@ -49,6 +52,8 @@ use crate::layers::min_op;
 use crate::layers::mul;
 use crate::layers::nms;
 use crate::layers::nonzero;
+use crate::layers::not;
+use crate::layers::prelu;
 use crate::layers::qlinear_add;
 use crate::layers::qlinear_conv;
 use crate::layers::qlinear_global_avg_pool;
@@ -56,6 +61,7 @@ use crate::layers::qlinear_matmul;
 use crate::layers::quantize_linear;
 use crate::layers::range;
 use crate::layers::reduce_max;
+use crate::layers::reduce_mean;
 use crate::layers::reduce_min;
 use crate::layers::reduce_sum;
 use crate::layers::relu;
@@ -315,7 +321,7 @@ impl Plan {
 
                 if all_inputs_known {
                     let plan_node =
-                        build_node(op, node, modified_inputs.clone(), &shape_map)?;
+                        build_node_with_opset(op, node, modified_inputs.clone(), &shape_map, graph.opset_version)?;
                     if let PlanNode::Loop(mut loop_layer) = plan_node {
                         let mut temp_values: HashMap<String, Tensor> = HashMap::new();
                         for name in &node.inputs {
@@ -355,7 +361,7 @@ impl Plan {
 
             #[cfg(feature = "xnnpack")]
             node_meta.push(Some((op, modified_inputs.clone(), node.clone())));
-            nodes.push(build_node(op, node, modified_inputs, &shape_map)?);
+            nodes.push(build_node_with_opset(op, node, modified_inputs, &shape_map, graph.opset_version)?);
         }
 
         // XNNPACK subgraph compilation
@@ -493,6 +499,16 @@ pub fn build_node(
     inputs: Vec<String>,
     shape_map: &HashMap<String, Dims>,
 ) -> Result<PlanNode> {
+    build_node_with_opset(op, node, inputs, shape_map, 0)
+}
+
+pub fn build_node_with_opset(
+    op: OpType,
+    node: &Node,
+    inputs: Vec<String>,
+    shape_map: &HashMap<String, Dims>,
+    opset_version: i64,
+) -> Result<PlanNode> {
     if op == OpType::Loop {
         let body = match node.attrs.get("body") {
             Some(Attr::Graph(g)) => (**g).clone(),
@@ -598,6 +614,13 @@ pub fn build_node(
         OpType::Sigmoid => Box::new(sigmoid::Sigmoid::new(inputs)),
         OpType::Exp => Box::new(exp::Exp::new(inputs)),
         OpType::Log => Box::new(log::Log::new(inputs)),
+        OpType::Lrn => Box::new(lrn::Lrn::new(
+            inputs,
+            node.attrs.get_int("size").unwrap_or(1) as usize,
+            node.attrs.get_float("alpha").unwrap_or(0.0001),
+            node.attrs.get_float("beta").unwrap_or(0.75),
+            node.attrs.get_float("bias").unwrap_or(1.0),
+        )),
         OpType::Tanh => Box::new(tanh::Tanh::new(inputs)),
         OpType::Expand => Box::new(expand::Expand::new(inputs)),
         OpType::Less => Box::new(less::Less::new(inputs)),
@@ -605,7 +628,10 @@ pub fn build_node(
         OpType::Greater => Box::new(greater::Greater::new(inputs)),
         OpType::Max => Box::new(max_op::Max::new(inputs)),
         OpType::Min => Box::new(min_op::Min::new(inputs)),
+        OpType::And => Box::new(and::And { inputs }),
         OpType::NonZero => Box::new(nonzero::NonZero::new(inputs)),
+        OpType::Not => Box::new(not::Not::new(inputs)),
+        OpType::PRelu => Box::new(prelu::PRelu::new(inputs)),
         OpType::Range => Box::new(range::Range::new(inputs)),
         OpType::Floor => Box::new(floor::Floor::new(inputs)),
         OpType::Sqrt => Box::new(sqrt::Sqrt::new(inputs)),
@@ -637,11 +663,15 @@ pub fn build_node(
         }
         OpType::Ceil => Box::new(ceil::Ceil::new(inputs)),
         OpType::Round => Box::new(round::Round::new(inputs)),
-        OpType::Softmax => Box::new(softmax::Softmax::new(
-            inputs,
-            node.attrs.get_int("axis").unwrap_or(-1),
-            input_shapes[0],
-        )),
+        OpType::Softmax => {
+            // Softmax default axis changed in opset 13: was 1, now -1
+            let default_axis = if opset_version >= 13 { -1 } else { 1 };
+            Box::new(softmax::Softmax::new(
+                inputs,
+                node.attrs.get_int("axis").unwrap_or(default_axis),
+                input_shapes[0],
+            ))
+        }
         OpType::Softplus => Box::new(softplus::Softplus::new(inputs)),
         OpType::Add => {
             let lb = node.attrs.get_int("broadcast").unwrap_or(0) != 0;
@@ -707,6 +737,22 @@ pub fn build_node(
                 st,
                 pa,
                 ap,
+                input_shapes[0],
+            )?)
+        }
+        OpType::AveragePool => {
+            let ks = node.attrs.get_ints("kernel_shape").unwrap_or_default();
+            let st = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
+            let pa = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+            let ap = node.attrs.get_string("auto_pad").unwrap_or_default();
+            let cip = node.attrs.get_int("count_include_pad").unwrap_or(0);
+            Box::new(average_pool::AveragePool::new(
+                inputs,
+                ks,
+                st,
+                pa,
+                ap,
+                cip,
                 input_shapes[0],
             )?)
         }
@@ -891,6 +937,12 @@ pub fn build_node(
             inputs,
             node.attrs.get_int("keepdims").unwrap_or(1) != 0,
             node.attrs.get_ints("axes"),
+        )),
+        OpType::ReduceMean => Box::new(reduce_mean::ReduceMean::new(
+            inputs,
+            node.attrs.get_int("keepdims").unwrap_or(1) != 0,
+            node.attrs.get_ints("axes"),
+            node.attrs.get_int("noop_with_empty_axes").unwrap_or(0) != 0,
         )),
         OpType::ReduceSum => Box::new(reduce_sum::ReduceSum::new(
             inputs,

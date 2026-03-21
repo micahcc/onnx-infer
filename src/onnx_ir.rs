@@ -119,9 +119,14 @@ pub struct Graph {
     pub inputs: Vec<ValueInfo>,
     pub outputs: Vec<ValueInfo>,
     pub initializers: HashMap<String, Tensor>,
+    pub opset_version: i64,
 }
 
 pub fn convert_graph(graph: &crate::onnx::GraphProto) -> Result<Graph> {
+    convert_graph_with_opset(graph, 0)
+}
+
+pub fn convert_graph_with_opset(graph: &crate::onnx::GraphProto, opset_version: i64) -> Result<Graph> {
     let mut initializers = HashMap::new();
     for init in &graph.initializer {
         if !init.name.is_empty() {
@@ -142,6 +147,7 @@ pub fn convert_graph(graph: &crate::onnx::GraphProto) -> Result<Graph> {
         inputs,
         outputs,
         initializers,
+        opset_version,
     })
 }
 

@@ -40,11 +40,18 @@ impl InferenceEngine {
     /// ```
     pub fn with_batch_size(model_bytes: &[u8], batch_size: usize) -> Result<Self> {
         let model = ModelProto::decode(model_bytes).context("decoding model proto")?;
+        let opset_version = model
+            .opset_import
+            .iter()
+            .filter(|o| o.domain.is_empty())
+            .map(|o| o.version)
+            .max()
+            .unwrap_or(0);
         let graph_proto = model
             .graph
             .as_ref()
             .context("model has no graph")?;
-        let graph = onnx_ir::convert_graph(graph_proto)?;
+        let graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
 
         let initializer_names: std::collections::HashSet<&str> =
             graph.initializers.keys().map(|k| k.as_str()).collect();
@@ -73,11 +80,18 @@ impl InferenceEngine {
         input_sizes: HashMap<String, Dims>,
     ) -> Result<Self> {
         let model = ModelProto::decode(model_bytes).context("decoding model proto")?;
+        let opset_version = model
+            .opset_import
+            .iter()
+            .filter(|o| o.domain.is_empty())
+            .map(|o| o.version)
+            .max()
+            .unwrap_or(0);
         let graph_proto = model
             .graph
             .as_ref()
             .context("model has no graph")?;
-        let graph = onnx_ir::convert_graph(graph_proto)?;
+        let graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
 
         Self::build_from_graph(graph, input_sizes)
     }
@@ -320,6 +334,10 @@ impl InferenceEngine {
                     .map(|dims| (name.clone(), dims.clone()))
             })
             .collect()
+    }
+
+    pub fn value(&self, name: &str) -> Option<&Tensor> {
+        self.values.get(name)
     }
 
     pub fn shape_map(&self) -> HashMap<String, Dims> {
