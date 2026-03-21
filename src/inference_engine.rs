@@ -18,6 +18,8 @@ pub struct InferenceEngine {
     input_names: Vec<String>,
     input_sizes: HashMap<String, Dims>,
     pub outputs: HashMap<String, Tensor>,
+    #[cfg(feature = "xnnpack")]
+    use_xnnpack: bool,
 }
 
 impl InferenceEngine {
@@ -165,7 +167,7 @@ impl InferenceEngine {
             }
         }
 
-        Self::build_from_graph(graph, input_sizes)
+        Self::build_from_graph_xnnpack(graph, input_sizes)
     }
 
     /// Dump the current (possibly optimized) IR graph as human-readable text.
@@ -215,6 +217,50 @@ impl InferenceEngine {
         Ok((before, after))
     }
 
+    #[cfg(feature = "xnnpack")]
+    fn build_from_graph_xnnpack(
+        graph: onnx_ir::Graph,
+        input_sizes: HashMap<String, Dims>,
+    ) -> Result<Self> {
+        let initializer_names: std::collections::HashSet<&str> =
+            graph.initializers.keys().map(|k| k.as_str()).collect();
+        let input_names: Vec<String> = graph
+            .inputs
+            .iter()
+            .filter(|i| !i.name.is_empty() && !initializer_names.contains(i.name.as_str()))
+            .map(|i| i.name.clone())
+            .collect();
+
+        let output_names: Vec<String> = graph.outputs.iter().map(|o| o.name.clone()).collect();
+        let mut outputs = HashMap::new();
+        for name in &output_names {
+            outputs.insert(name.clone(), Tensor::default());
+        }
+
+        let all_shapes_known = input_names.iter().all(|n| input_sizes.contains_key(n));
+        let plan = if all_shapes_known {
+            Some(Plan::build_with_xnnpack(&graph, &input_sizes)?)
+        } else {
+            None
+        };
+
+        let mut values = HashMap::new();
+        if let Some(ref plan) = plan {
+            Self::load_plan_values(&mut values, plan);
+        }
+
+        Ok(Self {
+            graph,
+            plan,
+            values,
+            input_names,
+            input_sizes,
+            outputs,
+            #[cfg(feature = "xnnpack")]
+            use_xnnpack: true,
+        })
+    }
+
     fn build_from_graph(graph: onnx_ir::Graph, input_sizes: HashMap<String, Dims>) -> Result<Self> {
         let initializer_names: std::collections::HashSet<&str> =
             graph.initializers.keys().map(|k| k.as_str()).collect();
@@ -251,6 +297,8 @@ impl InferenceEngine {
             input_names,
             input_sizes,
             outputs,
+            #[cfg(feature = "xnnpack")]
+            use_xnnpack: false,
         })
     }
 
@@ -288,6 +336,13 @@ impl InferenceEngine {
         }
 
         // Build plan with actual input values for aggressive constant folding
+        #[cfg(feature = "xnnpack")]
+        let plan = if self.use_xnnpack {
+            Plan::build_with_xnnpack(&self.graph, &input_sizes)?
+        } else {
+            Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), inputs)?
+        };
+        #[cfg(not(feature = "xnnpack"))]
         let plan = Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), inputs)?;
 
         // Reset values and reload from new plan

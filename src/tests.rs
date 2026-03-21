@@ -1058,3 +1058,101 @@ fn test_version_rfb_640_set_0() {
     let _t = setup_tracing("version_rfb_640_set_0");
     run_multi_io_fixture(&fixture("version-RFB-640"), "version-RFB-640.onnx", 0);
 }
+
+// --- XNNPACK tests ---
+
+#[cfg(feature = "xnnpack")]
+fn run_fixture_xnnpack(base: &Path, model_file: &str, test_set: usize) {
+    let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
+    let mut engine = InferenceEngine::with_xnnpack(&model_bytes).expect("load model with xnnpack");
+
+    let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
+    let graph = model.graph.as_ref().expect("model has no graph");
+    let output_name = graph.output[0].name.clone();
+
+    let test_dir = base.join(format!("test_data_set_{test_set}"));
+    let output_bytes = fs::read(test_dir.join("output_0.pb")).expect("read output");
+    let expected = Tensor::from_proto_bytes(&output_bytes).expect("parse output");
+
+    engine.run(inputs).expect("inference with xnnpack");
+    let output = &engine.outputs[&output_name];
+
+    assert_eq!(output.dims, expected.dims, "shape mismatch after xnnpack");
+
+    let out_data = output.floats().expect("output should be float tensor");
+    let exp_data = expected
+        .floats()
+        .expect("expected output should be float tensor");
+    let mut max_err: f32 = 0.0;
+    let mut max_err_idx = 0;
+    for (i, (got, want)) in out_data.iter().zip(exp_data.iter()).enumerate() {
+        let err = (got - want).abs();
+        if err > max_err {
+            max_err = err;
+            max_err_idx = i;
+        }
+    }
+    if max_err > 1e-3 {
+        eprintln!(
+            "[xnnpack] max absolute error: {max_err} at index {max_err_idx} (got={}, want={}), output len={}",
+            out_data[max_err_idx],
+            exp_data[max_err_idx],
+            out_data.len()
+        );
+    }
+    for (got, want) in out_data.iter().zip(exp_data.iter()) {
+        assert_relative_eq!(got, want, max_relative = 1e-3, epsilon = 1e-5);
+    }
+}
+
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_xnnpack_mnist12_set_0() {
+    run_fixture_xnnpack(&fixture("mnist-12"), "mnist-12.onnx", 0);
+}
+
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_xnnpack_mobilenetv2_7_set_0() {
+    run_fixture_xnnpack(&fixture("mobilenetv2-7"), "mobilenetv2-7.onnx", 0);
+}
+
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_xnnpack_mobilenetv2_12_set_0() {
+    run_fixture_xnnpack(&fixture("mobilenetv2-12"), "mobilenetv2-12.onnx", 0);
+}
+
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_xnnpack_resnet18_v1_7_set_0() {
+    run_fixture_xnnpack(&fixture("resnet18-v1-7"), "resnet18-v1-7.onnx", 0);
+}
+
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_xnnpack_squeezenet11_7_set_0() {
+    run_fixture_xnnpack(&fixture("squeezenet1.1-7"), "squeezenet1.1.onnx", 0);
+}
+
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_xnnpack_googlenet_12_set_0() {
+    run_fixture_xnnpack(&fixture("googlenet-12"), "googlenet-12.onnx", 0);
+}
+
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_xnnpack_shufflenet_v2_12_set_0() {
+    run_fixture_xnnpack(&fixture("shufflenet-v2-12"), "shufflenet-v2-12.onnx", 0);
+}
+
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_xnnpack_efficientnet_lite4_11_set_0() {
+    run_fixture_xnnpack(
+        &fixture("efficientnet-lite4-11"),
+        "efficientnet-lite4-11.onnx",
+        0,
+    );
+}

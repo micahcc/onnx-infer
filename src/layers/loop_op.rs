@@ -315,6 +315,10 @@ impl Loop {
                     PlanNode::Scan(scan_layer) => {
                         scan_layer.execute(values)?;
                     }
+                    #[cfg(feature = "xnnpack")]
+                    PlanNode::XnnpackSubgraph(sg) => {
+                        sg.execute(values)?;
+                    }
                 }
             }
 

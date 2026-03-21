@@ -7,7 +7,10 @@ let
   package = import ./default.nix { inherit pkgs; };
 in
 pkgs.mkShell {
-  nativeBuildInputs = [ ];
+  nativeBuildInputs = [
+    pkgs.gdb
+    pkgs.lldb
+  ];
   inputsFrom = [ package ];
   XNNPACK = "${xnnpack}";
   LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";

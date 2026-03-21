@@ -129,11 +129,29 @@ impl Plan {
         Self::build_full(graph, input_sizes, type_hints, &HashMap::new())
     }
 
+    #[cfg(feature = "xnnpack")]
+    pub fn build_with_xnnpack(
+        graph: &Graph,
+        input_sizes: &HashMap<String, Dims>,
+    ) -> Result<Self> {
+        Self::build_full_inner(graph, input_sizes, &HashMap::new(), &HashMap::new(), true)
+    }
+
     pub fn build_full(
         graph: &Graph,
         input_sizes: &HashMap<String, Dims>,
         type_hints: &HashMap<String, DType>,
         input_values: &HashMap<String, Tensor>,
+    ) -> Result<Self> {
+        Self::build_full_inner(graph, input_sizes, type_hints, input_values, false)
+    }
+
+    fn build_full_inner(
+        graph: &Graph,
+        input_sizes: &HashMap<String, Dims>,
+        type_hints: &HashMap<String, DType>,
+        input_values: &HashMap<String, Tensor>,
+        #[allow(unused)] enable_xnnpack: bool,
     ) -> Result<Self> {
         let mut initializers = graph.initializers.clone();
 
@@ -379,7 +397,7 @@ impl Plan {
 
         // XNNPACK subgraph compilation
         #[cfg(feature = "xnnpack")]
-        {
+        if enable_xnnpack {
             nodes = compile_xnnpack_subgraphs(
                 nodes,
                 node_meta,
