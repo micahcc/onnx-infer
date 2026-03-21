@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;

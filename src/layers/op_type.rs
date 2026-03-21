@@ -5,7 +5,8 @@ use crate::Dims;
 use crate::Tensor;
 use crate::broadcast_shape;
 use crate::dims;
-use crate::onnx_ir::{Attr, Node};
+use crate::onnx_ir::Attr;
+use crate::onnx_ir::Node;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpType {
@@ -426,8 +427,14 @@ impl OpType {
                 let c_out = w[0];
                 let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
                 let strides = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-                let dilations = node.attrs.get_ints("dilations").unwrap_or_else(|| vec![1, 1]);
-                let pads = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+                let dilations = node
+                    .attrs
+                    .get_ints("dilations")
+                    .unwrap_or_else(|| vec![1, 1]);
+                let pads = node
+                    .attrs
+                    .get_ints("pads")
+                    .unwrap_or_else(|| vec![0, 0, 0, 0]);
                 let ks_attr = node.attrs.get_ints("kernel_shape");
 
                 let mut out_dims: Dims = dims![n, c_out];
@@ -500,7 +507,10 @@ impl OpType {
                 let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
                 let ks = node.attrs.get_ints("kernel_shape")?;
                 let strides = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-                let pads = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+                let pads = node
+                    .attrs
+                    .get_ints("pads")
+                    .unwrap_or_else(|| vec![0, 0, 0, 0]);
 
                 let mut out_dims: Dims = dims![x[0], x[1]];
                 for i in 0..2 {
@@ -528,7 +538,10 @@ impl OpType {
                 let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
                 let ks = node.attrs.get_ints("kernel_shape")?;
                 let strides = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-                let pads = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+                let pads = node
+                    .attrs
+                    .get_ints("pads")
+                    .unwrap_or_else(|| vec![0, 0, 0, 0]);
 
                 let mut out_dims: Dims = dims![x[0], x[1]];
                 for i in 0..2 {
@@ -745,7 +758,8 @@ impl OpType {
                 let axes: Vec<usize> = if let Some(t) = get_value(3) {
                     match t.dtype() {
                         DType::Int64 => t
-                            .ints().ok()?
+                            .ints()
+                            .ok()?
                             .iter()
                             .map(|&a| {
                                 if a < 0 {
@@ -756,7 +770,8 @@ impl OpType {
                             })
                             .collect(),
                         DType::Float => t
-                            .floats().ok()?
+                            .floats()
+                            .ok()?
                             .iter()
                             .map(|&a| {
                                 let a = a as i64;
@@ -840,8 +855,12 @@ impl OpType {
                 if let Some(sizes) = get_value(3) {
                     if sizes.numel() > 0 {
                         return Some(match sizes.dtype() {
-                            DType::Int64 => sizes.ints().ok()?.iter().map(|&v| v as usize).collect(),
-                            DType::Float => sizes.floats().ok()?.iter().map(|&v| v as usize).collect(),
+                            DType::Int64 => {
+                                sizes.ints().ok()?.iter().map(|&v| v as usize).collect()
+                            }
+                            DType::Float => {
+                                sizes.floats().ok()?.iter().map(|&v| v as usize).collect()
+                            }
                             DType::String => return None,
                         });
                     }
@@ -1017,4 +1036,3 @@ impl std::fmt::Display for OpType {
         write!(f, "{self:?}")
     }
 }
-

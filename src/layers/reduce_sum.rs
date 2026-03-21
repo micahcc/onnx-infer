@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::DType;
 use crate::Result;
@@ -40,7 +41,12 @@ impl Layer for ReduceSum {
             let axes_t = get_tensor(values, &self.inputs[1])?;
             Some(match axes_t.dtype() {
                 DType::Int64 => axes_t.ints().context("in ReduceSum layer")?.to_vec(),
-                DType::Float => axes_t.floats().context("in ReduceSum layer")?.iter().map(|&v| v as i64).collect(),
+                DType::Float => axes_t
+                    .floats()
+                    .context("in ReduceSum layer")?
+                    .iter()
+                    .map(|&v| v as i64)
+                    .collect(),
                 DType::String => unreachable!("strings not supported"),
             })
         } else {

@@ -47,10 +47,7 @@ impl InferenceEngine {
             .map(|o| o.version)
             .max()
             .unwrap_or(0);
-        let graph_proto = model
-            .graph
-            .as_ref()
-            .context("model has no graph")?;
+        let graph_proto = model.graph.as_ref().context("model has no graph")?;
         let graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
 
         let initializer_names: std::collections::HashSet<&str> =
@@ -87,19 +84,13 @@ impl InferenceEngine {
             .map(|o| o.version)
             .max()
             .unwrap_or(0);
-        let graph_proto = model
-            .graph
-            .as_ref()
-            .context("model has no graph")?;
+        let graph_proto = model.graph.as_ref().context("model has no graph")?;
         let graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
 
         Self::build_from_graph(graph, input_sizes)
     }
 
-    fn build_from_graph(
-        graph: onnx_ir::Graph,
-        input_sizes: HashMap<String, Dims>,
-    ) -> Result<Self> {
+    fn build_from_graph(graph: onnx_ir::Graph, input_sizes: HashMap<String, Dims>) -> Result<Self> {
         let initializer_names: std::collections::HashSet<&str> =
             graph.initializers.keys().map(|k| k.as_str()).collect();
         let input_names: Vec<String> = graph
@@ -109,8 +100,7 @@ impl InferenceEngine {
             .map(|i| i.name.clone())
             .collect();
 
-        let output_names: Vec<String> =
-            graph.outputs.iter().map(|o| o.name.clone()).collect();
+        let output_names: Vec<String> = graph.outputs.iter().map(|o| o.name.clone()).collect();
         let mut outputs = HashMap::new();
         for name in &output_names {
             outputs.insert(name.clone(), Tensor::default());
@@ -173,12 +163,7 @@ impl InferenceEngine {
         }
 
         // Build plan with actual input values for aggressive constant folding
-        let plan = Plan::build_full(
-            &self.graph,
-            &input_sizes,
-            &HashMap::new(),
-            inputs,
-        )?;
+        let plan = Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), inputs)?;
 
         // Reset values and reload from new plan
         self.values.clear();

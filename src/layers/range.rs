@@ -1,6 +1,7 @@
-use anyhow::Context;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::DType;
 use crate::Result;

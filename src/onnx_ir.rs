@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-
 use crate::DType;
 use crate::Dims;
 use crate::Result;
@@ -126,7 +125,10 @@ pub fn convert_graph(graph: &crate::onnx::GraphProto) -> Result<Graph> {
     convert_graph_with_opset(graph, 0)
 }
 
-pub fn convert_graph_with_opset(graph: &crate::onnx::GraphProto, opset_version: i64) -> Result<Graph> {
+pub fn convert_graph_with_opset(
+    graph: &crate::onnx::GraphProto,
+    opset_version: i64,
+) -> Result<Graph> {
     let mut initializers = HashMap::new();
     for init in &graph.initializer {
         if !init.name.is_empty() {
@@ -136,11 +138,7 @@ pub fn convert_graph_with_opset(graph: &crate::onnx::GraphProto, opset_version: 
 
     let inputs = graph.input.iter().map(convert_value_info).collect();
     let outputs = graph.output.iter().map(convert_value_info).collect();
-    let nodes = graph
-        .node
-        .iter()
-        .map(convert_node)
-        .collect::<Result<_>>()?;
+    let nodes = graph.node.iter().map(convert_node).collect::<Result<_>>()?;
 
     Ok(Graph {
         nodes,
@@ -166,9 +164,9 @@ fn convert_value_info(vi: &crate::onnx::ValueInfoProto) -> ValueInfo {
                     let mut dims = Dims::new();
                     for d in &s.dim {
                         match &d.value {
-                            Some(
-                                crate::onnx::tensor_shape_proto::dimension::Value::DimValue(v),
-                            ) if *v > 0 => {
+                            Some(crate::onnx::tensor_shape_proto::dimension::Value::DimValue(
+                                v,
+                            )) if *v > 0 => {
                                 dims.push(*v as usize);
                             }
                             _ => dims.push(0),
@@ -189,8 +187,8 @@ fn convert_value_info(vi: &crate::onnx::ValueInfoProto) -> ValueInfo {
 }
 
 fn convert_node(node: &crate::onnx::NodeProto) -> Result<Node> {
-    let op_type = OpType::parse(&node.op_type)
-        .map_err(|s| anyhow::anyhow!("unsupported operator: {s}"))?;
+    let op_type =
+        OpType::parse(&node.op_type).map_err(|s| anyhow::anyhow!("unsupported operator: {s}"))?;
     let attrs = node
         .attribute
         .iter()
@@ -218,9 +216,10 @@ fn convert_attr(attr: &crate::onnx::AttributeProto) -> Result<(String, Attr)> {
             Attr::Tensor(Tensor::from_proto(t)?)
         }
         5 => {
-            let g = attr.g.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("Attribute '{name}' has graph type but no graph")
-            })?;
+            let g = attr
+                .g
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Attribute '{name}' has graph type but no graph"))?;
             Attr::Graph(Box::new(convert_graph(g)?))
         }
         6 => Attr::Floats(attr.floats.clone()),

@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::Dims;
 use crate::Result;
@@ -219,8 +220,7 @@ impl Layer for AveragePool {
                                         && ih - p.p0 < p.h_in
                                         && iw - p.p1 < p.w_in
                                     {
-                                        let idx =
-                                            in_base + (ih - p.p0) * p.w_in + (iw - p.p1);
+                                        let idx = in_base + (ih - p.p0) * p.w_in + (iw - p.p1);
                                         sum += input_f[idx];
                                         valid_count += 1;
                                     }

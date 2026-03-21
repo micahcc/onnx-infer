@@ -1,12 +1,13 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
-use crate::get_tensor;
-use crate::layers::Layer;
 use crate::broadcast_index;
 use crate::broadcast_shape_into;
+use crate::get_tensor;
+use crate::layers::Layer;
 
 pub struct PRelu {
     pub inputs: Vec<String>,

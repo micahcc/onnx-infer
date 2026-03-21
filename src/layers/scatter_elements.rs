@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::DType;
 use crate::Dims;
@@ -125,7 +126,8 @@ impl Layer for ScatterElements {
                         let coord = remaining / p.idx_strides[d];
                         remaining %= p.idx_strides[d];
                         if d == p.axis {
-                            let mut idx = resolve_idx(flat).context("in ScatterElements layer: resolving index")?;
+                            let mut idx = resolve_idx(flat)
+                                .context("in ScatterElements layer: resolving index")?;
                             if idx < 0 {
                                 idx += data.dims[p.axis] as i64;
                             }
@@ -149,7 +151,8 @@ impl Layer for ScatterElements {
                         let coord = remaining / p.idx_strides[d];
                         remaining %= p.idx_strides[d];
                         if d == p.axis {
-                            let mut idx = resolve_idx(flat).context("in ScatterElements layer: resolving index")?;
+                            let mut idx = resolve_idx(flat)
+                                .context("in ScatterElements layer: resolving index")?;
                             if idx < 0 {
                                 idx += data.dims[p.axis] as i64;
                             }

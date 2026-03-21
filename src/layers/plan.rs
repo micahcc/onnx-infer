@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
+
 use crate::DType;
 use crate::Dims;
 use crate::Result;
@@ -88,7 +89,9 @@ use crate::layers::transpose;
 use crate::layers::unary_ops;
 use crate::layers::unsqueeze;
 use crate::layers::where_op;
-use crate::onnx_ir::{Attr, Graph, Node};
+use crate::onnx_ir::Attr;
+use crate::onnx_ir::Graph;
+use crate::onnx_ir::Node;
 
 pub enum PlanNode {
     Single {
@@ -112,10 +115,7 @@ pub struct Plan {
 }
 
 impl Plan {
-    pub fn build(
-        graph: &Graph,
-        input_sizes: &HashMap<String, Dims>,
-    ) -> Result<Self> {
+    pub fn build(graph: &Graph, input_sizes: &HashMap<String, Dims>) -> Result<Self> {
         Self::build_full(graph, input_sizes, &HashMap::new(), &HashMap::new())
     }
 
@@ -254,11 +254,17 @@ impl Plan {
                 }
             } else if matches!(op, OpType::Identity | OpType::Transpose | OpType::Conv) {
                 if let Some(out_name) = out_name {
-                    let missing: Vec<&str> = node.inputs.iter()
+                    let missing: Vec<&str> = node
+                        .inputs
+                        .iter()
                         .filter(|n| !n.is_empty() && !shape_map.contains_key(n.as_str()))
-                        .map(|n| n.as_str()).collect();
+                        .map(|n| n.as_str())
+                        .collect();
                     if !missing.is_empty() {
-                        eprintln!("  shape-miss: {:?} {:?} -> {:?}, missing inputs: {:?}", op, node.name, out_name, missing);
+                        eprintln!(
+                            "  shape-miss: {:?} {:?} -> {:?}, missing inputs: {:?}",
+                            op, node.name, out_name, missing
+                        );
                     }
                 }
             }
@@ -307,22 +313,23 @@ impl Plan {
             // Try to fold Loop ops when all inputs are known
             if op == OpType::Loop {
                 let all_inputs_known = node.inputs.iter().all(|n| {
-                    n.is_empty()
-                        || known_values.contains_key(n)
-                        || initializers.contains_key(n)
+                    n.is_empty() || known_values.contains_key(n) || initializers.contains_key(n)
                 });
 
-
                 if all_inputs_known {
-                    let plan_node =
-                        build_node_with_opset(op, node, modified_inputs.clone(), &shape_map, graph.opset_version)?;
+                    let plan_node = build_node_with_opset(
+                        op,
+                        node,
+                        modified_inputs.clone(),
+                        &shape_map,
+                        graph.opset_version,
+                    )?;
                     if let PlanNode::Loop(mut loop_layer) = plan_node {
                         let mut temp_values: HashMap<String, Tensor> = HashMap::new();
                         for name in &node.inputs {
                             if !name.is_empty() {
-                                if let Some(t) = known_values
-                                    .get(name)
-                                    .or_else(|| initializers.get(name))
+                                if let Some(t) =
+                                    known_values.get(name).or_else(|| initializers.get(name))
                                 {
                                     temp_values.insert(name.clone(), t.clone());
                                 }
@@ -333,10 +340,8 @@ impl Plan {
                             for out_name in &node.outputs {
                                 if !out_name.is_empty() {
                                     if let Some(t) = temp_values.remove(out_name) {
-                                        shape_map
-                                            .insert(out_name.clone(), t.dims.clone());
-                                        initializers
-                                            .insert(out_name.clone(), t.clone());
+                                        shape_map.insert(out_name.clone(), t.dims.clone());
+                                        initializers.insert(out_name.clone(), t.clone());
                                         known_values.insert(out_name.clone(), t);
                                     } else {
                                         folded = false;
@@ -351,7 +356,13 @@ impl Plan {
                 }
             }
 
-            nodes.push(build_node_with_opset(op, node, modified_inputs, &shape_map, graph.opset_version)?);
+            nodes.push(build_node_with_opset(
+                op,
+                node,
+                modified_inputs,
+                &shape_map,
+                graph.opset_version,
+            )?);
         }
 
         // Pre-allocate tensors for all known shapes/types
@@ -526,8 +537,14 @@ pub fn build_node_with_opset(
             _ => anyhow::bail!("Scan: no body graph"),
         };
         let num_scan_inputs = node.attrs.get_int("num_scan_inputs").unwrap_or(0) as usize;
-        let scan_input_directions = node.attrs.get_ints("scan_input_directions").unwrap_or_default();
-        let scan_output_directions = node.attrs.get_ints("scan_output_directions").unwrap_or_default();
+        let scan_input_directions = node
+            .attrs
+            .get_ints("scan_input_directions")
+            .unwrap_or_default();
+        let scan_output_directions = node
+            .attrs
+            .get_ints("scan_output_directions")
+            .unwrap_or_default();
         return Ok(PlanNode::Scan(Box::new(scan::Scan::new(
             inputs,
             node.outputs.clone(),
@@ -602,7 +619,10 @@ pub fn build_node_with_opset(
             input_shapes[1],
         )),
         OpType::RoiAlign => {
-            let mode = node.attrs.get_string("mode").unwrap_or_else(|| "avg".to_string());
+            let mode = node
+                .attrs
+                .get_string("mode")
+                .unwrap_or_else(|| "avg".to_string());
             let oh = node.attrs.get_int("output_height").unwrap_or(1) as usize;
             let ow = node.attrs.get_int("output_width").unwrap_or(1) as usize;
             let sr = node.attrs.get_int("sampling_ratio").unwrap_or(0) as usize;
@@ -612,8 +632,16 @@ pub fn build_node_with_opset(
         OpType::ConstantOfShape => {
             let (fill_f32, fill_i64, dtype) = match node.attrs.get("value") {
                 Some(Attr::Tensor(t)) => match t.dtype() {
-                    DType::Int64 => (0.0, t.ints().unwrap_or(&[]).first().copied().unwrap_or(0), DType::Int64),
-                    _ => (t.floats().unwrap_or(&[]).first().copied().unwrap_or(0.0), 0, DType::Float),
+                    DType::Int64 => (
+                        0.0,
+                        t.ints().unwrap_or(&[]).first().copied().unwrap_or(0),
+                        DType::Int64,
+                    ),
+                    _ => (
+                        t.floats().unwrap_or(&[]).first().copied().unwrap_or(0.0),
+                        0,
+                        DType::Float,
+                    ),
                 },
                 _ => (0.0, 0, DType::Float),
             };
@@ -656,8 +684,14 @@ pub fn build_node_with_opset(
         OpType::Conv => {
             let ks = node.attrs.get_ints("kernel_shape").unwrap_or_default();
             let st = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-            let pa = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
-            let di = node.attrs.get_ints("dilations").unwrap_or_else(|| vec![1, 1]);
+            let pa = node
+                .attrs
+                .get_ints("pads")
+                .unwrap_or_else(|| vec![0, 0, 0, 0]);
+            let di = node
+                .attrs
+                .get_ints("dilations")
+                .unwrap_or_else(|| vec![1, 1]);
             let gr = node.attrs.get_int("group").unwrap_or(1) as usize;
             let ap = node.attrs.get_string("auto_pad").unwrap_or_default();
             Box::new(conv::Conv::new(
@@ -689,7 +723,10 @@ pub fn build_node_with_opset(
         OpType::MaxPool => {
             let ks = node.attrs.get_ints("kernel_shape").unwrap_or_default();
             let st = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-            let pa = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+            let pa = node
+                .attrs
+                .get_ints("pads")
+                .unwrap_or_else(|| vec![0, 0, 0, 0]);
             let ap = node.attrs.get_string("auto_pad").unwrap_or_default();
             Box::new(maxpool::MaxPool::new(
                 inputs,
@@ -703,7 +740,10 @@ pub fn build_node_with_opset(
         OpType::AveragePool => {
             let ks = node.attrs.get_ints("kernel_shape").unwrap_or_default();
             let st = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-            let pa = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+            let pa = node
+                .attrs
+                .get_ints("pads")
+                .unwrap_or_else(|| vec![0, 0, 0, 0]);
             let ap = node.attrs.get_string("auto_pad").unwrap_or_default();
             let cip = node.attrs.get_int("count_include_pad").unwrap_or(0);
             Box::new(average_pool::AveragePool::new(
@@ -746,7 +786,10 @@ pub fn build_node_with_opset(
             node.attrs.get_int("to").unwrap_or(1),
         )),
         OpType::Transpose => {
-            let perm = node.attrs.get_ints("perm").map(|p| p.iter().map(|&v| v as usize).collect());
+            let perm = node
+                .attrs
+                .get_ints("perm")
+                .map(|p| p.iter().map(|&v| v as usize).collect());
             Box::new(transpose::Transpose::new(inputs, perm, input_shapes[0]))
         }
         OpType::Squeeze => Box::new(squeeze::Squeeze::new(
@@ -769,24 +812,23 @@ pub fn build_node_with_opset(
         }
         OpType::Tile => Box::new(tile::Tile::new(inputs)),
         OpType::Resize => {
-            let ct = node.attrs.get_string("coordinate_transformation_mode").unwrap_or_default();
+            let ct = node
+                .attrs
+                .get_string("coordinate_transformation_mode")
+                .unwrap_or_default();
             let nm = node.attrs.get_string("nearest_mode").unwrap_or_default();
             Box::new(resize::Resize::new(inputs, &ct, &nm))
         }
         OpType::Upsample => {
-            let mode = node.attrs.get_string("mode").unwrap_or_else(|| "nearest".to_string());
+            let mode = node
+                .attrs
+                .get_string("mode")
+                .unwrap_or_else(|| "nearest".to_string());
             let nm = if mode == "nearest" { "floor" } else { "" };
-            let resize_inputs = vec![
-                inputs[0].clone(),
-                String::new(),
-                inputs[1].clone(),
-            ];
+            let resize_inputs = vec![inputs[0].clone(), String::new(), inputs[1].clone()];
             Box::new(resize::Resize::new(resize_inputs, "asymmetric", nm))
         }
-        OpType::Reshape => Box::new(reshape::Reshape::new(
-            inputs,
-            node.attrs.get_ints("shape"),
-        )),
+        OpType::Reshape => Box::new(reshape::Reshape::new(inputs, node.attrs.get_ints("shape"))),
         OpType::Constant => {
             let tensor = match node.attrs.get("value") {
                 Some(Attr::Tensor(t)) => t.clone(),
@@ -815,8 +857,14 @@ pub fn build_node_with_opset(
             }
             let ks = node.attrs.get_ints("kernel_shape").unwrap_or_default();
             let st = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-            let pa = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
-            let di = node.attrs.get_ints("dilations").unwrap_or_else(|| vec![1, 1]);
+            let pa = node
+                .attrs
+                .get_ints("pads")
+                .unwrap_or_else(|| vec![0, 0, 0, 0]);
+            let di = node
+                .attrs
+                .get_ints("dilations")
+                .unwrap_or_else(|| vec![1, 1]);
             let gr = node.attrs.get_int("group").unwrap_or(1) as usize;
             let ap = node.attrs.get_string("auto_pad").unwrap_or_default();
             let inner = conv::Conv::new(
@@ -1015,8 +1063,14 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
             _ => anyhow::bail!("Scan: no body graph"),
         };
         let num_scan_inputs = node.attrs.get_int("num_scan_inputs").unwrap_or(0) as usize;
-        let scan_input_directions = node.attrs.get_ints("scan_input_directions").unwrap_or_default();
-        let scan_output_directions = node.attrs.get_ints("scan_output_directions").unwrap_or_default();
+        let scan_input_directions = node
+            .attrs
+            .get_ints("scan_input_directions")
+            .unwrap_or_default();
+        let scan_output_directions = node
+            .attrs
+            .get_ints("scan_output_directions")
+            .unwrap_or_default();
         let mut scan_layer = scan::Scan::new(
             node.inputs.clone(),
             node.outputs.clone(),

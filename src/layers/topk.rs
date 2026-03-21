@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
@@ -47,7 +48,8 @@ impl TopK {
 
         // Copy input data to local buffer to release borrow on values
         self.in_buf.clear();
-        self.in_buf.extend_from_slice(input.floats().context("in TopK layer")?);
+        self.in_buf
+            .extend_from_slice(input.floats().context("in TopK layer")?);
 
         let mut out_dims = [0usize; 8];
         out_dims[..in_rank].copy_from_slice(&in_dims[..in_rank]);

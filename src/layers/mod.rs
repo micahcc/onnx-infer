@@ -46,11 +46,11 @@ pub mod nonzero;
 pub mod not;
 pub mod op_type;
 pub mod plan;
+pub mod prelu;
 pub mod qlinear_add;
 pub mod qlinear_conv;
 pub mod qlinear_global_avg_pool;
 pub mod qlinear_matmul;
-pub mod prelu;
 pub mod quantize_linear;
 pub mod range;
 pub mod reduce_max;
@@ -240,11 +240,21 @@ fn binary_op_i64(
     op: fn(f32, f32) -> f32,
 ) -> Result<()> {
     let a_vals: Vec<f32> = match a.dtype() {
-        crate::DType::Int64 => a.ints().context("in binary_op")?.iter().map(|&v| v as f32).collect(),
+        crate::DType::Int64 => a
+            .ints()
+            .context("in binary_op")?
+            .iter()
+            .map(|&v| v as f32)
+            .collect(),
         _ => a.floats().context("in binary_op")?.to_vec(),
     };
     let b_vals: Vec<f32> = match b.dtype() {
-        crate::DType::Int64 => b.ints().context("in binary_op")?.iter().map(|&v| v as f32).collect(),
+        crate::DType::Int64 => b
+            .ints()
+            .context("in binary_op")?
+            .iter()
+            .map(|&v| v as f32)
+            .collect(),
         _ => b.floats().context("in binary_op")?.to_vec(),
     };
     let ndim = a.dims.len().max(b.dims.len());

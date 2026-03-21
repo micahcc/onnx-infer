@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
@@ -27,20 +28,42 @@ impl QLinearAdd {
 impl Layer for QLinearAdd {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let x_quant = get_tensor(values, &self.inputs[0])?;
-        let x_scale = get_tensor(values, &self.inputs[1])?.floats().context("in QLinearAdd layer")?[0];
-        let x_zp = get_tensor(values, &self.inputs[2])?.floats().context("in QLinearAdd layer")?[0];
+        let x_scale = get_tensor(values, &self.inputs[1])?
+            .floats()
+            .context("in QLinearAdd layer")?[0];
+        let x_zp = get_tensor(values, &self.inputs[2])?
+            .floats()
+            .context("in QLinearAdd layer")?[0];
         let y_quant = get_tensor(values, &self.inputs[3])?;
-        let y_scale = get_tensor(values, &self.inputs[4])?.floats().context("in QLinearAdd layer")?[0];
-        let y_zp = get_tensor(values, &self.inputs[5])?.floats().context("in QLinearAdd layer")?[0];
-        let z_scale = get_tensor(values, &self.inputs[6])?.floats().context("in QLinearAdd layer")?[0];
-        let z_zp = get_tensor(values, &self.inputs[7])?.floats().context("in QLinearAdd layer")?[0];
+        let y_scale = get_tensor(values, &self.inputs[4])?
+            .floats()
+            .context("in QLinearAdd layer")?[0];
+        let y_zp = get_tensor(values, &self.inputs[5])?
+            .floats()
+            .context("in QLinearAdd layer")?[0];
+        let z_scale = get_tensor(values, &self.inputs[6])?
+            .floats()
+            .context("in QLinearAdd layer")?[0];
+        let z_zp = get_tensor(values, &self.inputs[7])?
+            .floats()
+            .context("in QLinearAdd layer")?[0];
 
         let x_numel = x_quant.numel();
         let y_numel = y_quant.numel();
         self.x_scratch.resize(x_numel, 0.0);
         self.y_scratch.resize(y_numel, 0.0);
-        crate::layers::dequantize_into(x_quant.floats().context("in QLinearAdd layer")?, x_scale, x_zp, &mut self.x_scratch);
-        crate::layers::dequantize_into(y_quant.floats().context("in QLinearAdd layer")?, y_scale, y_zp, &mut self.y_scratch);
+        crate::layers::dequantize_into(
+            x_quant.floats().context("in QLinearAdd layer")?,
+            x_scale,
+            x_zp,
+            &mut self.x_scratch,
+        );
+        crate::layers::dequantize_into(
+            y_quant.floats().context("in QLinearAdd layer")?,
+            y_scale,
+            y_zp,
+            &mut self.y_scratch,
+        );
 
         let ndim = x_quant.dims.len().max(y_quant.dims.len());
         let mut out_shape = [0usize; 8];

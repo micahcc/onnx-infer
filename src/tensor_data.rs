@@ -1,8 +1,8 @@
+use anyhow::Context;
 use prost::Message;
 use smallvec::SmallVec;
 
 use crate::DType;
-use anyhow::Context;
 use crate::ONNX_DOUBLE;
 use crate::ONNX_INT8;
 use crate::ONNX_INT32;

@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
@@ -31,13 +32,22 @@ impl QLinearMatMul {
 impl Layer for QLinearMatMul {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let a_quant = get_tensor(values, &self.inputs[0])?;
-        let a_scale = get_tensor(values, &self.inputs[1])?.floats().context("in QLinearMatMul layer")?[0];
-        let a_zp = get_tensor(values, &self.inputs[2])?.floats().context("in QLinearMatMul layer")?[0].round() as i16;
+        let a_scale = get_tensor(values, &self.inputs[1])?
+            .floats()
+            .context("in QLinearMatMul layer")?[0];
+        let a_zp = get_tensor(values, &self.inputs[2])?
+            .floats()
+            .context("in QLinearMatMul layer")?[0]
+            .round() as i16;
         let b_quant = get_tensor(values, &self.inputs[3])?;
         let b_scale_t = get_tensor(values, &self.inputs[4])?;
         let b_zp_t = get_tensor(values, &self.inputs[5])?;
-        let y_scale = get_tensor(values, &self.inputs[6])?.floats().context("in QLinearMatMul layer")?[0];
-        let y_zp = get_tensor(values, &self.inputs[7])?.floats().context("in QLinearMatMul layer")?[0];
+        let y_scale = get_tensor(values, &self.inputs[6])?
+            .floats()
+            .context("in QLinearMatMul layer")?[0];
+        let y_zp = get_tensor(values, &self.inputs[7])?
+            .floats()
+            .context("in QLinearMatMul layer")?[0];
 
         // Resolve matmul shapes
         use crate::Dims;
@@ -73,7 +83,11 @@ impl Layer for QLinearMatMul {
             for row in 0..rows {
                 for col in 0..n {
                     let idx = row * n + col;
-                    self.b_buf[idx] = b_f[idx] as i16 - b_zp_t.f32_at(col).context("in QLinearMatMul layer")?.round() as i16;
+                    self.b_buf[idx] = b_f[idx] as i16
+                        - b_zp_t
+                            .f32_at(col)
+                            .context("in QLinearMatMul layer")?
+                            .round() as i16;
                 }
             }
         } else {

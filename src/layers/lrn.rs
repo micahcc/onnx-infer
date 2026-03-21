@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
@@ -32,7 +33,10 @@ impl Layer for Lrn {
         let inp = input.floats().context("in Lrn layer")?;
         let dims = &input.dims;
 
-        anyhow::ensure!(dims.len() >= 2, "Lrn: input must have at least 2 dimensions");
+        anyhow::ensure!(
+            dims.len() >= 2,
+            "Lrn: input must have at least 2 dimensions"
+        );
 
         let n = dims[0];
         let c = dims[1];

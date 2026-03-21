@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::DType;
 use crate::Result;
@@ -26,7 +27,8 @@ impl Layer for Compress {
         // Get boolean condition indices
         let cond_true: Vec<usize> = match condition.dtype() {
             DType::Int64 => condition
-                .ints().context("in Compress layer")?
+                .ints()
+                .context("in Compress layer")?
                 .iter()
                 .enumerate()
                 .filter(|(_, v)| **v != 0)
@@ -34,7 +36,8 @@ impl Layer for Compress {
                 .collect(),
             DType::String => unreachable!("strings not supported"),
             DType::Float => condition
-                .floats().context("in Compress layer")?
+                .floats()
+                .context("in Compress layer")?
                 .iter()
                 .enumerate()
                 .filter(|(_, v)| **v != 0.0)

@@ -121,7 +121,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Output '{name}': shape {:?}", tensor.dims);
         match tensor.dtype() {
             onnx_infer::DType::Float => {
-                let floats = tensor.floats().expect("output tensor marked as Float but data is not f32");
+                let floats = tensor
+                    .floats()
+                    .expect("output tensor marked as Float but data is not f32");
                 if floats.len() <= 100 {
                     println!("  values: {floats:?}");
                 } else {
@@ -142,7 +144,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             onnx_infer::DType::Int64 => {
-                let ints = tensor.ints().expect("output tensor marked as Int64 but data is not i64");
+                let ints = tensor
+                    .ints()
+                    .expect("output tensor marked as Int64 but data is not i64");
                 if ints.len() <= 100 {
                     println!("  values: {ints:?}");
                 } else {

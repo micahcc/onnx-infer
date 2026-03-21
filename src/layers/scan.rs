@@ -1,6 +1,7 @@
-use anyhow::Context;
 use std::collections::HashMap;
 use std::collections::HashSet;
+
+use anyhow::Context;
 
 use crate::DType;
 use crate::Dims;
@@ -323,8 +324,12 @@ impl Scan {
                         accum_elem_dims[j].extend_from_slice(&t.dims);
                     }
                     match t.dtype() {
-                        DType::Float => accum_f32[j].extend_from_slice(t.floats().context("in Scan layer")?),
-                        DType::Int64 => accum_i64[j].extend_from_slice(t.ints().context("in Scan layer")?),
+                        DType::Float => {
+                            accum_f32[j].extend_from_slice(t.floats().context("in Scan layer")?)
+                        }
+                        DType::Int64 => {
+                            accum_i64[j].extend_from_slice(t.ints().context("in Scan layer")?)
+                        }
                         DType::String => unreachable!("strings not supported"),
                     }
                 }

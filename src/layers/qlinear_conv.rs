@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
@@ -80,13 +81,21 @@ fn im2col_i16(
 impl Layer for QLinearConv {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
         let x_quant = get_tensor(values, &self.inputs[0])?;
-        let x_scale = get_tensor(values, &self.inputs[1])?.floats().context("in QLinearConv layer")?[0];
-        let x_zp = get_tensor(values, &self.inputs[2])?.floats().context("in QLinearConv layer")?[0];
+        let x_scale = get_tensor(values, &self.inputs[1])?
+            .floats()
+            .context("in QLinearConv layer")?[0];
+        let x_zp = get_tensor(values, &self.inputs[2])?
+            .floats()
+            .context("in QLinearConv layer")?[0];
         let w_quant = get_tensor(values, &self.inputs[3])?;
         let w_scale_t = get_tensor(values, &self.inputs[4])?;
         let w_zp_t = get_tensor(values, &self.inputs[5])?;
-        let y_scale = get_tensor(values, &self.inputs[6])?.floats().context("in QLinearConv layer")?[0];
-        let y_zp = get_tensor(values, &self.inputs[7])?.floats().context("in QLinearConv layer")?[0];
+        let y_scale = get_tensor(values, &self.inputs[6])?
+            .floats()
+            .context("in QLinearConv layer")?[0];
+        let y_zp = get_tensor(values, &self.inputs[7])?
+            .floats()
+            .context("in QLinearConv layer")?[0];
         let bias = if self.inputs.len() > 8 && !self.inputs[8].is_empty() {
             Some(get_tensor(values, &self.inputs[8])?)
         } else {

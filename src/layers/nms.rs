@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
@@ -29,17 +30,23 @@ impl Layer for Nms {
         let boxes = get_tensor(values, &self.inputs[0])?;
         let scores = get_tensor(values, &self.inputs[1])?;
         let max_output = if self.inputs.len() > 2 && !self.inputs[2].is_empty() {
-            get_tensor(values, &self.inputs[2])?.i64_at(0).context("in NMS layer")? as usize
+            get_tensor(values, &self.inputs[2])?
+                .i64_at(0)
+                .context("in NMS layer")? as usize
         } else {
             0
         };
         let iou_threshold = if self.inputs.len() > 3 && !self.inputs[3].is_empty() {
-            get_tensor(values, &self.inputs[3])?.floats().context("in NMS layer")?[0]
+            get_tensor(values, &self.inputs[3])?
+                .floats()
+                .context("in NMS layer")?[0]
         } else {
             0.0
         };
         let score_threshold = if self.inputs.len() > 4 && !self.inputs[4].is_empty() {
-            get_tensor(values, &self.inputs[4])?.floats().context("in NMS layer")?[0]
+            get_tensor(values, &self.inputs[4])?
+                .floats()
+                .context("in NMS layer")?[0]
         } else {
             f32::NEG_INFINITY
         };

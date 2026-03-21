@@ -85,7 +85,9 @@ fn run_fixture(base: &Path, model_file: &str, test_set: usize) {
     assert_eq!(output.dims, expected.dims);
 
     let out_data = output.floats().expect("output should be float tensor");
-    let exp_data = expected.floats().expect("expected output should be float tensor");
+    let exp_data = expected
+        .floats()
+        .expect("expected output should be float tensor");
     let mut max_err: f32 = 0.0;
     let mut max_err_idx = 0;
     for (i, (got, want)) in out_data.iter().zip(exp_data.iter()).enumerate() {
@@ -140,7 +142,9 @@ fn run_fixture_argmax(base: &Path, model_file: &str, test_set: usize) {
     assert_eq!(output.dims, expected.dims);
 
     let out_data = output.floats().expect("output should be float tensor");
-    let exp_data = expected.floats().expect("expected output should be float tensor");
+    let exp_data = expected
+        .floats()
+        .expect("expected output should be float tensor");
 
     let got_class = out_data
         .iter()
@@ -191,7 +195,11 @@ fn run_quantized_fixture_with_tol(
     }
 
     let got_probs = softmax(output.floats().expect("output should be float tensor"));
-    let want_probs = softmax(expected.floats().expect("expected output should be float tensor"));
+    let want_probs = softmax(
+        expected
+            .floats()
+            .expect("expected output should be float tensor"),
+    );
 
     let mut max_abs_err: f32 = 0.0;
     for (g, w) in got_probs.iter().zip(want_probs.iter()) {
@@ -247,7 +255,9 @@ fn run_multi_io_fixture_with_tol(base: &Path, model_file: &str, test_set: usize,
             match (output.dtype(), expected.dtype()) {
                 (DType::Float, DType::Float) => {
                     let got = output.floats().expect("output should be float tensor");
-                    let want = expected.floats().expect("expected output should be float tensor");
+                    let want = expected
+                        .floats()
+                        .expect("expected output should be float tensor");
                     for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
                         assert!(
                             (g - w).abs() < tol || (g - w).abs() / w.abs().max(1e-6) < tol,
@@ -257,14 +267,18 @@ fn run_multi_io_fixture_with_tol(base: &Path, model_file: &str, test_set: usize,
                 }
                 (DType::Int64, DType::Int64) => {
                     let got = output.ints().expect("output should be int64 tensor");
-                    let want = expected.ints().expect("expected output should be int64 tensor");
+                    let want = expected
+                        .ints()
+                        .expect("expected output should be int64 tensor");
                     for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
                         assert_eq!(g, w, "output {name}[{j}]: got {g}, want {w}");
                     }
                 }
                 (DType::Float, DType::Int64) => {
                     let got = output.floats().expect("output should be float tensor");
-                    let want = expected.ints().expect("expected output should be int64 tensor");
+                    let want = expected
+                        .ints()
+                        .expect("expected output should be int64 tensor");
                     for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
                         assert!(
                             (*g as i64 - w).abs() <= 1,
@@ -274,7 +288,9 @@ fn run_multi_io_fixture_with_tol(base: &Path, model_file: &str, test_set: usize,
                 }
                 (DType::Int64, DType::Float) => {
                     let got = output.ints().expect("output should be int64 tensor");
-                    let want = expected.floats().expect("expected output should be float tensor");
+                    let want = expected
+                        .floats()
+                        .expect("expected output should be float tensor");
                     for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
                         assert!(
                             (*g as f32 - w).abs() < tol,
@@ -456,7 +472,11 @@ fn test_densenet_12_set_0() {
 #[test]
 fn test_efficientnet_lite4_11_set_0() {
     let _t = setup_tracing("efficientnet_lite4_11_set_0");
-    run_fixture(&fixture("efficientnet-lite4-11"), "efficientnet-lite4.onnx", 0);
+    run_fixture(
+        &fixture("efficientnet-lite4-11"),
+        "efficientnet-lite4.onnx",
+        0,
+    );
 }
 
 // --- GoogLeNet models ---

@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::DType;
 use crate::Result;
@@ -40,7 +41,12 @@ impl Layer for ReduceMean {
             let axes_t = get_tensor(values, &self.inputs[1])?;
             Some(match axes_t.dtype() {
                 DType::Int64 => axes_t.ints().context("in ReduceMean layer")?.to_vec(),
-                DType::Float => axes_t.floats().context("in ReduceMean layer")?.iter().map(|&v| v as i64).collect(),
+                DType::Float => axes_t
+                    .floats()
+                    .context("in ReduceMean layer")?
+                    .iter()
+                    .map(|&v| v as i64)
+                    .collect(),
                 DType::String => unreachable!("strings not supported"),
             })
         } else {

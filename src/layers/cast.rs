@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::DType;
 use crate::Result;
@@ -32,7 +33,10 @@ impl Layer for Cast {
                 match input.dtype() {
                     DType::Int64 => buf.copy_from_slice(input.ints().context("in Cast layer")?),
                     DType::Float => {
-                        for (o, &v) in buf.iter_mut().zip(input.floats().context("in Cast layer")?.iter()) {
+                        for (o, &v) in buf
+                            .iter_mut()
+                            .zip(input.floats().context("in Cast layer")?.iter())
+                        {
                             *o = v as i64;
                         }
                     }
@@ -45,7 +49,10 @@ impl Layer for Cast {
                 match input.dtype() {
                     DType::Float => buf.copy_from_slice(input.floats().context("in Cast layer")?),
                     DType::Int64 => {
-                        for (o, &v) in buf.iter_mut().zip(input.ints().context("in Cast layer")?.iter()) {
+                        for (o, &v) in buf
+                            .iter_mut()
+                            .zip(input.ints().context("in Cast layer")?.iter())
+                        {
                             *o = v as f32;
                         }
                     }

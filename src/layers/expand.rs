@@ -1,5 +1,6 @@
-use anyhow::Context;
 use std::collections::HashMap;
+
+use anyhow::Context;
 
 use crate::DType;
 use crate::Result;
@@ -28,12 +29,22 @@ impl Layer for Expand {
         let target_len = shape_tensor.numel();
         match shape_tensor.dtype() {
             DType::Int64 => {
-                for (i, &v) in shape_tensor.ints().context("in Expand layer")?.iter().enumerate() {
+                for (i, &v) in shape_tensor
+                    .ints()
+                    .context("in Expand layer")?
+                    .iter()
+                    .enumerate()
+                {
                     target[i] = v as usize;
                 }
             }
             DType::Float => {
-                for (i, &v) in shape_tensor.floats().context("in Expand layer")?.iter().enumerate() {
+                for (i, &v) in shape_tensor
+                    .floats()
+                    .context("in Expand layer")?
+                    .iter()
+                    .enumerate()
+                {
                     target[i] = v as usize;
                 }
             }

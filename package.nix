@@ -4,6 +4,10 @@
   rustPlatform,
   flakeInputs,
   rustPackages,
+  rustfmt,
+  cargo,
+  rustc,
+  clippy,
 }:
 let
   pname = "onnx-infer";
@@ -17,9 +21,10 @@ rustPlatform.buildRustPackage {
   strictDeps = true;
 
   nativeBuildInputs = [
-    rustPlatform.rust.cargo
-    rustPlatform.rust.rustc
-    rustPackages.clippy
+    cargo
+    rustc
+    clippy
+    (rustfmt.override { asNightly = true; })
   ];
 
   cargoLock.lockFile = "${flakeInputs.${pname}}/Cargo.lock";
