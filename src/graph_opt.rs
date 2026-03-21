@@ -1,10 +1,14 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
 
 use crate::Tensor;
 use crate::dims;
 use crate::layers::OpType;
-use crate::onnx_ir::{Attr, Attrs, Graph, Node};
+use crate::onnx_ir::Attr;
+use crate::onnx_ir::Attrs;
+use crate::onnx_ir::Graph;
+use crate::onnx_ir::Node;
 
 const NCHW_TO_NHWC: [i64; 4] = [0, 2, 3, 1];
 const NHWC_TO_NCHW: [i64; 4] = [0, 3, 1, 2];
@@ -29,8 +33,7 @@ fn get_transpose_perm(node: &Node) -> Option<Vec<i64>> {
 }
 
 fn are_inverse_perms(a: &[i64], b: &[i64]) -> bool {
-    (is_nchw_to_nhwc(a) && is_nhwc_to_nchw(b))
-        || (is_nhwc_to_nchw(a) && is_nchw_to_nhwc(b))
+    (is_nchw_to_nhwc(a) && is_nhwc_to_nchw(b)) || (is_nhwc_to_nchw(a) && is_nchw_to_nhwc(b))
 }
 
 /// Ops that require NHWC layout (spatial 2D ops).
@@ -451,7 +454,7 @@ fn push_transposes_through_binary(graph: &mut Graph, counter: &mut usize) -> boo
         }
     }
 
-    for (binary_idx, perm) in moves {
+    if let Some((binary_idx, perm)) = moves.into_iter().next() {
         let node = &graph.nodes[binary_idx];
         let input0 = node.inputs[0].clone();
         let input1 = node.inputs[1].clone();
@@ -492,8 +495,6 @@ fn push_transposes_through_binary(graph: &mut Graph, counter: &mut usize) -> boo
         graph.nodes.insert(insert_pos, t);
 
         changed = true;
-        // Only do one per pass to avoid index invalidation
-        break;
     }
 
     changed
@@ -582,11 +583,11 @@ fn fold_batchnorm_into_conv(graph: &mut Graph) {
         let w_dims = weight.dims.clone();
         let elems_per_filter = w_f.len() / c_out;
         let mut new_w = w_f.to_vec();
-        for c in 0..c_out {
+        for (c, &s) in scale.iter().enumerate() {
             let start = c * elems_per_filter;
             let end = start + elems_per_filter;
             for v in &mut new_w[start..end] {
-                *v *= scale[c];
+                *v *= s;
             }
         }
 
@@ -609,9 +610,7 @@ fn fold_batchnorm_into_conv(graph: &mut Graph) {
 
         // Update initializers
         let new_w_tensor = Tensor::new(w_dims, new_w);
-        graph
-            .initializers
-            .insert(weight_name.clone(), new_w_tensor);
+        graph.initializers.insert(weight_name.clone(), new_w_tensor);
 
         let fused_bias_name = if bias_name.is_empty() {
             let name = format!("{weight_name}__fused_bias");
@@ -627,9 +626,7 @@ fn fold_batchnorm_into_conv(graph: &mut Graph) {
         };
 
         let bias_tensor = Tensor::new(dims![c_out], new_bias);
-        graph
-            .initializers
-            .insert(fused_bias_name, bias_tensor);
+        graph.initializers.insert(fused_bias_name, bias_tensor);
 
         // Rewire: conv now produces BN's output directly
         let bn_output = graph.nodes[bn_idx].outputs[0].clone();
@@ -746,7 +743,12 @@ pub fn dump(graph: &Graph) -> String {
                 )
             })
             .unwrap_or_else(|| "?".to_string());
-        writeln!(out, "INPUT: {} {:?} {}", input.name, input.elem_type, shape_str).unwrap();
+        writeln!(
+            out,
+            "INPUT: {} {:?} {}",
+            input.name, input.elem_type, shape_str
+        )
+        .unwrap();
     }
 
     // Show graph outputs
@@ -779,7 +781,12 @@ pub fn dump(graph: &Graph) -> String {
             }
         }
 
-        writeln!(out, "{i:4}: {outputs_str} = {:?}({inputs_str}){extra}", node.op_type).unwrap();
+        writeln!(
+            out,
+            "{i:4}: {outputs_str} = {:?}({inputs_str}){extra}",
+            node.op_type
+        )
+        .unwrap();
     }
 
     // Count transpose nodes
@@ -811,7 +818,8 @@ pub fn dump(graph: &Graph) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::onnx_ir::{ElemType, ValueInfo};
+    use crate::onnx_ir::ElemType;
+    use crate::onnx_ir::ValueInfo;
 
     fn make_simple_node(op: OpType, inputs: &[&str], outputs: &[&str]) -> Node {
         Node {
@@ -831,11 +839,7 @@ mod tests {
         Node {
             op_type: OpType::Conv,
             name: format!("conv_{output}"),
-            inputs: vec![
-                input.to_string(),
-                weight.to_string(),
-                bias.to_string(),
-            ],
+            inputs: vec![input.to_string(), weight.to_string(), bias.to_string()],
             outputs: vec![output.to_string()],
             attrs: Attrs(attrs),
         }
@@ -920,8 +924,13 @@ mod tests {
         );
 
         // Add weight initializer
-        graph.initializers.insert("W".to_string(), Tensor::new(dims![3, 3, 3, 3], vec![0.0; 81]));
-        graph.initializers.insert("B".to_string(), Tensor::new(dims![3], vec![0.0; 3]));
+        graph.initializers.insert(
+            "W".to_string(),
+            Tensor::new(dims![3, 3, 3, 3], vec![0.0; 81]),
+        );
+        graph
+            .initializers
+            .insert("B".to_string(), Tensor::new(dims![3], vec![0.0; 3]));
 
         let before = dump(&graph);
         optimize(&mut graph);
@@ -937,7 +946,10 @@ mod tests {
             .filter(|n| n.op_type == OpType::Transpose)
             .count();
         // We expect: 1 NCHW→NHWC at input, 1 NHWC→NCHW at output (pushed past Relu)
-        assert_eq!(transpose_count, 2, "Expected 2 transposes, got {transpose_count}");
+        assert_eq!(
+            transpose_count, 2,
+            "Expected 2 transposes, got {transpose_count}"
+        );
     }
 
     #[test]
@@ -975,7 +987,10 @@ mod tests {
             .count();
         // We expect: 1 NCHW→NHWC at entry, Conv, Relu, Conv, 1 NHWC→NCHW at exit
         // The pair in the middle should have been eliminated
-        assert_eq!(transpose_count, 2, "Expected 2 transposes, got {transpose_count}");
+        assert_eq!(
+            transpose_count, 2,
+            "Expected 2 transposes, got {transpose_count}"
+        );
     }
 
     #[test]
@@ -984,17 +999,19 @@ mod tests {
         let (bn, bn_inits) = make_bn_node("conv_out", "bn_out", c);
 
         let mut graph = make_graph(
-            vec![
-                make_conv_node("input", "W", "B", "conv_out"),
-                bn,
-            ],
+            vec![make_conv_node("input", "W", "B", "conv_out"), bn],
             vec!["input"],
             vec!["bn_out"],
             bn_inits,
         );
 
-        graph.initializers.insert("W".to_string(), Tensor::new(dims![3, 3, 3, 3], vec![1.0; 81]));
-        graph.initializers.insert("B".to_string(), Tensor::new(dims![3], vec![0.5; 3]));
+        graph.initializers.insert(
+            "W".to_string(),
+            Tensor::new(dims![3, 3, 3, 3], vec![1.0; 81]),
+        );
+        graph
+            .initializers
+            .insert("B".to_string(), Tensor::new(dims![3], vec![0.5; 3]));
 
         optimize(&mut graph);
 

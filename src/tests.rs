@@ -308,7 +308,8 @@ fn run_multi_io_fixture_with_tol(base: &Path, model_file: &str, test_set: usize,
 
 fn run_fixture_graphopt(base: &Path, model_file: &str, test_set: usize) {
     let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
-    let mut engine = InferenceEngine::with_graph_opt(&model_bytes).expect("load model with graph opt");
+    let mut engine =
+        InferenceEngine::with_graph_opt(&model_bytes).expect("load model with graph opt");
 
     let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
     let graph = model.graph.as_ref().expect("model has no graph");
@@ -353,9 +354,15 @@ fn run_multi_io_fixture_graphopt(base: &Path, model_file: &str, test_set: usize)
     run_multi_io_fixture_graphopt_with_tol(base, model_file, test_set, 5e-3);
 }
 
-fn run_multi_io_fixture_graphopt_with_tol(base: &Path, model_file: &str, test_set: usize, tol: f32) {
+fn run_multi_io_fixture_graphopt_with_tol(
+    base: &Path,
+    model_file: &str,
+    test_set: usize,
+    tol: f32,
+) {
     let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
-    let mut engine = InferenceEngine::with_graph_opt(&model_bytes).expect("load model with graph opt");
+    let mut engine =
+        InferenceEngine::with_graph_opt(&model_bytes).expect("load model with graph opt");
 
     let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
     let graph = model.graph.as_ref().expect("model has no graph");
@@ -373,7 +380,10 @@ fn run_multi_io_fixture_graphopt_with_tol(base: &Path, model_file: &str, test_se
                 .outputs
                 .get(name)
                 .unwrap_or_else(|| panic!("missing output {name}"));
-            assert_eq!(output.dims, expected.dims, "[graphopt] shape mismatch for {name}");
+            assert_eq!(
+                output.dims, expected.dims,
+                "[graphopt] shape mismatch for {name}"
+            );
 
             match (output.dtype(), expected.dtype()) {
                 (DType::Float, DType::Float) => {
@@ -429,7 +439,8 @@ fn run_multi_io_fixture_graphopt_with_tol(base: &Path, model_file: &str, test_se
 
 fn run_quantized_fixture_graphopt(base: &Path, model_file: &str, test_set: usize) {
     let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
-    let mut engine = InferenceEngine::with_graph_opt(&model_bytes).expect("load model with graph opt");
+    let mut engine =
+        InferenceEngine::with_graph_opt(&model_bytes).expect("load model with graph opt");
 
     let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
     let graph = model.graph.as_ref().expect("model has no graph");
