@@ -9,6 +9,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct ScatterPrecomp {
     pub axis: usize,
     pub rank: usize,
@@ -16,6 +17,7 @@ pub struct ScatterPrecomp {
     pub idx_strides: [usize; 8],
 }
 
+#[derive(Debug)]
 pub struct ScatterElements {
     pub inputs: Vec<String>,
     pub axis: i64,

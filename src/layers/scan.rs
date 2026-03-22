@@ -37,11 +37,12 @@ impl Scan {
     pub fn new(
         inputs: Vec<String>,
         outputs: Vec<String>,
-        body: Graph,
+        mut body: Graph,
         num_scan_inputs: usize,
         scan_input_directions: Vec<i64>,
         scan_output_directions: Vec<i64>,
     ) -> Self {
+        crate::graph_opt::optimize(&mut body);
         Self {
             inputs,
             outputs,

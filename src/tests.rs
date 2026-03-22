@@ -989,7 +989,6 @@ fn test_fcn_resnet101_11_set_0() {
 // --- Mask R-CNN models ---
 
 #[test]
-#[ignore] // requires ConvTranspose operator
 fn test_mask_rcnn_12_set_0() {
     let _t = setup_tracing("mask_rcnn_12_set_0");
     run_multi_io_fixture(&fixture("MaskRCNN-12"), "MaskRCNN-12.onnx", 0);
@@ -1154,3 +1153,95 @@ fn test_xnnpack_efficientnet_lite4_11_set_0() {
         0,
     );
 }
+
+#[cfg(feature = "xnnpack")]
+fn run_multi_io_fixture_xnnpack(base: &Path, model_file: &str, test_set: usize) {
+    run_multi_io_fixture_xnnpack_with_tol(base, model_file, test_set, 5e-3);
+}
+
+#[cfg(feature = "xnnpack")]
+fn run_multi_io_fixture_xnnpack_with_tol(
+    base: &Path,
+    model_file: &str,
+    test_set: usize,
+    tol: f32,
+) {
+    let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
+    let mut engine =
+        InferenceEngine::with_xnnpack(&model_bytes).expect("load model with xnnpack");
+
+    let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
+    let graph = model.graph.as_ref().expect("model has no graph");
+
+    let test_dir = base.join(format!("test_data_set_{test_set}"));
+    engine.run(inputs).expect("inference with xnnpack");
+
+    for i in 0..graph.output.len() {
+        let pb_path = test_dir.join(format!("output_{i}.pb"));
+        if pb_path.exists() {
+            let expected = Tensor::from_proto_bytes(&fs::read(&pb_path).expect("read output"))
+                .expect("parse output");
+            let name = &graph.output[i].name;
+            let output = engine
+                .outputs
+                .get(name)
+                .unwrap_or_else(|| panic!("[xnnpack] missing output {name}"));
+            assert_eq!(output.dims, expected.dims, "[xnnpack] shape mismatch for {name}");
+
+            match (output.dtype(), expected.dtype()) {
+                (DType::Float, DType::Float) => {
+                    let got = output.floats().expect("output should be float tensor");
+                    let want = expected.floats().expect("expected output should be float tensor");
+                    for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                        assert!(
+                            (g - w).abs() < tol || (g - w).abs() / w.abs().max(1e-6) < tol,
+                            "[xnnpack] output {name}[{j}]: got {g}, want {w}"
+                        );
+                    }
+                }
+                (DType::Int64, DType::Int64) => {
+                    let got = output.ints().expect("output should be int64 tensor");
+                    let want = expected.ints().expect("expected output should be int64 tensor");
+                    for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                        assert_eq!(g, w, "[xnnpack] output {name}[{j}]: got {g}, want {w}");
+                    }
+                }
+                (DType::Int64, DType::Float) => {
+                    let got = output.ints().expect("output should be int64 tensor");
+                    let want = expected.floats().expect("expected output should be float tensor");
+                    for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                        assert!(
+                            (*g as f32 - w).abs() < tol,
+                            "[xnnpack] output {name}[{j}]: got {g}, want {w}"
+                        );
+                    }
+                }
+                _ => panic!(
+                    "[xnnpack] unexpected output dtypes for {name}: got {:?}, want {:?}",
+                    output.dtype(),
+                    expected.dtype()
+                ),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_xnnpack_tinyyolov3_11_set_0() {
+    run_multi_io_fixture_xnnpack(&fixture("tiny-yolov3-11"), "yolov3-tiny.onnx", 0);
+}
+
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_xnnpack_yolov4_11_set_0() {
+    run_multi_io_fixture_xnnpack_with_tol(&fixture("yolov4-11"), "yolov4.onnx", 0, 5e-3);
+}
+
+
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_xnnpack_tinyyolov2_7_set_0() {
+    run_multi_io_fixture_xnnpack(&fixture("tinyyolov2-7"), "model.onnx", 0);
+}
+

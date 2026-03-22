@@ -6,6 +6,7 @@ use crate::get_tensor;
 use crate::layers::Layer;
 
 /// Dropout is a no-op during inference.
+#[derive(Debug)]
 pub struct Dropout {
     pub inputs: Vec<String>,
 }

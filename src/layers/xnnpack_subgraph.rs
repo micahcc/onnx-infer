@@ -1521,10 +1521,11 @@ struct CompiledSubgraph {
     output_names: Vec<String>,
     input_shapes: Vec<Vec<usize>>,
     output_shapes: Vec<Vec<usize>>,
-    input_bufs: Vec<Vec<f32>>,
-    output_bufs: Vec<Vec<f32>>,
     _static_data: Vec<Vec<f32>>,
     _static_data_bytes: Vec<Vec<u8>>,
+    /// Whether xnn_reshape_runtime has been called.
+    /// Only needs to be called once since shapes are static after compilation.
+    is_setup: bool,
 }
 
 unsafe impl Send for CompiledSubgraph {}
@@ -1589,7 +1590,9 @@ impl XnnpackSubgraph {
 
         let compiled = self.compiled.as_ref().unwrap();
 
-        // Verify runtime input shapes match compiled shapes
+        // Verify runtime input shapes match compiled shapes.
+        // On shape mismatch, recompile with the new shapes.
+        let mut needs_recompile = false;
         for (i, name) in compiled.input_names.iter().enumerate() {
             if let Some(tensor) = values.get(name) {
                 if tensor.dtype() != crate::DType::Float {
@@ -1601,57 +1604,84 @@ impl XnnpackSubgraph {
                 let runtime_shape: Vec<usize> = tensor.dims.to_vec();
                 if runtime_shape != compiled.input_shapes[i] {
                     tracing::debug!(
-                        "XNNPACK: shape mismatch for '{name}': runtime {:?} != compiled {:?}",
+                        "XNNPACK: shape changed for '{name}': {:?} -> {:?}, recompiling",
+                        compiled.input_shapes[i],
                         runtime_shape,
-                        compiled.input_shapes[i]
                     );
-                    self.compiled = None;
-                    self.compile_failed = true;
-                    return self.execute_fallback(values);
+                    needs_recompile = true;
+                    break;
                 }
+            }
+        }
+        if needs_recompile {
+            // Drop old runtime and recompile with current shapes
+            self.compiled = None;
+            self.compile_failed = false;
+            // Update shape hints from current runtime values
+            for op in &self.ops {
+                for name in op.inputs.iter().chain(op.outputs.iter()) {
+                    if !name.is_empty() {
+                        if let Some(t) = values.get(name) {
+                            if !t.dims.is_empty() {
+                                self.shape_hints.insert(name.clone(), t.dims.to_vec());
+                            }
+                        }
+                    }
+                }
+            }
+            self.ensure_compiled(values)?;
+            if self.compile_failed {
+                return self.execute_fallback(values);
             }
         }
 
         let compiled = self.compiled.as_mut().unwrap();
+        let xnn_pad = (XNN_EXTRA_BYTES as usize + 3) / 4; // padding in f32 elements
 
+        // Ensure input tensors have XNN_EXTRA_BYTES padding and collect pointers.
+        // Ensure output tensors are pre-allocated with padding.
+        // We call setup every time since tensor buffer pointers may have
+        // changed (other ops may have reallocated them).
         let num_external = compiled.input_names.len() + compiled.output_names.len();
         let mut external_values = Vec::with_capacity(num_external);
 
-        // Copy input data
         for (i, name) in compiled.input_names.iter().enumerate() {
             let tensor = values
-                .get(name)
+                .get_mut(name)
                 .ok_or_else(|| anyhow::anyhow!("XNNPACK: missing input {name}"))?;
-            let src = tensor.floats().context("XNNPACK input")?;
-            let buf = &mut compiled.input_bufs[i];
-            let needed = src.len() + XNN_EXTRA_BYTES as usize / 4;
-            if buf.len() < needed {
-                buf.resize(needed, 0.0);
+            let numel: usize = compiled.input_shapes[i].iter().product();
+            // Ensure buffer has XNN_EXTRA_BYTES padding beyond the actual data
+            let buf = tensor.as_mut_f32(numel + xnn_pad);
+            // Zero the padding (XNNPACK may read it)
+            for v in &mut buf[numel..] {
+                *v = 0.0;
             }
-            buf[..src.len()].copy_from_slice(src);
-
             external_values.push(xnn_external_value {
                 id: i as u32,
                 data: buf.as_mut_ptr() as *mut c_void,
             });
         }
 
-        // Prepare output buffers
-        for (i, _name) in compiled.output_names.iter().enumerate() {
+        for (i, name) in compiled.output_names.iter().enumerate() {
             let ext_id = (compiled.input_names.len() + i) as u32;
-            let buf = &mut compiled.output_bufs[i];
+            let numel: usize = compiled.output_shapes[i].iter().product();
+            let tensor = values.entry(name.clone()).or_default();
+            let buf = tensor.as_mut_f32(numel + xnn_pad);
             external_values.push(xnn_external_value {
                 id: ext_id,
                 data: buf.as_mut_ptr() as *mut c_void,
             });
         }
 
-        let status = unsafe { xnn_reshape_runtime(compiled.runtime) };
-        if status != xnn_status_xnn_status_success {
-            tracing::debug!("XNNPACK: reshape failed: {:?}", status);
-            self.compiled = None;
-            self.compile_failed = true;
-            return self.execute_fallback(values);
+        if !compiled.is_setup {
+            let status = unsafe { xnn_reshape_runtime(compiled.runtime) };
+            if status != xnn_status_xnn_status_success {
+                tracing::debug!("XNNPACK: reshape failed: {:?}", status);
+                self.compiled = None;
+                self.compile_failed = true;
+                return self.execute_fallback(values);
+            }
+            compiled.is_setup = true;
         }
 
         let status = unsafe {
@@ -1676,16 +1706,22 @@ impl XnnpackSubgraph {
             return self.execute_fallback(values);
         }
 
-        // Copy outputs back
+        // Truncate padding from input tensors (restore original length)
+        for (i, name) in compiled.input_names.iter().enumerate() {
+            let numel: usize = compiled.input_shapes[i].iter().product();
+            if let Some(tensor) = values.get_mut(name) {
+                tensor.as_mut_f32(numel).truncate(numel);
+            }
+        }
+
+        // Set correct dims and truncate padding on output tensors
         for (i, name) in compiled.output_names.iter().enumerate() {
             let shape = &compiled.output_shapes[i];
             let numel: usize = shape.iter().product();
-            let buf = &compiled.output_bufs[i];
-
-            let out_tensor = values.entry(name.clone()).or_default();
-            let out_data = out_tensor.as_mut_f32(numel);
-            out_data.copy_from_slice(&buf[..numel]);
-            out_tensor.set_dims(shape);
+            if let Some(tensor) = values.get_mut(name) {
+                tensor.as_mut_f32(numel).truncate(numel);
+                tensor.set_dims(shape);
+            }
         }
 
         Ok(())
@@ -1790,15 +1826,19 @@ impl XnnpackSubgraph {
         }
     }
 
-    fn execute_fallback(&mut self, _values: &mut HashMap<String, Tensor>) -> Result<()> {
-        // CPU fallback cannot safely run graph-opt-transformed ops because
-        // they expect NHWC data layout but CPU layers assume NCHW.
-        anyhow::bail!(
-            "XNNPACK: subgraph compilation/execution failed for {} ops; \
-             CPU fallback is not supported for graph-opt-transformed graphs",
-            self.ops.len()
-        );
+    fn execute_fallback(&mut self, values: &mut HashMap<String, Tensor>) -> Result<()> {
+        // Run each captured op on CPU via the normal plan execution path.
+        // Load subgraph-local initializers into values so ops can find them.
+        for (k, v) in &self.initializers {
+            values.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        for op in &self.ops {
+            super::execute_node(&op.node, values)
+                .with_context(|| format!("XNNPACK CPU fallback: {:?} {:?} -> {:?}", op.op, op.inputs, op.outputs))?;
+        }
+        Ok(())
     }
+
 }
 
 // ---------------------------------------------------------------------------
@@ -1836,7 +1876,6 @@ fn compile_subgraph(
 
     // Define external inputs
     let mut input_shapes = Vec::new();
-    let mut input_bufs = Vec::new();
     for (i, name) in external_inputs.iter().enumerate() {
         let shape = shape_map.get(name).cloned().unwrap_or_default();
         let numel: usize = shape.iter().try_fold(1usize, |a, &d| a.checked_mul(d)).unwrap_or(0);
@@ -1844,13 +1883,11 @@ fn compile_subgraph(
             anyhow::bail!("XNNPACK: input '{name}' has unreasonable shape {shape:?} (numel={numel})");
         }
         builder.define_external_input(name, i as u32, &shape)?;
-        input_bufs.push(vec![0.0f32; numel + XNN_EXTRA_BYTES as usize / 4]);
         input_shapes.push(shape);
     }
 
     // Define external outputs
     let mut output_shapes = Vec::new();
-    let mut output_bufs = Vec::new();
     for (i, name) in required_outputs.iter().enumerate() {
         let shape = shape_map.get(name).cloned().unwrap_or_default();
         let numel: usize = shape.iter().try_fold(1usize, |a, &d| a.checked_mul(d)).unwrap_or(0);
@@ -1859,7 +1896,6 @@ fn compile_subgraph(
         }
         let ext_id = (external_inputs.len() + i) as u32;
         builder.define_external_output(name, ext_id, &shape)?;
-        output_bufs.push(vec![0.0f32; numel + XNN_EXTRA_BYTES as usize / 4]);
         output_shapes.push(shape);
     }
 
@@ -1898,9 +1934,8 @@ fn compile_subgraph(
         output_names: required_outputs.to_vec(),
         input_shapes,
         output_shapes,
-        input_bufs,
-        output_bufs,
         _static_data: builder.static_data,
         _static_data_bytes: builder.static_data_bytes,
+        is_setup: false,
     })
 }

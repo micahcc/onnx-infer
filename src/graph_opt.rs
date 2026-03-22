@@ -38,9 +38,7 @@ fn are_inverse_perms(a: &[i64], b: &[i64]) -> bool {
 
 /// Ops that require NHWC layout (spatial 2D ops).
 fn requires_nhwc(op: OpType) -> bool {
-    // Only spatial ops that XNNPACK can compile. Non-XNNPACK spatial ops
-    // (LRN, BatchNormalization, QLinear*, Upsample) must NOT get NHWC
-    // transposes because their CPU fallback expects NCHW.
+    // Spatial ops whose CPU execution handles NHWC natively.
     // BatchNormalization is folded into Conv by graph_opt before this runs.
     matches!(
         op,
@@ -49,6 +47,9 @@ fn requires_nhwc(op: OpType) -> bool {
             | OpType::AveragePool
             | OpType::GlobalAveragePool
             | OpType::Resize
+            | OpType::Upsample
+            | OpType::QLinearConv
+            | OpType::QLinearGlobalAveragePool
     )
 }
 
@@ -190,8 +191,10 @@ pub fn optimize(graph: &mut Graph) {
     let mut counter = 0usize;
     fold_batchnorm_into_conv(graph);
     insert_layout_transposes(graph, &mut counter);
-    // Run transpose elimination passes iteratively until no more changes
-    for _ in 0..20 {
+
+    // Run transpose elimination passes iteratively until no more changes.
+    // Limit is high because push_unary/push_binary process one move at a time.
+    for _ in 0..200 {
         let changed = eliminate_inverse_transposes(graph)
             | push_transposes_through_unary(graph, &mut counter)
             | push_transposes_through_binary(graph, &mut counter);
@@ -354,7 +357,6 @@ fn eliminate_inverse_transposes(graph: &mut Graph) -> bool {
 /// This lets the transpose reach and cancel with an inverse transpose downstream.
 fn push_transposes_through_unary(graph: &mut Graph, counter: &mut usize) -> bool {
     let consumer_map = build_consumer_map(&graph.nodes);
-    let mut changed = false;
 
     // Collect moves to make (avoid borrowing issues)
     let mut moves: Vec<(usize, usize)> = Vec::new(); // (transpose_idx, consumer_idx)
@@ -397,7 +399,9 @@ fn push_transposes_through_unary(graph: &mut Graph, counter: &mut usize) -> bool
         moves.push((i, consumer_idx));
     }
 
-    for (transpose_idx, consumer_idx) in moves {
+    // Process one move at a time since each remove+insert shifts indices.
+    // The outer loop in optimize() will call us again for the rest.
+    if let Some(&(transpose_idx, consumer_idx)) = moves.first() {
         let transpose_input = graph.nodes[transpose_idx].inputs[0].clone();
         let consumer_output = graph.nodes[consumer_idx].outputs[0].clone();
 
@@ -420,10 +424,10 @@ fn push_transposes_through_unary(graph: &mut Graph, counter: &mut usize) -> bool
             graph.nodes.insert(consumer_idx, t);
         }
 
-        changed = true;
+        true
+    } else {
+        false
     }
-
-    changed
 }
 
 /// Push transposes through binary elementwise ops.

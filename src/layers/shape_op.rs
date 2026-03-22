@@ -5,6 +5,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct Shape {
     pub inputs: Vec<String>,
 }

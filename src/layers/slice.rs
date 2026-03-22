@@ -26,6 +26,7 @@ fn read_i64_into(t: &Tensor, buf: &mut [i64; 8]) -> anyhow::Result<usize> {
     Ok(len)
 }
 
+#[derive(Debug)]
 pub struct Slice {
     pub inputs: Vec<String>,
     // For opset < 10: starts/ends/axes as attributes

@@ -8,6 +8,7 @@ use crate::get_tensor;
 use crate::layers::Layer;
 
 /// Sum: element-wise sum of all input tensors (must be same shape).
+#[derive(Debug)]
 pub struct Sum {
     pub inputs: Vec<String>,
 }

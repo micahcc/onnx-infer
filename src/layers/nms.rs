@@ -7,6 +7,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct Nms {
     pub inputs: Vec<String>,
     selected: Vec<[i64; 3]>,
@@ -57,6 +58,12 @@ impl Layer for Nms {
 
         let boxes_f = boxes.floats().context("in NMS layer")?;
         let scores_f = scores.floats().context("in NMS layer")?;
+
+        eprintln!(
+            "NMS: inputs={:?} boxes={:?} scores={:?} max_output={} iou_threshold={} score_threshold={}",
+            self.inputs, boxes.dims.as_slice(), scores.dims.as_slice(), max_output, iou_threshold, score_threshold,
+        );
+
         self.selected.clear();
 
         for batch in 0..batches {

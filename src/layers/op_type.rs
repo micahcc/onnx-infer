@@ -32,6 +32,7 @@ pub enum OpType {
     Constant,
     ConstantOfShape,
     Conv,
+    ConvTranspose,
     Cos,
     Cosh,
     DequantizeLinear,
@@ -140,6 +141,7 @@ impl OpType {
             "Constant" => Ok(Self::Constant),
             "ConstantOfShape" => Ok(Self::ConstantOfShape),
             "Conv" => Ok(Self::Conv),
+            "ConvTranspose" => Ok(Self::ConvTranspose),
             "Cos" => Ok(Self::Cos),
             "Cosh" => Ok(Self::Cosh),
             "DequantizeLinear" => Ok(Self::DequantizeLinear),
@@ -267,7 +269,7 @@ impl OpType {
             | Self::ThresholdedRelu
             | Self::IsNaN
             | Self::IsInf => &[F],
-            Self::Conv => &[F, F, F],
+            Self::Conv | Self::ConvTranspose => &[F, F, F],
             Self::MatMul => &[F, F],
             Self::Gemm => &[F, F, F],
             Self::BatchNormalization => &[F, F, F, F, F],
@@ -475,6 +477,46 @@ impl OpType {
                 } else {
                     Some(dims![n, c_out, spatial_out[0], spatial_out[1]])
                 }
+            }
+
+            Self::ConvTranspose => {
+                let x = get_shape(0)?;
+                let w = get_shape(1)?;
+                if x.len() != 4 || w.len() != 4 {
+                    return None;
+                }
+                let n = x[0];
+                let c_out = w[1]; // ConvTranspose weights are [C_in, C_out, kH, kW]
+                let strides = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
+                let pads = node
+                    .attrs
+                    .get_ints("pads")
+                    .unwrap_or_else(|| vec![0, 0, 0, 0]);
+                let output_padding = node
+                    .attrs
+                    .get_ints("output_padding")
+                    .unwrap_or_else(|| vec![0, 0]);
+                let dilations = node
+                    .attrs
+                    .get_ints("dilations")
+                    .unwrap_or_else(|| vec![1, 1]);
+                let ks_attr = node.attrs.get_ints("kernel_shape");
+                let group = node.attrs.get_int("group").unwrap_or(1) as usize;
+                let _ = group; // used in execute, not shape
+                let mut spatial_out = [0usize; 2];
+                for i in 0..2 {
+                    let in_dim = x[2 + i];
+                    let k = ks_attr
+                        .as_ref()
+                        .map(|ks| ks[i] as usize)
+                        .unwrap_or(w[2 + i]);
+                    let s = strides[i] as usize;
+                    let d = dilations[i] as usize;
+                    let p = pads[i] as usize + pads[i + 2] as usize;
+                    let op = output_padding[i] as usize;
+                    spatial_out[i] = s * (in_dim - 1) + d * (k - 1) + 1 - p + op;
+                }
+                Some(dims![n, c_out, spatial_out[0], spatial_out[1]])
             }
 
             Self::MatMul => {

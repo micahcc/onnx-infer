@@ -3,12 +3,14 @@ use std::collections::HashMap;
 use anyhow::Context;
 
 use crate::Dims;
+use crate::Layout;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 use crate::layers::conv::AutoPad;
 
+#[derive(Debug)]
 pub struct MaxPoolPrecomp {
     pub n: usize,
     pub c: usize,
@@ -21,6 +23,7 @@ pub struct MaxPoolPrecomp {
     pub total: usize,
 }
 
+#[derive(Debug)]
 pub struct MaxPool {
     pub inputs: Vec<String>,
     pub kh: usize,
@@ -29,6 +32,7 @@ pub struct MaxPool {
     pub sw: usize,
     pub pads: [usize; 4],
     pub auto_pad: AutoPad,
+    pub nhwc: bool,
     pub shape_cache: Dims,
     pub precomp: Option<MaxPoolPrecomp>,
 }
@@ -42,11 +46,10 @@ impl MaxPool {
         sw: usize,
         auto_pad: AutoPad,
         pads: &[usize; 4],
+        nhwc: bool,
     ) -> MaxPoolPrecomp {
-        let n = shape[0];
-        let c = shape[1];
-        let h_in = shape[2];
-        let w_in = shape[3];
+        assert!(nhwc, "MaxPool::compute_shapes requires NHWC");
+        let (n, c, h_in, w_in) = (shape[0], shape[3], shape[1], shape[2]);
         let (p0, p1, p2, p3) = match auto_pad {
             AutoPad::SameUpper | AutoPad::SameLower => {
                 let oh = h_in.div_ceil(sh);
@@ -84,6 +87,7 @@ impl MaxPool {
         pads: Vec<i64>,
         auto_pad: String,
         initial_shape: &[usize],
+        nhwc: bool,
     ) -> Result<Self> {
         if kernel_shape.is_empty() {
             anyhow::bail!("MaxPool missing kernel_shape");
@@ -115,6 +119,7 @@ impl MaxPool {
                     sw,
                     auto_pad_enum,
                     &pads_arr,
+                    nhwc,
                 )),
             )
         } else {
@@ -129,6 +134,7 @@ impl MaxPool {
             sw,
             pads: pads_arr,
             auto_pad: auto_pad_enum,
+            nhwc,
             shape_cache,
             precomp,
         })
@@ -150,6 +156,7 @@ impl Layer for MaxPool {
                     self.sw,
                     self.auto_pad,
                     &self.pads,
+                    self.nhwc,
                 ));
                 self.shape_cache.clone_from(&input.dims);
                 self.precomp.as_ref().expect("just set")
@@ -164,64 +171,39 @@ impl Layer for MaxPool {
         let buf = output.as_mut_f32(p.total);
         buf.fill(f32::NEG_INFINITY);
 
-        // Compute the range of output pixels that don't need bounds checks
-        let oh_safe_start = if p.p0 > 0 { p.p0.div_ceil(sh) } else { 0 };
-        let ow_safe_start = if p.p1 > 0 { p.p1.div_ceil(sw) } else { 0 };
-        let oh_safe_end = if p.h_in + p.p0 >= kh {
-            ((p.h_in + p.p0 - kh) / sh + 1).min(p.h_out)
-        } else {
-            0
-        };
-        let ow_safe_end = if p.w_in + p.p1 >= kw {
-            ((p.w_in + p.p1 - kw) / sw + 1).min(p.w_out)
-        } else {
-            0
-        };
+        assert!(self.nhwc, "MaxPool::execute requires NHWC input layout");
 
+        // NHWC: input[batch][h][w][c], output[batch][h_out][w_out][c]
         for batch in 0..p.n {
-            for ch in 0..p.c {
-                let in_base = (batch * p.c + ch) * p.h_in * p.w_in;
-                let out_base = (batch * p.c + ch) * p.h_out * p.w_out;
-                for oh in 0..p.h_out {
-                    for ow in 0..p.w_out {
-                        let mut max_val = f32::NEG_INFINITY;
-                        if oh >= oh_safe_start
-                            && oh < oh_safe_end
-                            && ow >= ow_safe_start
-                            && ow < ow_safe_end
-                        {
-                            // No bounds checks needed
-                            let ih_start = oh * sh - p.p0;
-                            let iw_start = ow * sw - p.p1;
-                            for fh in 0..kh {
-                                let row = in_base + (ih_start + fh) * p.w_in + iw_start;
-                                for fw in 0..kw {
-                                    max_val = max_val.max(input_f[row + fw]);
-                                }
-                            }
-                        } else {
-                            for fh in 0..kh {
-                                for fw in 0..kw {
-                                    let ih = oh * sh + fh;
-                                    let iw = ow * sw + fw;
-                                    if ih >= p.p0
-                                        && iw >= p.p1
-                                        && ih - p.p0 < p.h_in
-                                        && iw - p.p1 < p.w_in
-                                    {
-                                        let idx = in_base + (ih - p.p0) * p.w_in + (iw - p.p1);
-                                        max_val = max_val.max(input_f[idx]);
-                                    }
+            let in_batch = batch * p.h_in * p.w_in * p.c;
+            let out_batch = batch * p.h_out * p.w_out * p.c;
+            for oh in 0..p.h_out {
+                for ow in 0..p.w_out {
+                    let out_off = out_batch + (oh * p.w_out + ow) * p.c;
+                    for fh in 0..kh {
+                        for fw in 0..kw {
+                            let ih = oh * sh + fh;
+                            let iw = ow * sw + fw;
+                            if ih >= p.p0
+                                && iw >= p.p1
+                                && ih - p.p0 < p.h_in
+                                && iw - p.p1 < p.w_in
+                            {
+                                let in_off = in_batch
+                                    + ((ih - p.p0) * p.w_in + (iw - p.p1)) * p.c;
+                                for ch in 0..p.c {
+                                    buf[out_off + ch] =
+                                        buf[out_off + ch].max(input_f[in_off + ch]);
                                 }
                             }
                         }
-                        buf[out_base + oh * p.w_out + ow] = max_val;
                     }
                 }
             }
         }
+        output.set_dims(&[p.n, p.h_out, p.w_out, p.c]);
+        output.layout = Layout::NHWC;
 
-        output.set_dims(&[p.n, p.c, p.h_out, p.w_out]);
         Ok(())
     }
 }

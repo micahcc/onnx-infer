@@ -9,6 +9,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct GatherPrecomp {
     pub axis: usize,
     pub outer: usize,
@@ -18,6 +19,7 @@ pub struct GatherPrecomp {
     pub out_rank: usize,
 }
 
+#[derive(Debug)]
 pub struct Gather {
     pub inputs: Vec<String>,
     pub axis: i64,

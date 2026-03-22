@@ -9,6 +9,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct ConcatPrecomp {
     pub axis: usize,
     pub rank: usize,
@@ -16,6 +17,7 @@ pub struct ConcatPrecomp {
     pub inner: usize,
 }
 
+#[derive(Debug)]
 pub struct Concat {
     pub inputs: Vec<String>,
     pub axis: i64,

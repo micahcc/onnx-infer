@@ -8,6 +8,7 @@ use crate::get_tensor;
 use crate::layers::Layer;
 
 /// CategoryMapper (ai.onnx.ml): maps string inputs to int64 using a lookup table.
+#[derive(Debug)]
 pub struct CategoryMapper {
     pub inputs: Vec<String>,
     pub map: HashMap<Vec<u8>, i64>,

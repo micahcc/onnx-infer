@@ -50,7 +50,9 @@ impl InferenceEngine {
             .max()
             .unwrap_or(0);
         let graph_proto = model.graph.as_ref().context("model has no graph")?;
-        let graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
+        let mut graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
+
+        crate::graph_opt::optimize(&mut graph);
 
         let initializer_names: std::collections::HashSet<&str> =
             graph.initializers.keys().map(|k| k.as_str()).collect();
@@ -87,46 +89,17 @@ impl InferenceEngine {
             .max()
             .unwrap_or(0);
         let graph_proto = model.graph.as_ref().context("model has no graph")?;
-        let graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
+        let mut graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
+
+        crate::graph_opt::optimize(&mut graph);
 
         Self::build_from_graph(graph, input_sizes)
     }
 
-    /// Create an engine with CPU-safe graph optimizations applied (e.g. BN fold into Conv).
+    /// Create an engine with graph optimizations applied (BN fold, NHWC layout transposes).
+    #[deprecated(note = "all constructors now apply graph optimizations; use new() or with_batch_size() instead")]
     pub fn with_graph_opt(model_bytes: &[u8]) -> Result<Self> {
-        let model = ModelProto::decode(model_bytes).context("decoding model proto")?;
-        let opset_version = model
-            .opset_import
-            .iter()
-            .filter(|o| o.domain.is_empty())
-            .map(|o| o.version)
-            .max()
-            .unwrap_or(0);
-        let graph_proto = model.graph.as_ref().context("model has no graph")?;
-        let mut graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
-
-        crate::graph_opt::optimize_cpu(&mut graph);
-
-        let initializer_names: std::collections::HashSet<&str> =
-            graph.initializers.keys().map(|k| k.as_str()).collect();
-
-        let mut input_sizes = HashMap::new();
-        for input in &graph.inputs {
-            if input.name.is_empty() || initializer_names.contains(input.name.as_str()) {
-                continue;
-            }
-            if let Some(shape) = &input.shape {
-                let mut shape = shape.clone();
-                if !shape.is_empty() && shape[0] == 0 {
-                    shape[0] = 1;
-                }
-                if shape.iter().all(|&d| d > 0) {
-                    input_sizes.insert(input.name.clone(), shape);
-                }
-            }
-        }
-
-        Self::build_from_graph(graph, input_sizes)
+        Self::new(model_bytes)
     }
 
     /// Create an engine with XNNPACK acceleration.
@@ -239,7 +212,7 @@ impl InferenceEngine {
 
         let all_shapes_known = input_names.iter().all(|n| input_sizes.contains_key(n));
         let plan = if all_shapes_known {
-            Some(Plan::build_with_xnnpack(&graph, &input_sizes)?)
+            Some(Plan::build_with_xnnpack(&graph, &input_sizes, &HashMap::new())?)
         } else {
             None
         };
@@ -338,7 +311,7 @@ impl InferenceEngine {
         // Build plan with actual input values for aggressive constant folding
         #[cfg(feature = "xnnpack")]
         let plan = if self.use_xnnpack {
-            Plan::build_with_xnnpack(&self.graph, &input_sizes)?
+            Plan::build_with_xnnpack(&self.graph, &input_sizes, inputs)?
         } else {
             Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), inputs)?
         };
@@ -517,4 +490,5 @@ impl InferenceEngine {
             })
             .unwrap_or_default()
     }
+
 }

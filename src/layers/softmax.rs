@@ -8,6 +8,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct SoftmaxPrecomp {
     pub axis: usize,
     pub outer: usize,
@@ -15,9 +16,12 @@ pub struct SoftmaxPrecomp {
     pub inner: usize,
 }
 
+#[derive(Debug)]
 pub struct Softmax {
     pub inputs: Vec<String>,
     pub axis: i64,
+    /// For opset < 13, Softmax coerces to 2D: dims [0..axis) → outer, [axis..) → inner
+    pub coerce_2d: bool,
     pub shape_cache: Dims,
     pub precomp: Option<SoftmaxPrecomp>,
 }
@@ -38,11 +42,16 @@ impl Softmax {
         }
     }
 
-    pub fn new(inputs: Vec<String>, axis: i64, initial_shape: &[usize]) -> Self {
+    pub fn new(inputs: Vec<String>, axis: i64, coerce_2d: bool, initial_shape: &[usize]) -> Self {
         let (shape_cache, precomp) = if !initial_shape.is_empty() {
+            let effective_shape = if coerce_2d {
+                Self::coerced_shape(axis, initial_shape)
+            } else {
+                initial_shape.to_vec()
+            };
             (
                 Dims::from_slice(initial_shape),
-                Some(Self::compute_shapes(axis, initial_shape)),
+                Some(Self::compute_shapes(if coerce_2d { 1 } else { axis }, &effective_shape)),
             )
         } else {
             (Dims::new(), None)
@@ -50,9 +59,19 @@ impl Softmax {
         Self {
             inputs,
             axis,
+            coerce_2d,
             shape_cache,
             precomp,
         }
+    }
+
+    /// For opset < 13: coerce to 2D shape [product(0..axis), product(axis..)]
+    fn coerced_shape(axis: i64, shape: &[usize]) -> Vec<usize> {
+        let rank = shape.len() as i64;
+        let axis = if axis < 0 { (rank + axis) as usize } else { axis as usize };
+        let outer: usize = shape[..axis].iter().product();
+        let inner: usize = shape[axis..].iter().product();
+        vec![outer, inner]
     }
 }
 
@@ -63,7 +82,13 @@ impl Layer for Softmax {
         let p = match &self.precomp {
             Some(p) if self.shape_cache.as_slice() == input.dims.as_slice() => p,
             _ => {
-                self.precomp = Some(Self::compute_shapes(self.axis, &input.dims));
+                let effective = if self.coerce_2d {
+                    let c = Self::coerced_shape(self.axis, &input.dims);
+                    Self::compute_shapes(1, &c)
+                } else {
+                    Self::compute_shapes(self.axis, &input.dims)
+                };
+                self.precomp = Some(effective);
                 self.shape_cache.clone_from(&input.dims);
                 self.precomp.as_ref().expect("just set")
             }

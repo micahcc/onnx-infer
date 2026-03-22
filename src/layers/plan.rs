@@ -27,6 +27,7 @@ use crate::layers::concat;
 use crate::layers::constant;
 use crate::layers::constant_of_shape;
 use crate::layers::conv;
+use crate::layers::conv_transpose;
 use crate::layers::dequantize_linear;
 use crate::layers::div;
 use crate::layers::dropout;
@@ -135,8 +136,9 @@ impl Plan {
     pub fn build_with_xnnpack(
         graph: &Graph,
         input_sizes: &HashMap<String, Dims>,
+        input_values: &HashMap<String, Tensor>,
     ) -> Result<Self> {
-        Self::build_full_inner(graph, input_sizes, &HashMap::new(), &HashMap::new(), true)
+        Self::build_full_inner(graph, input_sizes, &HashMap::new(), input_values, true)
     }
 
     pub fn build_full(
@@ -174,6 +176,8 @@ impl Plan {
         }
 
         let mut shape_map: HashMap<String, ShapeLayout> = HashMap::new();
+        // Layout-only map for ops whose shapes aren't known but layout is.
+        let mut layout_only: HashMap<String, Layout> = HashMap::new();
         for (name, tensor) in &initializers {
             shape_map.insert(
                 name.clone(),
@@ -212,7 +216,6 @@ impl Plan {
         for (name, tensor) in input_values {
             known_values.insert(name.clone(), tensor.clone());
         }
-
 
         let mut nodes = Vec::new();
         #[cfg(feature = "xnnpack")]
@@ -269,7 +272,7 @@ impl Plan {
             ) {
                 if let Some(out_name) = out_name {
                     // Set layout based on op type (constant-folded tensors default to NCHW)
-                    tensor.layout = infer_output_layout(op, node, &shape_map);
+                    tensor.layout = infer_output_layout(op, node, &shape_map, &layout_only);
                     shape_map.insert(
                         out_name.clone(),
                         ShapeLayout::new(tensor.dims.clone(), tensor.layout),
@@ -285,25 +288,18 @@ impl Plan {
                 op.infer_output_shape(node, &node.inputs, &shape_map, &known_values)
             {
                 if let Some(out_name) = out_name {
-                    let out_layout = infer_output_layout(op, node, &shape_map);
+                    let out_layout = infer_output_layout(op, node, &shape_map, &layout_only);
                     shape_map.insert(
                         out_name.clone(),
                         ShapeLayout::new(shape, out_layout),
                     );
                 }
-            } else if matches!(op, OpType::Identity | OpType::Transpose | OpType::Conv) {
+            } else {
+                // Even without shape, record layout so downstream ops know their input layout.
                 if let Some(out_name) = out_name {
-                    let missing: Vec<&str> = node
-                        .inputs
-                        .iter()
-                        .filter(|n| !n.is_empty() && !shape_map.contains_key(n.as_str()))
-                        .map(|n| n.as_str())
-                        .collect();
-                    if !missing.is_empty() {
-                        eprintln!(
-                            "  shape-miss: {:?} {:?} -> {:?}, missing inputs: {:?}",
-                            op, node.name, out_name, missing
-                        );
+                    let out_layout = infer_output_layout(op, node, &shape_map, &layout_only);
+                    if out_layout != Layout::Unknown {
+                        layout_only.insert(out_name.clone(), out_layout);
                     }
                 }
             }
@@ -364,6 +360,7 @@ impl Plan {
                         node,
                         modified_inputs.clone(),
                         &shape_map,
+                        &layout_only,
                         graph.opset_version,
                     )?;
                     if let PlanNode::Loop(mut loop_layer) = plan_node {
@@ -408,6 +405,7 @@ impl Plan {
                 node,
                 modified_inputs,
                 &shape_map,
+                &layout_only,
                 graph.opset_version,
             )?);
         }
@@ -556,7 +554,7 @@ pub fn build_node(
     inputs: Vec<String>,
     shape_map: &HashMap<String, ShapeLayout>,
 ) -> Result<PlanNode> {
-    build_node_with_opset(op, node, inputs, shape_map, 0)
+    build_node_with_opset(op, node, inputs, shape_map, &HashMap::new(), 0)
 }
 
 pub fn build_node_with_opset(
@@ -564,6 +562,7 @@ pub fn build_node_with_opset(
     node: &Node,
     inputs: Vec<String>,
     shape_map: &HashMap<String, ShapeLayout>,
+    layout_only: &HashMap<String, Layout>,
     opset_version: i64,
 ) -> Result<PlanNode> {
     if op == OpType::Loop {
@@ -658,6 +657,19 @@ pub fn build_node_with_opset(
         }
     }
 
+    let input_layout = |idx: usize| -> Layout {
+        inputs
+            .get(idx)
+            .filter(|s| !s.is_empty())
+            .and_then(|name| {
+                shape_map
+                    .get(name)
+                    .map(|sl| sl.layout)
+                    .or_else(|| layout_only.get(name).copied())
+            })
+            .unwrap_or(Layout::NCHW)
+    };
+
     let layer: Box<dyn Layer> = match op {
         OpType::Relu => Box::new(relu::Relu::new(inputs)),
         OpType::LeakyRelu => Box::new(leaky_relu::LeakyRelu::new(
@@ -739,10 +751,13 @@ pub fn build_node_with_opset(
         OpType::Round => Box::new(round::Round::new(inputs)),
         OpType::Softmax => {
             // Softmax default axis changed in opset 13: was 1, now -1
+            // For opset < 13, softmax coerces input to 2D before applying
             let default_axis = if opset_version >= 13 { -1 } else { 1 };
+            let coerce_2d = opset_version < 13;
             Box::new(softmax::Softmax::new(
                 inputs,
                 node.attrs.get_int("axis").unwrap_or(default_axis),
+                coerce_2d,
                 input_shapes[0],
             ))
         }
@@ -780,6 +795,7 @@ pub fn build_node_with_opset(
                 .unwrap_or_else(|| vec![1, 1]);
             let gr = node.attrs.get_int("group").unwrap_or(1) as usize;
             let ap = node.attrs.get_string("auto_pad").unwrap_or_default();
+            let nhwc = input_layout(0) == Layout::NHWC;
             Box::new(conv::Conv::new(
                 inputs,
                 ks,
@@ -790,7 +806,21 @@ pub fn build_node_with_opset(
                 ap,
                 input_shapes[0],
                 input_shapes[1],
+                nhwc,
             ))
+        }
+        OpType::ConvTranspose => {
+            let st = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
+            let pa = node
+                .attrs
+                .get_ints("pads")
+                .unwrap_or_else(|| vec![0, 0, 0, 0]);
+            let di = node
+                .attrs
+                .get_ints("dilations")
+                .unwrap_or_else(|| vec![1, 1]);
+            let gr = node.attrs.get_int("group").unwrap_or(1);
+            Box::new(conv_transpose::ConvTranspose::new(inputs, &st, &pa, &di, gr))
         }
         OpType::MatMul => Box::new(matmul::MatMul::new(
             inputs,
@@ -814,6 +844,7 @@ pub fn build_node_with_opset(
                 .get_ints("pads")
                 .unwrap_or_else(|| vec![0, 0, 0, 0]);
             let ap = node.attrs.get_string("auto_pad").unwrap_or_default();
+            let nhwc = input_layout(0) == Layout::NHWC;
             Box::new(maxpool::MaxPool::new(
                 inputs,
                 ks,
@@ -821,6 +852,7 @@ pub fn build_node_with_opset(
                 pa,
                 ap,
                 input_shapes[0],
+                nhwc,
             )?)
         }
         OpType::AveragePool => {
@@ -832,6 +864,7 @@ pub fn build_node_with_opset(
                 .unwrap_or_else(|| vec![0, 0, 0, 0]);
             let ap = node.attrs.get_string("auto_pad").unwrap_or_default();
             let cip = node.attrs.get_int("count_include_pad").unwrap_or(0);
+            let nhwc = input_layout(0) == Layout::NHWC;
             Box::new(average_pool::AveragePool::new(
                 inputs,
                 ks,
@@ -840,10 +873,12 @@ pub fn build_node_with_opset(
                 ap,
                 cip,
                 input_shapes[0],
+                nhwc,
             )?)
         }
         OpType::GlobalAveragePool => {
-            Box::new(global_avg_pool::GlobalAvgPool::new(inputs, input_shapes[0]))
+            let nhwc = input_layout(0) == Layout::NHWC;
+            Box::new(global_avg_pool::GlobalAvgPool::new(inputs, input_shapes[0], nhwc))
         }
         OpType::Flatten => Box::new(flatten::Flatten::new(
             inputs,
@@ -898,12 +933,17 @@ pub fn build_node_with_opset(
         }
         OpType::Tile => Box::new(tile::Tile::new(inputs)),
         OpType::Resize => {
+            let mode = node
+                .attrs
+                .get_string("mode")
+                .unwrap_or_else(|| "nearest".to_string());
             let ct = node
                 .attrs
                 .get_string("coordinate_transformation_mode")
                 .unwrap_or_default();
             let nm = node.attrs.get_string("nearest_mode").unwrap_or_default();
-            Box::new(resize::Resize::new(inputs, &ct, &nm))
+            let nhwc = input_layout(0) == Layout::NHWC;
+            Box::new(resize::Resize::new(inputs, &mode, &ct, &nm, nhwc))
         }
         OpType::Upsample => {
             let mode = node
@@ -912,7 +952,8 @@ pub fn build_node_with_opset(
                 .unwrap_or_else(|| "nearest".to_string());
             let nm = if mode == "nearest" { "floor" } else { "" };
             let resize_inputs = vec![inputs[0].clone(), String::new(), inputs[1].clone()];
-            Box::new(resize::Resize::new(resize_inputs, "asymmetric", nm))
+            let nhwc = input_layout(0) == Layout::NHWC;
+            Box::new(resize::Resize::new(resize_inputs, &mode, "asymmetric", nm, nhwc))
         }
         OpType::Reshape => Box::new(reshape::Reshape::new(inputs, node.attrs.get_ints("shape"))),
         OpType::Constant => {
@@ -963,6 +1004,7 @@ pub fn build_node_with_opset(
                 ap,
                 input_shapes[0],
                 input_shapes[3],
+                input_layout(0) == Layout::NHWC,
             );
             Box::new(qlinear_conv::QLinearConv::new(inputs, inner))
         }
@@ -979,6 +1021,7 @@ pub fn build_node_with_opset(
             let inner = global_avg_pool::GlobalAvgPool::new(
                 vec!["__qgap_x__".to_string()],
                 input_shapes[0],
+                input_layout(0) == Layout::NHWC,
             );
             Box::new(qlinear_global_avg_pool::QLinearGlobalAvgPool::new(
                 inputs, inner,
@@ -1245,6 +1288,13 @@ fn compile_xnnpack_subgraphs(
             if !is_xnnpack_compatible(*op) {
                 return false;
             }
+            // XNNPACK only supports bilinear resize, not nearest
+            if *op == OpType::Resize {
+                let mode = node.attrs.get_string("mode").unwrap_or_default();
+                if mode != "linear" {
+                    return false;
+                }
+            }
             // Only float outputs
             for out in &node.outputs {
                 if !out.is_empty() {
@@ -1279,13 +1329,26 @@ fn compile_xnnpack_subgraphs(
         }
     }
 
+    // Build a list of tensor names consumed by each node index.
+    // node_meta has the inputs for real ops; auto-cast nodes (None in node_meta)
+    // only consume initializers so they don't affect subgraph required_outputs.
+    let consumed_by: Vec<Vec<String>> = (0..n)
+        .map(|idx| {
+            if let Some(Some((_, inputs, _))) = node_meta.get(idx) {
+                inputs.clone()
+            } else {
+                vec![]
+            }
+        })
+        .collect();
+
+    let graph_output_set: std::collections::HashSet<&str> =
+        graph_output_names.iter().map(|s| s.as_str()).collect();
+
     // Process runs in reverse order (to preserve indices)
     for run in runs.into_iter().rev() {
-        // Identify which outputs are consumed outside this run
+        // Collect all tensor names produced by this run
         let mut produced: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut consumed_after: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-
         for idx in run.clone() {
             if let Some(Some((_, _, node))) = node_meta.get(idx) {
                 for out in &node.outputs {
@@ -1294,30 +1357,35 @@ fn compile_xnnpack_subgraphs(
             }
         }
 
-        // Check what's consumed after the run
-        for idx in run.end..n {
-            if let Some(Some((_, inputs, _))) = node_meta.get(idx) {
-                for inp in inputs {
-                    if !inp.is_empty() && produced.contains(inp) {
-                        consumed_after.insert(inp.clone());
-                    }
+        // A produced tensor is a required output if ANY node outside this run
+        // consumes it, or if it's a graph output.
+        let mut required_set: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        // Check nodes before the run
+        for idx in 0..run.start {
+            for inp in &consumed_by[idx] {
+                if !inp.is_empty() && produced.contains(inp) {
+                    required_set.insert(inp.clone());
                 }
             }
         }
+        // Check nodes after the run
+        for idx in run.end..n {
+            for inp in &consumed_by[idx] {
+                if !inp.is_empty() && produced.contains(inp) {
+                    required_set.insert(inp.clone());
+                }
+            }
+        }
+        // Check graph outputs
+        for name in &produced {
+            if graph_output_set.contains(name.as_str()) {
+                required_set.insert(name.clone());
+            }
+        }
 
-        // Include any produced value that is consumed after the subgraph
-        // or is a graph output
-        let graph_output_set: std::collections::HashSet<&str> =
-            graph_output_names.iter().map(|s| s.as_str()).collect();
-
-        let required_outputs: Vec<String> = produced
-            .iter()
-            .filter(|name| {
-                consumed_after.contains(name.as_str())
-                    || graph_output_set.contains(name.as_str())
-            })
-            .cloned()
-            .collect();
+        let required_outputs: Vec<String> = required_set.into_iter().collect();
 
         if required_outputs.is_empty() {
             continue;
@@ -1381,6 +1449,7 @@ fn infer_output_layout(
     op: OpType,
     node: &crate::onnx_ir::Node,
     shape_map: &HashMap<String, ShapeLayout>,
+    layout_only: &HashMap<String, Layout>,
 ) -> Layout {
     if op == OpType::LayoutTranspose {
         let perm = node.attrs.get_ints("perm").unwrap_or_default();
@@ -1414,7 +1483,11 @@ fn infer_output_layout(
     node.inputs
         .first()
         .filter(|s| !s.is_empty())
-        .and_then(|name| shape_map.get(name))
-        .map(|sl| sl.layout)
+        .and_then(|name| {
+            shape_map
+                .get(name)
+                .map(|sl| sl.layout)
+                .or_else(|| layout_only.get(name).copied())
+        })
         .unwrap_or(Layout::NCHW)
 }

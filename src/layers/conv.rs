@@ -3,18 +3,20 @@ use std::collections::HashMap;
 use anyhow::Context;
 
 use crate::Dims;
+use crate::Layout;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum AutoPad {
     Valid,
     SameUpper,
     SameLower,
 }
 
+#[derive(Debug)]
 pub struct ConvPrecomp {
     pub n: usize,
     pub c_in: usize,
@@ -30,6 +32,7 @@ pub struct ConvPrecomp {
     pub total: usize,
 }
 
+#[derive(Debug)]
 pub struct Conv {
     pub inputs: Vec<String>,
     pub kh: usize,
@@ -41,12 +44,24 @@ pub struct Conv {
     pub pads: [usize; 4],
     pub group: usize,
     pub auto_pad: AutoPad,
+    pub nhwc: bool,
     pub shape_cache: Dims,
     pub precomp: Option<ConvPrecomp>,
     col_buf: Vec<f32>,
+    gemm_buf: Vec<f32>,
 }
 
 impl Conv {
+    /// Extract spatial dimensions from input shape based on layout.
+    /// Returns (n, c_in, h_in, w_in) regardless of layout.
+    fn extract_dims(ins: &[usize], nhwc: bool) -> (usize, usize, usize, usize) {
+        if nhwc {
+            (ins[0], ins[3], ins[1], ins[2])
+        } else {
+            (ins[0], ins[1], ins[2], ins[3])
+        }
+    }
+
     pub fn compute_shapes(
         ins: &[usize],
         ws: &[usize],
@@ -59,11 +74,9 @@ impl Conv {
         auto_pad: AutoPad,
         pads: &[usize; 4],
         group: usize,
+        nhwc: bool,
     ) -> ConvPrecomp {
-        let n = ins[0];
-        let c_in = ins[1];
-        let h_in = ins[2];
-        let w_in = ins[3];
+        let (n, c_in, h_in, w_in) = Self::extract_dims(ins, nhwc);
         let c_out = ws[0];
         let eff_kh = if kh == 0 { ws[2] } else { kh };
         let eff_kw = if kw == 0 { ws[3] } else { kw };
@@ -113,6 +126,7 @@ impl Conv {
         auto_pad: String,
         initial_shape: &[usize],
         weight_shape: &[usize],
+        nhwc: bool,
     ) -> Self {
         let kh = kernel_shape.first().copied().unwrap_or(0) as usize;
         let kw = kernel_shape.get(1).copied().unwrap_or(0) as usize;
@@ -158,6 +172,7 @@ impl Conv {
                     auto_pad_enum,
                     &pads_arr,
                     group,
+                    nhwc,
                 )),
             )
         } else {
@@ -175,22 +190,27 @@ impl Conv {
             pads: pads_arr,
             group,
             auto_pad: auto_pad_enum,
+            nhwc,
             shape_cache,
             precomp,
             col_buf: Vec::new(),
+            gemm_buf: Vec::new(),
         }
     }
 }
 
-/// im2col: unfold input patches into a column matrix.
+/// im2col for NHWC input layout.
 ///
-/// For each output pixel (oh, ow), collect the c_in_per_group * kh * kw input values
-/// that contribute to it. The result is a matrix of shape
-/// [c_in_per_group * kh * kw, h_out * w_out] (column-major-ish: each column is one patch).
-fn im2col(
+/// Input slice starts at the batch offset: `&input[batch * H * W * C ..]`
+/// Memory order: `input[ih * W * C + iw * C + channel]`
+///
+/// `group_ch_offset` is `g * c_in_per_group` — the channel offset for the group.
+fn im2col_nhwc(
     input: &[f32],
     col: &mut [f32],
+    c_in: usize,
     c_in_per_group: usize,
+    group_ch_offset: usize,
     h_in: usize,
     w_in: usize,
     kh: usize,
@@ -206,7 +226,6 @@ fn im2col(
 ) {
     let spatial_out = h_out * w_out;
     for ic in 0..c_in_per_group {
-        let in_plane = &input[ic * h_in * w_in..];
         for fh in 0..kh {
             for fw in 0..kw {
                 let col_row = (ic * kh + fh) * kw + fw;
@@ -219,7 +238,9 @@ fn im2col(
                         let iw = ow * sw + fw * dw;
                         let col_idx = col_row_off + oh * w_out + ow;
                         if valid_h && iw >= p1 && iw - p1 < w_in {
-                            col[col_idx] = in_plane[ih_actual * w_in + (iw - p1)];
+                            // NHWC: input[ih * W * C + iw * C + channel]
+                            col[col_idx] = input
+                                [(ih_actual * w_in + (iw - p1)) * c_in + group_ch_offset + ic];
                         } else {
                             col[col_idx] = 0.0;
                         }
@@ -233,6 +254,7 @@ fn im2col(
 impl Conv {
     /// Naive scalar convolution — matches the original accumulation order.
     /// Used by QLinearConv to avoid BLAS-induced rounding differences in quantized pipelines.
+    /// Always operates in NCHW layout.
     pub fn execute_naive(
         &mut self,
         values: &HashMap<String, Tensor>,
@@ -262,6 +284,7 @@ impl Conv {
                     self.auto_pad,
                     &self.pads,
                     self.group,
+                    false, // naive always NCHW
                 ));
                 self.shape_cache.clone_from(&input.dims);
                 self.precomp.as_ref().expect("just set")
@@ -324,6 +347,7 @@ impl Layer for Conv {
                     self.auto_pad,
                     &self.pads,
                     self.group,
+                    self.nhwc,
                 ));
                 self.shape_cache.clone_from(&input.dims);
                 self.precomp.as_ref().expect("just set")
@@ -342,10 +366,6 @@ impl Layer for Conv {
         let weight_f = weight.floats().context("in Conv layer")?;
         let buf = output.as_mut_f32(p.total);
 
-        // im2col + sgemm approach
-        // For each group: weight is [c_out_per_group, c_in_per_group * kh * kw]
-        //                 col is [c_in_per_group * kh * kw, h_out * w_out]
-        //                 output is [c_out_per_group, h_out * w_out]
         let col_size = p.c_in_per_group * kh * kw * spatial_out;
         self.col_buf.resize(col_size, 0.0);
 
@@ -353,15 +373,22 @@ impl Layer for Conv {
         let gemm_k = p.c_in_per_group * kh * kw;
         let gemm_n = spatial_out;
 
-        for batch in 0..p.n {
-            let in_batch = batch * p.c_in * p.h_in * p.w_in;
-            for g in 0..self.group {
-                let in_group = in_batch + g * p.c_in_per_group * p.h_in * p.w_in;
+        assert!(self.nhwc, "Conv::execute requires NHWC input layout");
 
-                im2col(
-                    &input_f[in_group..],
+        // NHWC path: im2col from NHWC input, GEMM to temp buffer, scatter to NHWC output
+        let group_gemm_size = p.c_out_per_group * spatial_out;
+        self.gemm_buf.resize(group_gemm_size, 0.0);
+
+        for batch in 0..p.n {
+            let in_batch = batch * p.h_in * p.w_in * p.c_in;
+
+            for g in 0..self.group {
+                im2col_nhwc(
+                    &input_f[in_batch..],
                     &mut self.col_buf,
+                    p.c_in,
                     p.c_in_per_group,
+                    g * p.c_in_per_group,
                     p.h_in,
                     p.w_in,
                     kh,
@@ -377,16 +404,15 @@ impl Layer for Conv {
                 );
 
                 let w_group = g * p.c_out_per_group * gemm_k;
-                let out_group = batch * p.c_out * spatial_out + g * p.c_out_per_group * spatial_out;
 
-                // Fill output with bias if present
+                // Fill gemm_buf with bias if present
                 if let Some(bias) = bias {
                     let bias_f = bias.floats().context("in Conv layer")?;
                     for oc in 0..gemm_m {
                         let abs_oc = g * p.c_out_per_group + oc;
-                        let row_start = out_group + oc * spatial_out;
+                        let row_start = oc * spatial_out;
                         for s in 0..spatial_out {
-                            buf[row_start + s] = bias_f[abs_oc];
+                            self.gemm_buf[row_start + s] = bias_f[abs_oc];
                         }
                     }
                     crate::blas::sgemm(
@@ -401,7 +427,7 @@ impl Layer for Conv {
                         gemm_n,
                         false,
                         1.0,
-                        &mut buf[out_group..],
+                        &mut self.gemm_buf,
                         gemm_n,
                     );
                 } else {
@@ -417,19 +443,32 @@ impl Layer for Conv {
                         gemm_n,
                         false,
                         0.0,
-                        &mut buf[out_group..],
+                        &mut self.gemm_buf,
                         gemm_n,
                     );
+                }
+
+                // Scatter GEMM result [c_out_per_group, spatial_out] to NHWC output
+                // NHWC output: buf[(batch * H_out * W_out + s) * C_out + abs_oc]
+                let out_batch = batch * p.h_out * p.w_out * p.c_out;
+                for oc in 0..p.c_out_per_group {
+                    let abs_oc = g * p.c_out_per_group + oc;
+                    for s in 0..spatial_out {
+                        buf[out_batch + s * p.c_out + abs_oc] =
+                            self.gemm_buf[oc * spatial_out + s];
+                    }
                 }
             }
         }
 
-        output.set_dims(&[p.n, p.c_out, p.h_out, p.w_out]);
+        output.set_dims(&[p.n, p.h_out, p.w_out, p.c_out]);
+        output.layout = Layout::NHWC;
+
         Ok(())
     }
 }
 
-/// Naive reference implementation for correctness testing.
+/// Naive reference implementation for correctness testing (NCHW only).
 pub fn conv_naive(
     input: &[f32],
     weight: &[f32],

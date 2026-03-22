@@ -10,12 +10,14 @@ use crate::broadcast_shape_into;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct GemmPrecomp {
     pub m: usize,
     pub k: usize,
     pub n: usize,
 }
 
+#[derive(Debug)]
 pub struct Gemm {
     pub inputs: Vec<String>,
     pub alpha: f32,

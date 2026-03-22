@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-03-21 — Fix XNNPACK Resize, zero-copy execution, recompilation
+
+- **XNNPACK Resize mode check**: XNNPACK only supports bilinear resize
+  (`xnn_define_static_resize_bilinear_2d`). Resize ops with `mode=nearest`
+  are now excluded from XNNPACK subgraph compilation and fall back to CPU.
+  Previously all Resize ops were compiled as bilinear regardless of mode,
+  causing yolov4 output error of 19.6 (xnn=-0.20 vs cpu=19.39).
+- **Zero-copy XNNPACK execution**: XNNPACK now operates directly on tensor
+  data buffers (with XNN_EXTRA_BYTES padding) instead of copying data into
+  and out of separate XNNPACK buffers on each call.
+- **XNNPACK recompilation on shape change**: When input shapes change
+  between calls, XNNPACK subgraphs recompile with the new shapes instead
+  of permanently falling back to CPU.
+- **Cached reshape/setup**: `xnn_reshape_runtime` is called only once per
+  compilation (shapes are static). `xnn_setup_runtime_v2` is called each
+  time since tensor buffer pointers may change.
+- **Cleaned up debug prints**: Removed `eprintln!` from Loop operator.
+- **Tests**: 100 tests pass (with XNNPACK), yolov4 XNNPACK tolerance
+  tightened from 1e-1 to 5e-3.
+- **Benchmarks**: MNIST 4.4x, MobileNetV2 5.2-5.4x, YOLOv4 2.1x,
+  TinyYOLOv2 1.2x faster with XNNPACK.
+
+## 2026-03-21 — All paths use NHWC graph optimization, remove NCHW from spatial ops
+
+- **All engine paths now apply graph optimization**: `new()`, `with_batch_size()`, and
+  `with_input_sizes()` now call `graph_opt::optimize()` which inserts NHWC layout
+  transposes around spatial ops and folds BatchNorm into Conv. `with_graph_opt()` is
+  deprecated (all constructors now optimize).
+- **Spatial ops require NHWC**: Conv, MaxPool, AveragePool, GlobalAvgPool, Resize,
+  QLinearConv, and QLinearGlobalAvgPool now assert NHWC input layout. All NCHW
+  execution paths removed from these ops.
+- **QLinearConv/QLinearGlobalAvgPool added to `requires_nhwc()`**: Graph optimization
+  now inserts layout transposes around quantized spatial ops too.
+- **QLinearConv NHWC im2col**: New `im2col_i16_nhwc` reads from NHWC memory layout
+  and scatters output to NHWC format.
+- **Layout propagation without shapes**: Plan builder now tracks layout separately
+  when shapes are unknown (`layout_only` map), ensuring downstream spatial ops
+  correctly detect NHWC even when shape inference fails.
+- **Subgraph optimization**: Loop, Scan, and If body graphs now have
+  `graph_opt::optimize()` applied, ensuring spatial ops inside subgraphs also
+  receive NHWC data.
+- Removed dead `im2col_nchw` function from conv.rs.
+
+## 2026-03-21 — Fix graph-opt push_transposes_through_unary, XNNPACK CPU fallback
+
+- **Graph-opt push_unary batch bug**: `push_transposes_through_unary` collected multiple
+  (transpose, consumer) moves then applied them all in one pass. Each move does
+  `remove(idx)` + `insert(idx)` which shifts array indices, so subsequent moves
+  referenced wrong nodes, leaving dangling tensor references (e.g. `__push_unary_70`
+  consumed but never produced). Fixed by processing one move per call; the outer
+  `optimize()` loop re-invokes until stable. Iteration limit raised to 200.
+- **XNNPACK CPU fallback**: When XNNPACK subgraph compilation fails (missing shapes
+  from Loop ops, etc.), ops now execute on CPU via `execute_node()` instead of
+  bailing with an error. This fixes tiny-yolov3-11 and other models with dynamic
+  shape regions.
+- **XNNPACK benchmarks**: Added benchmark variants that use `InferenceEngine::with_xnnpack()`.
+  Results: MNIST 3x, MobileNetV2 3.7-4x, YOLOv4 1.5x, TinyYOLOv2 1.1x faster.
+
+## 2026-03-21 — Fix Resize bilinear interpolation, fix graph-opt LayoutTranspose
+
+- **Resize bilinear interpolation**: Resize operator now supports `mode=linear`
+  (bilinear interpolation for 4D tensors). Previously only nearest-neighbor was
+  implemented, causing large output divergence on models using bilinear upsampling
+  (FCN-ResNet101, etc.). Also added `pytorch_half_pixel` coordinate transform mode.
+- **Graph-opt LayoutTranspose fix**: `eliminate_inverse_transposes`,
+  `push_transposes_through_unary`, and `push_transposes_through_binary` now only
+  operate on `LayoutTranspose` nodes. Previously, original model `Transpose` nodes
+  (e.g., TF→ONNX NHWC→NCHW conversions) could be cancelled with graph-opt-inserted
+  `LayoutTranspose` nodes, breaking EfficientNet-lite4.
+- **Softmax opset < 13 coercion**: For opset < 13, Softmax coerces input to 2D
+  (flattening dims `[axis..)` together) before applying. Previously we always used
+  per-axis softmax (opset >= 13 behavior), causing wrong results for models like
+  ResNet101-DUC where shape `[1, 19, 160000]` axis=1 should softmax over 3M elements.
+- **ConvTranspose operator**: New `ConvTranspose` op implementation supporting
+  grouped/strided/dilated/padded transposed convolutions. Enables MaskRCNN-12.
+- **Tests**: 97 tests pass (with XNNPACK), 0 ignored. All previously ignored tests
+  fixed: FCN-ResNet101 (Resize bug), ResNet101-DUC (Softmax bug), MaskRCNN-12
+  (ConvTranspose), EfficientNet-lite4 XNNPACK (graph-opt bug).
+
 ## 2026-03-21 — Re-add XNNPACK support with Layout tracking
 
 - **Layout enum**: New `Layout` enum (NCHW, NHWC, Unknown) on `Tensor` and

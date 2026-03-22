@@ -9,13 +9,14 @@ use crate::dims;
 use crate::get_tensor;
 use crate::layers::Layer;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LstmDirection {
     Forward,
     Reverse,
     Bidirectional,
 }
 
+#[derive(Debug)]
 pub struct Lstm {
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
