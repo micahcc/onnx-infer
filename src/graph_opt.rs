@@ -134,12 +134,7 @@ fn make_transpose_node(name: &str, input: &str, output: &str, perm: &[i64; 4]) -
 /// Create a LayoutTranspose node — a synthetic transpose inserted by graph_opt
 /// that explicitly changes the data layout (NCHW↔NHWC). Unlike regular Transpose,
 /// this carries layout semantics: the output layout differs from the input layout.
-fn make_layout_transpose_node(
-    name: &str,
-    input: &str,
-    output: &str,
-    perm: &[i64; 4],
-) -> Node {
+fn make_layout_transpose_node(name: &str, input: &str, output: &str, perm: &[i64; 4]) -> Node {
     let mut attrs_map = HashMap::new();
     attrs_map.insert("perm".to_string(), Attr::Ints(perm.to_vec()));
     Node {

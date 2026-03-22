@@ -65,7 +65,15 @@ fn load_single_input_opt(
     model_file: &str,
     graph_opt: bool,
 ) -> (InferenceEngine, HashMap<String, Tensor>) {
-    load_single_input_mode(base, model_file, if graph_opt { EngineMode::GraphOpt } else { EngineMode::Plain })
+    load_single_input_mode(
+        base,
+        model_file,
+        if graph_opt {
+            EngineMode::GraphOpt
+        } else {
+            EngineMode::Plain
+        },
+    )
 }
 
 fn load_multi_input(base: &Path, model_file: &str) -> (InferenceEngine, HashMap<String, Tensor>) {
@@ -113,12 +121,27 @@ fn load_multi_input_opt(
     model_file: &str,
     graph_opt: bool,
 ) -> (InferenceEngine, HashMap<String, Tensor>) {
-    load_multi_input_mode(base, model_file, if graph_opt { EngineMode::GraphOpt } else { EngineMode::Plain })
+    load_multi_input_mode(
+        base,
+        model_file,
+        if graph_opt {
+            EngineMode::GraphOpt
+        } else {
+            EngineMode::Plain
+        },
+    )
 }
 
 /// Run inference once and validate outputs match the expected fixture data.
 /// Panics if any output diverges beyond tolerance.
-fn validate_once(engine: &mut InferenceEngine, inputs: &HashMap<String, Tensor>, base: &Path, model_file: &str, test_set: usize, tol: f32) {
+fn validate_once(
+    engine: &mut InferenceEngine,
+    inputs: &HashMap<String, Tensor>,
+    base: &Path,
+    model_file: &str,
+    test_set: usize,
+    tol: f32,
+) {
     let model_bytes = fs::read(base.join(model_file)).expect("read model");
     let model = onnx_infer::onnx::ModelProto::decode(&model_bytes[..]).unwrap();
     let graph = model.graph.as_ref().unwrap();
@@ -140,7 +163,9 @@ fn validate_once(engine: &mut InferenceEngine, inputs: &HashMap<String, Tensor>,
             .unwrap_or_else(|| panic!("missing output {name}"));
         assert_eq!(output.dims, expected.dims, "shape mismatch for {name}");
 
-        if output.dtype() == onnx_infer::DType::Float && expected.dtype() == onnx_infer::DType::Float {
+        if output.dtype() == onnx_infer::DType::Float
+            && expected.dtype() == onnx_infer::DType::Float
+        {
             let got = output.floats().expect("float");
             let want = expected.floats().expect("float");
             let mut max_err: f32 = 0.0;
@@ -155,7 +180,8 @@ fn validate_once(engine: &mut InferenceEngine, inputs: &HashMap<String, Tensor>,
             assert!(
                 max_err < tol,
                 "output {name}[{max_idx}]: max_err={max_err}, got={}, want={}, tol={tol}",
-                got[max_idx], want[max_idx]
+                got[max_idx],
+                want[max_idx]
             );
         }
     }
@@ -313,7 +339,8 @@ fn bench_mnist12_xnnpack(c: &mut Criterion) {
 #[cfg(feature = "xnnpack")]
 fn bench_mobilenetv2_7_xnnpack(c: &mut Criterion) {
     let base = fixture("mobilenetv2-7");
-    let (mut engine, inputs) = load_single_input_mode(&base, "mobilenetv2-7.onnx", EngineMode::Xnnpack);
+    let (mut engine, inputs) =
+        load_single_input_mode(&base, "mobilenetv2-7.onnx", EngineMode::Xnnpack);
     validate_once(&mut engine, &inputs, &base, "mobilenetv2-7.onnx", 0, 5e-3);
     c.bench_function("mobilenetv2-7-xnnpack", |b| {
         b.iter(|| engine.run(inputs.clone()).unwrap())
@@ -323,7 +350,8 @@ fn bench_mobilenetv2_7_xnnpack(c: &mut Criterion) {
 #[cfg(feature = "xnnpack")]
 fn bench_mobilenetv2_12_xnnpack(c: &mut Criterion) {
     let base = fixture("mobilenetv2-12");
-    let (mut engine, inputs) = load_single_input_mode(&base, "mobilenetv2-12.onnx", EngineMode::Xnnpack);
+    let (mut engine, inputs) =
+        load_single_input_mode(&base, "mobilenetv2-12.onnx", EngineMode::Xnnpack);
     validate_once(&mut engine, &inputs, &base, "mobilenetv2-12.onnx", 0, 5e-3);
     c.bench_function("mobilenetv2-12-xnnpack", |b| {
         b.iter(|| engine.run(inputs.clone()).unwrap())
@@ -343,7 +371,8 @@ fn bench_tinyyolov2_7_xnnpack(c: &mut Criterion) {
 #[cfg(feature = "xnnpack")]
 fn bench_tinyyolov3_11_xnnpack(c: &mut Criterion) {
     let base = fixture("tiny-yolov3-11");
-    let (mut engine, inputs) = load_multi_input_mode(&base, "yolov3-tiny.onnx", EngineMode::Xnnpack);
+    let (mut engine, inputs) =
+        load_multi_input_mode(&base, "yolov3-tiny.onnx", EngineMode::Xnnpack);
     validate_once(&mut engine, &inputs, &base, "yolov3-tiny.onnx", 0, 5e-3);
     c.bench_function("tiny-yolov3-11-xnnpack", |b| {
         b.iter(|| engine.run(inputs.clone()).unwrap())

@@ -239,8 +239,8 @@ fn im2col_nhwc(
                         let col_idx = col_row_off + oh * w_out + ow;
                         if valid_h && iw >= p1 && iw - p1 < w_in {
                             // NHWC: input[ih * W * C + iw * C + channel]
-                            col[col_idx] = input
-                                [(ih_actual * w_in + (iw - p1)) * c_in + group_ch_offset + ic];
+                            col[col_idx] =
+                                input[(ih_actual * w_in + (iw - p1)) * c_in + group_ch_offset + ic];
                         } else {
                             col[col_idx] = 0.0;
                         }
@@ -454,8 +454,7 @@ impl Layer for Conv {
                 for oc in 0..p.c_out_per_group {
                     let abs_oc = g * p.c_out_per_group + oc;
                     for s in 0..spatial_out {
-                        buf[out_batch + s * p.c_out + abs_oc] =
-                            self.gemm_buf[oc * spatial_out + s];
+                        buf[out_batch + s * p.c_out + abs_oc] = self.gemm_buf[oc * spatial_out + s];
                     }
                 }
             }

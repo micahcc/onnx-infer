@@ -158,6 +158,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
+            onnx_infer::DType::String => {
+                let strings = tensor
+                    .strings()
+                    .expect("output tensor marked as String but data is not strings");
+                if strings.len() <= 100 {
+                    println!("  values: {strings:?}");
+                } else {
+                    println!(
+                        "  values: [{:?}, {:?}, ... ({} total)]",
+                        strings[0],
+                        strings[1],
+                        strings.len()
+                    );
+                }
+            }
         }
     }
 

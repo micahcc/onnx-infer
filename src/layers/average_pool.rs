@@ -193,13 +193,9 @@ impl Layer for AveragePool {
                         for fw in 0..kw {
                             let ih = oh * sh + fh;
                             let iw = ow * sw + fw;
-                            if ih >= p.p0
-                                && iw >= p.p1
-                                && ih - p.p0 < p.h_in
-                                && iw - p.p1 < p.w_in
+                            if ih >= p.p0 && iw >= p.p1 && ih - p.p0 < p.h_in && iw - p.p1 < p.w_in
                             {
-                                let in_off =
-                                    in_batch + ((ih - p.p0) * p.w_in + (iw - p.p1)) * p.c;
+                                let in_off = in_batch + ((ih - p.p0) * p.w_in + (iw - p.p1)) * p.c;
                                 for ch in 0..p.c {
                                     buf[out_off + ch] += input_f[in_off + ch];
                                 }

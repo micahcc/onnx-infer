@@ -87,7 +87,10 @@ fn im2col_i16_nhwc(
 
 impl Layer for QLinearConv {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
-        assert!(self.inner.nhwc, "QLinearConv::execute requires NHWC input layout");
+        assert!(
+            self.inner.nhwc,
+            "QLinearConv::execute requires NHWC input layout"
+        );
 
         let x_quant = get_tensor(values, &self.inputs[0])?;
         let x_scale = get_tensor(values, &self.inputs[1])?

@@ -61,7 +61,12 @@ impl Layer for Nms {
 
         eprintln!(
             "NMS: inputs={:?} boxes={:?} scores={:?} max_output={} iou_threshold={} score_threshold={}",
-            self.inputs, boxes.dims.as_slice(), scores.dims.as_slice(), max_output, iou_threshold, score_threshold,
+            self.inputs,
+            boxes.dims.as_slice(),
+            scores.dims.as_slice(),
+            max_output,
+            iou_threshold,
+            score_threshold,
         );
 
         self.selected.clear();

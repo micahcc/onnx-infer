@@ -96,12 +96,6 @@ impl InferenceEngine {
         Self::build_from_graph(graph, input_sizes)
     }
 
-    /// Create an engine with graph optimizations applied (BN fold, NHWC layout transposes).
-    #[deprecated(note = "all constructors now apply graph optimizations; use new() or with_batch_size() instead")]
-    pub fn with_graph_opt(model_bytes: &[u8]) -> Result<Self> {
-        Self::new(model_bytes)
-    }
-
     /// Create an engine with XNNPACK acceleration.
     ///
     /// Applies full graph optimizations including NHWC layout transposes,
@@ -212,7 +206,11 @@ impl InferenceEngine {
 
         let all_shapes_known = input_names.iter().all(|n| input_sizes.contains_key(n));
         let plan = if all_shapes_known {
-            Some(Plan::build_with_xnnpack(&graph, &input_sizes, &HashMap::new())?)
+            Some(Plan::build_with_xnnpack(
+                &graph,
+                &input_sizes,
+                &HashMap::new(),
+            )?)
         } else {
             None
         };
@@ -490,5 +488,4 @@ impl InferenceEngine {
             })
             .unwrap_or_default()
     }
-
 }

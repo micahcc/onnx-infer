@@ -70,7 +70,10 @@ impl Layer for GlobalAvgPool {
         let input_f = input.floats().context("in GlobalAvgPool layer")?;
         let buf = output.as_mut_f32(p.n * p.c);
 
-        assert!(self.nhwc, "GlobalAvgPool::execute requires NHWC input layout");
+        assert!(
+            self.nhwc,
+            "GlobalAvgPool::execute requires NHWC input layout"
+        );
 
         // NHWC: input[batch][h][w][c] — channels interleaved at each spatial position
         buf.fill(0.0);

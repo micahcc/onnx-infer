@@ -11,8 +11,7 @@ pub fn ensure_init() {
     INIT.call_once(|| {
         let status = unsafe { xnn_initialize(std::ptr::null()) };
         assert_eq!(
-            status,
-            xnn_status_xnn_status_success,
+            status, xnn_status_xnn_status_success,
             "xnn_initialize failed: {status:?}"
         );
     });

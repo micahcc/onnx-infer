@@ -51,7 +51,10 @@ impl Softmax {
             };
             (
                 Dims::from_slice(initial_shape),
-                Some(Self::compute_shapes(if coerce_2d { 1 } else { axis }, &effective_shape)),
+                Some(Self::compute_shapes(
+                    if coerce_2d { 1 } else { axis },
+                    &effective_shape,
+                )),
             )
         } else {
             (Dims::new(), None)
@@ -68,7 +71,11 @@ impl Softmax {
     /// For opset < 13: coerce to 2D shape [product(0..axis), product(axis..)]
     fn coerced_shape(axis: i64, shape: &[usize]) -> Vec<usize> {
         let rank = shape.len() as i64;
-        let axis = if axis < 0 { (rank + axis) as usize } else { axis as usize };
+        let axis = if axis < 0 {
+            (rank + axis) as usize
+        } else {
+            axis as usize
+        };
         let outer: usize = shape[..axis].iter().product();
         let inner: usize = shape[axis..].iter().product();
         vec![outer, inner]

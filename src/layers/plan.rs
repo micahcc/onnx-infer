@@ -289,10 +289,7 @@ impl Plan {
             {
                 if let Some(out_name) = out_name {
                     let out_layout = infer_output_layout(op, node, &shape_map, &layout_only);
-                    shape_map.insert(
-                        out_name.clone(),
-                        ShapeLayout::new(shape, out_layout),
-                    );
+                    shape_map.insert(out_name.clone(), ShapeLayout::new(shape, out_layout));
                 }
             } else {
                 // Even without shape, record layout so downstream ops know their input layout.
@@ -340,10 +337,8 @@ impl Plan {
                             let rem = in_sl.dims[axis] % num_outputs;
                             base + if i < rem { 1 } else { 0 }
                         };
-                        shape_map.insert(
-                            out_name.clone(),
-                            ShapeLayout::new(out_shape, in_sl.layout),
-                        );
+                        shape_map
+                            .insert(out_name.clone(), ShapeLayout::new(out_shape, in_sl.layout));
                     }
                 }
             }
@@ -433,7 +428,11 @@ impl Plan {
             if initializers.contains_key(name) {
                 continue;
             }
-            let numel: usize = sl.dims.iter().try_fold(1usize, |acc, &d| acc.checked_mul(d)).unwrap_or(0);
+            let numel: usize = sl
+                .dims
+                .iter()
+                .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+                .unwrap_or(0);
             if numel == 0 || numel > MAX_PREALLOC_ELEMS {
                 continue;
             }
@@ -471,7 +470,9 @@ impl Plan {
                 let total = cpu_ops + xnnpack_ops;
                 if total > 0 {
                     let pct = (xnnpack_ops as f64 / total as f64 * 100.0) as u32;
-                    tracing::info!("plan: {total} ops, {xnnpack_ops} XNNPACK ({pct}%), {cpu_ops} CPU");
+                    tracing::info!(
+                        "plan: {total} ops, {xnnpack_ops} XNNPACK ({pct}%), {cpu_ops} CPU"
+                    );
                 }
             }
             #[cfg(not(feature = "xnnpack"))]
@@ -820,7 +821,9 @@ pub fn build_node_with_opset(
                 .get_ints("dilations")
                 .unwrap_or_else(|| vec![1, 1]);
             let gr = node.attrs.get_int("group").unwrap_or(1);
-            Box::new(conv_transpose::ConvTranspose::new(inputs, &st, &pa, &di, gr))
+            Box::new(conv_transpose::ConvTranspose::new(
+                inputs, &st, &pa, &di, gr,
+            ))
         }
         OpType::MatMul => Box::new(matmul::MatMul::new(
             inputs,
@@ -878,7 +881,11 @@ pub fn build_node_with_opset(
         }
         OpType::GlobalAveragePool => {
             let nhwc = input_layout(0) == Layout::NHWC;
-            Box::new(global_avg_pool::GlobalAvgPool::new(inputs, input_shapes[0], nhwc))
+            Box::new(global_avg_pool::GlobalAvgPool::new(
+                inputs,
+                input_shapes[0],
+                nhwc,
+            ))
         }
         OpType::Flatten => Box::new(flatten::Flatten::new(
             inputs,
@@ -953,7 +960,13 @@ pub fn build_node_with_opset(
             let nm = if mode == "nearest" { "floor" } else { "" };
             let resize_inputs = vec![inputs[0].clone(), String::new(), inputs[1].clone()];
             let nhwc = input_layout(0) == Layout::NHWC;
-            Box::new(resize::Resize::new(resize_inputs, &mode, "asymmetric", nm, nhwc))
+            Box::new(resize::Resize::new(
+                resize_inputs,
+                &mode,
+                "asymmetric",
+                nm,
+                nhwc,
+            ))
         }
         OpType::Reshape => Box::new(reshape::Reshape::new(inputs, node.attrs.get_ints("shape"))),
         OpType::Constant => {
@@ -1274,13 +1287,13 @@ fn compile_xnnpack_subgraphs(
     _opset_version: i64,
     graph_output_names: &[String],
 ) -> Result<Vec<PlanNode>> {
-    use super::xnnpack_subgraph::{CapturedOp, is_xnnpack_compatible};
+    use super::xnnpack_subgraph::CapturedOp;
+    use super::xnnpack_subgraph::is_xnnpack_compatible;
 
     if std::env::var("XNNPACK_DISABLE").is_ok() {
         tracing::info!("XNNPACK disabled via XNNPACK_DISABLE env var");
         return Ok(nodes);
     }
-
 
     // Identify which plan nodes are XNNPACK-compatible
     let is_eligible = |idx: usize| -> bool {
@@ -1359,20 +1372,19 @@ fn compile_xnnpack_subgraphs(
 
         // A produced tensor is a required output if ANY node outside this run
         // consumes it, or if it's a graph output.
-        let mut required_set: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut required_set: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // Check nodes before the run
-        for idx in 0..run.start {
-            for inp in &consumed_by[idx] {
+        for entry in consumed_by.iter().take(run.start) {
+            for inp in entry {
                 if !inp.is_empty() && produced.contains(inp) {
                     required_set.insert(inp.clone());
                 }
             }
         }
         // Check nodes after the run
-        for idx in run.end..n {
-            for inp in &consumed_by[idx] {
+        for entry in consumed_by.iter().take(n).skip(run.end) {
+            for inp in entry {
                 if !inp.is_empty() && produced.contains(inp) {
                     required_set.insert(inp.clone());
                 }

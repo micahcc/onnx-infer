@@ -78,10 +78,10 @@ impl Layer for ConvTranspose {
         if let Some(bias_t) = &bias {
             let b = bias_t.floats().context("ConvTranspose bias")?;
             for n in 0..batch {
-                for oc in 0..c_out {
+                for (oc, &bias_val) in b.iter().enumerate().take(c_out) {
                     let base = (n * c_out + oc) * oh * ow;
                     for i in 0..oh * ow {
-                        buf[base + i] = b[oc];
+                        buf[base + i] = bias_val;
                     }
                 }
             }

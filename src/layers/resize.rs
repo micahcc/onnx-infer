@@ -71,7 +71,13 @@ pub enum NearestMode {
 }
 
 impl Resize {
-    pub fn new(inputs: Vec<String>, mode: &str, coord_transform: &str, nearest_mode: &str, nhwc: bool) -> Self {
+    pub fn new(
+        inputs: Vec<String>,
+        mode: &str,
+        coord_transform: &str,
+        nearest_mode: &str,
+        nhwc: bool,
+    ) -> Self {
         let mode = match mode {
             "linear" => ResizeMode::Linear,
             "cubic" => ResizeMode::Cubic,
@@ -203,7 +209,11 @@ impl Layer for Resize {
             // Case 3b: Fallback — 2x scaling of spatial dimensions
             else {
                 for (i, &d) in input.dims.iter().enumerate() {
-                    let is_spatial = if self.nhwc { i >= 1 && i < rank - 1 } else { i >= 2 };
+                    let is_spatial = if self.nhwc {
+                        i >= 1 && i < rank - 1
+                    } else {
+                        i >= 2
+                    };
                     let scale = if is_spatial { 2.0 } else { 1.0 };
                     out_dims[i] = (d as f32 * scale) as usize;
                 }
@@ -228,14 +238,21 @@ impl Layer for Resize {
 
         if self.mode == ResizeMode::Linear && rank == 4 {
             // Bilinear interpolation for 4D tensors (NHWC: [N, H, W, C])
-            let (n, c, oh, ow, ih, iw) =
-                (out_dims[0], out_dims[3], out_dims[1], out_dims[2], input.dims[1], input.dims[2]);
+            let (n, c, oh, ow, ih, iw) = (
+                out_dims[0],
+                out_dims[3],
+                out_dims[1],
+                out_dims[2],
+                input.dims[1],
+                input.dims[2],
+            );
             let h_scale = oh as f32 / ih as f32;
             let w_scale = ow as f32 / iw as f32;
 
             let h_coords: Vec<(usize, usize, f32)> = (0..oh)
                 .map(|y| {
-                    let orig = self.map_coord(y, oh, ih, h_scale)
+                    let orig = self
+                        .map_coord(y, oh, ih, h_scale)
                         .max(0.0)
                         .min((ih - 1) as f32);
                     let y0 = orig.floor() as usize;
@@ -246,7 +263,8 @@ impl Layer for Resize {
                 .collect();
             let w_coords: Vec<(usize, usize, f32)> = (0..ow)
                 .map(|x| {
-                    let orig = self.map_coord(x, ow, iw, w_scale)
+                    let orig = self
+                        .map_coord(x, ow, iw, w_scale)
                         .max(0.0)
                         .min((iw - 1) as f32);
                     let x0 = orig.floor() as usize;
@@ -260,10 +278,8 @@ impl Layer for Resize {
             let mut out_idx = 0;
             for b in 0..n {
                 let b_off = b * ih * iw * c;
-                for y in 0..oh {
-                    let (y0, y1, fy) = h_coords[y];
-                    for x in 0..ow {
-                        let (x0, x1, fx) = w_coords[x];
+                for &(y0, y1, fy) in h_coords.iter().take(oh) {
+                    for &(x0, x1, fx) in w_coords.iter().take(ow) {
                         let off00 = b_off + (y0 * iw + x0) * c;
                         let off01 = b_off + (y0 * iw + x1) * c;
                         let off10 = b_off + (y1 * iw + x0) * c;

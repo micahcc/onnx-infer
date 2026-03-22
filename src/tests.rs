@@ -1160,15 +1160,9 @@ fn run_multi_io_fixture_xnnpack(base: &Path, model_file: &str, test_set: usize) 
 }
 
 #[cfg(feature = "xnnpack")]
-fn run_multi_io_fixture_xnnpack_with_tol(
-    base: &Path,
-    model_file: &str,
-    test_set: usize,
-    tol: f32,
-) {
+fn run_multi_io_fixture_xnnpack_with_tol(base: &Path, model_file: &str, test_set: usize, tol: f32) {
     let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
-    let mut engine =
-        InferenceEngine::with_xnnpack(&model_bytes).expect("load model with xnnpack");
+    let mut engine = InferenceEngine::with_xnnpack(&model_bytes).expect("load model with xnnpack");
 
     let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
     let graph = model.graph.as_ref().expect("model has no graph");
@@ -1186,12 +1180,17 @@ fn run_multi_io_fixture_xnnpack_with_tol(
                 .outputs
                 .get(name)
                 .unwrap_or_else(|| panic!("[xnnpack] missing output {name}"));
-            assert_eq!(output.dims, expected.dims, "[xnnpack] shape mismatch for {name}");
+            assert_eq!(
+                output.dims, expected.dims,
+                "[xnnpack] shape mismatch for {name}"
+            );
 
             match (output.dtype(), expected.dtype()) {
                 (DType::Float, DType::Float) => {
                     let got = output.floats().expect("output should be float tensor");
-                    let want = expected.floats().expect("expected output should be float tensor");
+                    let want = expected
+                        .floats()
+                        .expect("expected output should be float tensor");
                     for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
                         assert!(
                             (g - w).abs() < tol || (g - w).abs() / w.abs().max(1e-6) < tol,
@@ -1201,14 +1200,18 @@ fn run_multi_io_fixture_xnnpack_with_tol(
                 }
                 (DType::Int64, DType::Int64) => {
                     let got = output.ints().expect("output should be int64 tensor");
-                    let want = expected.ints().expect("expected output should be int64 tensor");
+                    let want = expected
+                        .ints()
+                        .expect("expected output should be int64 tensor");
                     for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
                         assert_eq!(g, w, "[xnnpack] output {name}[{j}]: got {g}, want {w}");
                     }
                 }
                 (DType::Int64, DType::Float) => {
                     let got = output.ints().expect("output should be int64 tensor");
-                    let want = expected.floats().expect("expected output should be float tensor");
+                    let want = expected
+                        .floats()
+                        .expect("expected output should be float tensor");
                     for (j, (g, w)) in got.iter().zip(want.iter()).enumerate() {
                         assert!(
                             (*g as f32 - w).abs() < tol,
@@ -1238,10 +1241,8 @@ fn test_xnnpack_yolov4_11_set_0() {
     run_multi_io_fixture_xnnpack_with_tol(&fixture("yolov4-11"), "yolov4.onnx", 0, 5e-3);
 }
 
-
 #[cfg(feature = "xnnpack")]
 #[test]
 fn test_xnnpack_tinyyolov2_7_set_0() {
     run_multi_io_fixture_xnnpack(&fixture("tinyyolov2-7"), "model.onnx", 0);
 }
-

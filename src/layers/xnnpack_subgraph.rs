@@ -11,10 +11,11 @@
 //! Transpose nodes from graph-opt are compiled as `xnn_define_static_transpose`.
 //! Conv/MaxPool/etc receive NHWC input directly.
 
-use anyhow::Context;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::c_void;
+
+use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
@@ -285,17 +286,32 @@ impl SubgraphBuilder {
             OpType::Conv => self.add_conv(cap, shape_map, initializers),
             OpType::Relu => self.add_relu(cap, shape_map),
             OpType::Clip => self.add_clip(cap, shape_map, initializers),
-            OpType::Sigmoid => self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_sigmoid, None),
+            OpType::Sigmoid => {
+                self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_sigmoid, None)
+            }
             OpType::Tanh => self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_tanh, None),
             OpType::Exp => self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_exp, None),
             OpType::Abs => self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_abs, None),
-            OpType::Sqrt => self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_square_root, None),
-            OpType::Floor => self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_floor, None),
-            OpType::Ceil => self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_ceiling, None),
+            OpType::Sqrt => self.add_unary(
+                cap,
+                shape_map,
+                xnn_unary_operator_xnn_unary_square_root,
+                None,
+            ),
+            OpType::Floor => {
+                self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_floor, None)
+            }
+            OpType::Ceil => {
+                self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_ceiling, None)
+            }
             OpType::Log => self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_log, None),
-            OpType::Neg => self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_negate, None),
+            OpType::Neg => {
+                self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_negate, None)
+            }
             OpType::Sin => self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_sine, None),
-            OpType::Cos => self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_cosine, None),
+            OpType::Cos => {
+                self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_cosine, None)
+            }
             OpType::LeakyRelu => self.add_leaky_relu(cap, shape_map),
             OpType::Add => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_add),
             OpType::Sub => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_subtract),
@@ -351,8 +367,14 @@ impl SubgraphBuilder {
 
         let group = node.attrs.get_int("group").unwrap_or(1) as usize;
         let strides_attr = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-        let pads_attr = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
-        let dilations_attr = node.attrs.get_ints("dilations").unwrap_or_else(|| vec![1, 1]);
+        let pads_attr = node
+            .attrs
+            .get_ints("pads")
+            .unwrap_or_else(|| vec![0, 0, 0, 0]);
+        let dilations_attr = node
+            .attrs
+            .get_ints("dilations")
+            .unwrap_or_else(|| vec![1, 1]);
         let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
 
         let stride = Stride2D {
@@ -375,7 +397,9 @@ impl SubgraphBuilder {
             (1, 1)
         };
 
-        let pad = compute_padding(&auto_pad, h_in, w_in, kh, kw, &stride, &dilation, &pads_attr);
+        let pad = compute_padding(
+            &auto_pad, h_in, w_in, kh, kw, &stride, &dilation, &pads_attr,
+        );
 
         // Input value (already NHWC from graph_opt Transpose)
         let input_id = self.get_or_define_value(input_name, shape_map)?;
@@ -480,7 +504,10 @@ impl SubgraphBuilder {
         let node = &cap.node;
         let ks_attr = node.attrs.get_ints("kernel_shape").unwrap_or_default();
         let strides_attr = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-        let pads_attr = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+        let pads_attr = node
+            .attrs
+            .get_ints("pads")
+            .unwrap_or_else(|| vec![0, 0, 0, 0]);
         let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
 
         let kh = ks_attr[0] as usize;
@@ -499,7 +526,9 @@ impl SubgraphBuilder {
             (1, 1)
         };
 
-        let pad = compute_padding(&auto_pad, h_in, w_in, kh, kw, &stride, &dilation, &pads_attr);
+        let pad = compute_padding(
+            &auto_pad, h_in, w_in, kh, kw, &stride, &dilation, &pads_attr,
+        );
 
         let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
         let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
@@ -538,7 +567,10 @@ impl SubgraphBuilder {
         let node = &cap.node;
         let ks_attr = node.attrs.get_ints("kernel_shape").unwrap_or_default();
         let strides_attr = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-        let pads_attr = node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+        let pads_attr = node
+            .attrs
+            .get_ints("pads")
+            .unwrap_or_else(|| vec![0, 0, 0, 0]);
         let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
 
         let kh = ks_attr[0] as usize;
@@ -557,7 +589,9 @@ impl SubgraphBuilder {
             (1, 1)
         };
 
-        let pad = compute_padding(&auto_pad, h_in, w_in, kh, kw, &stride, &dilation, &pads_attr);
+        let pad = compute_padding(
+            &auto_pad, h_in, w_in, kh, kw, &stride, &dilation, &pads_attr,
+        );
 
         let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
         let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
@@ -620,7 +654,10 @@ impl SubgraphBuilder {
         let output_name = &cap.outputs[0];
         let out_shape = shape_map.get(output_name).cloned().unwrap_or_default();
         if out_shape.len() != 4 {
-            anyhow::bail!("XNNPACK Resize: expected 4D output shape, got {:?}", out_shape);
+            anyhow::bail!(
+                "XNNPACK Resize: expected 4D output shape, got {:?}",
+                out_shape
+            );
         }
         let new_height = out_shape[1];
         let new_width = out_shape[2];
@@ -659,7 +696,12 @@ impl SubgraphBuilder {
                 max: f32::INFINITY,
             },
         };
-        self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_clamp, Some(params))
+        self.add_unary(
+            cap,
+            shape_map,
+            xnn_unary_operator_xnn_unary_clamp,
+            Some(params),
+        )
     }
 
     fn add_clip(
@@ -690,7 +732,12 @@ impl SubgraphBuilder {
                 max: max_val,
             },
         };
-        self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_clamp, Some(params))
+        self.add_unary(
+            cap,
+            shape_map,
+            xnn_unary_operator_xnn_unary_clamp,
+            Some(params),
+        )
     }
 
     fn add_leaky_relu(
@@ -704,7 +751,12 @@ impl SubgraphBuilder {
                 negative_slope: alpha,
             },
         };
-        self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_leaky_relu, Some(params))
+        self.add_unary(
+            cap,
+            shape_map,
+            xnn_unary_operator_xnn_unary_leaky_relu,
+            Some(params),
+        )
     }
 
     fn add_unary(
@@ -812,7 +864,11 @@ impl SubgraphBuilder {
 
         // ONNX transB=1: weight is [O,I] — matches XNNPACK default
         // ONNX transB=0: weight is [I,O] — needs XNN_FLAG_TRANSPOSE_WEIGHTS
-        let flags = if trans_b { 0 } else { XNN_FLAG_TRANSPOSE_WEIGHTS };
+        let flags = if trans_b {
+            0
+        } else {
+            XNN_FLAG_TRANSPOSE_WEIGHTS
+        };
         let status = unsafe {
             xnn_define_fully_connected(
                 self.subgraph,
@@ -1034,7 +1090,10 @@ impl SubgraphBuilder {
             )
         };
         if status != xnn_status_xnn_status_success {
-            anyhow::bail!("xnn_define_static_reshape ({:?}) failed: {status:?}", cap.op);
+            anyhow::bail!(
+                "xnn_define_static_reshape ({:?}) failed: {status:?}",
+                cap.op
+            );
         }
         Ok(())
     }
@@ -1077,8 +1136,7 @@ impl SubgraphBuilder {
     ) -> Result<()> {
         let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
         let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
-        let status =
-            unsafe { xnn_define_bankers_rounding(self.subgraph, input_id, output_id, 0) };
+        let status = unsafe { xnn_define_bankers_rounding(self.subgraph, input_id, output_id, 0) };
         if status != xnn_status_xnn_status_success {
             anyhow::bail!("xnn_define_bankers_rounding failed: {status:?}");
         }
@@ -1110,7 +1168,13 @@ impl SubgraphBuilder {
         let ndim = in_shape.len() as i64;
         let axes: Vec<usize> = raw_axes
             .iter()
-            .map(|&a| if a < 0 { (ndim + a) as usize } else { a as usize })
+            .map(|&a| {
+                if a < 0 {
+                    (ndim + a) as usize
+                } else {
+                    a as usize
+                }
+            })
             .collect();
 
         let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
@@ -1210,9 +1274,8 @@ fn infer_op_output_shapes(
     shape_map: &HashMap<String, Vec<usize>>,
     initializers: &HashMap<String, Tensor>,
 ) -> Vec<(String, Vec<usize>)> {
-    let get = |idx: usize| -> Option<&Vec<usize>> {
-        op.inputs.get(idx).and_then(|n| shape_map.get(n))
-    };
+    let get =
+        |idx: usize| -> Option<&Vec<usize>> { op.inputs.get(idx).and_then(|n| shape_map.get(n)) };
 
     let mut result = Vec::new();
 
@@ -1240,13 +1303,39 @@ fn infer_op_output_shapes(
                         let c_out = w.dims[0]; // weights are still OIHW
                         let kh = w.dims[2];
                         let kw = w.dims[3];
-                        let strides = op.node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-                        let dilations = op.node.attrs.get_ints("dilations").unwrap_or_else(|| vec![1, 1]);
-                        let pads = op.node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+                        let strides = op
+                            .node
+                            .attrs
+                            .get_ints("strides")
+                            .unwrap_or_else(|| vec![1, 1]);
+                        let dilations = op
+                            .node
+                            .attrs
+                            .get_ints("dilations")
+                            .unwrap_or_else(|| vec![1, 1]);
+                        let pads = op
+                            .node
+                            .attrs
+                            .get_ints("pads")
+                            .unwrap_or_else(|| vec![0, 0, 0, 0]);
                         let auto_pad = op.node.attrs.get_string("auto_pad").unwrap_or_default();
 
-                        let h_out = compute_spatial_out(h_in, kh, strides[0] as usize, dilations[0] as usize, pads[0] as usize + pads[2] as usize, &auto_pad);
-                        let w_out = compute_spatial_out(w_in, kw, strides[1] as usize, dilations[1] as usize, pads[1] as usize + pads[3] as usize, &auto_pad);
+                        let h_out = compute_spatial_out(
+                            h_in,
+                            kh,
+                            strides[0] as usize,
+                            dilations[0] as usize,
+                            pads[0] as usize + pads[2] as usize,
+                            &auto_pad,
+                        );
+                        let w_out = compute_spatial_out(
+                            w_in,
+                            kw,
+                            strides[1] as usize,
+                            dilations[1] as usize,
+                            pads[1] as usize + pads[3] as usize,
+                            &auto_pad,
+                        );
                         // Output is NHWC: [N, H_out, W_out, C_out]
                         result.push((op.outputs[0].clone(), vec![n, h_out, w_out, c_out]));
                     }
@@ -1259,12 +1348,34 @@ fn infer_op_output_shapes(
             if let Some(x) = get(0) {
                 if x.len() == 4 {
                     let ks = op.node.attrs.get_ints("kernel_shape").unwrap_or_default();
-                    let strides = op.node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-                    let pads = op.node.attrs.get_ints("pads").unwrap_or_else(|| vec![0, 0, 0, 0]);
+                    let strides = op
+                        .node
+                        .attrs
+                        .get_ints("strides")
+                        .unwrap_or_else(|| vec![1, 1]);
+                    let pads = op
+                        .node
+                        .attrs
+                        .get_ints("pads")
+                        .unwrap_or_else(|| vec![0, 0, 0, 0]);
                     let auto_pad = op.node.attrs.get_string("auto_pad").unwrap_or_default();
                     if ks.len() >= 2 {
-                        let h_out = compute_spatial_out(x[1], ks[0] as usize, strides[0] as usize, 1, pads[0] as usize + pads[2] as usize, &auto_pad);
-                        let w_out = compute_spatial_out(x[2], ks[1] as usize, strides[1] as usize, 1, pads[1] as usize + pads[3] as usize, &auto_pad);
+                        let h_out = compute_spatial_out(
+                            x[1],
+                            ks[0] as usize,
+                            strides[0] as usize,
+                            1,
+                            pads[0] as usize + pads[2] as usize,
+                            &auto_pad,
+                        );
+                        let w_out = compute_spatial_out(
+                            x[2],
+                            ks[1] as usize,
+                            strides[1] as usize,
+                            1,
+                            pads[1] as usize + pads[3] as usize,
+                            &auto_pad,
+                        );
                         // Output is NHWC: [N, H_out, W_out, C]
                         result.push((op.outputs[0].clone(), vec![x[0], h_out, w_out, x[3]]));
                     }
@@ -1366,13 +1477,22 @@ fn infer_op_output_shapes(
                                 infer_idx = Some(i);
                                 dims.push(0);
                             } else if v == 0 {
-                                dims.push(in_shape.map(|s| s.get(i).copied().unwrap_or(0)).unwrap_or(0));
+                                dims.push(
+                                    in_shape
+                                        .map(|s| s.get(i).copied().unwrap_or(0))
+                                        .unwrap_or(0),
+                                );
                             } else {
                                 dims.push(v as usize);
                             }
                         }
                         if let Some(idx) = infer_idx {
-                            let known: usize = dims.iter().enumerate().filter(|&(i, _)| i != idx).map(|(_, &d)| d).product();
+                            let known: usize = dims
+                                .iter()
+                                .enumerate()
+                                .filter(|&(i, _)| i != idx)
+                                .map(|(_, &d)| d)
+                                .product();
                             if known > 0 {
                                 dims[idx] = total / known;
                             }
@@ -1387,7 +1507,11 @@ fn infer_op_output_shapes(
             let raw_axis = op.node.attrs.get_int("axis").unwrap_or(0);
             if let Some(first) = get(0) {
                 let ndim = first.len() as i64;
-                let axis = (if raw_axis < 0 { raw_axis + ndim } else { raw_axis }) as usize;
+                let axis = (if raw_axis < 0 {
+                    raw_axis + ndim
+                } else {
+                    raw_axis
+                }) as usize;
                 let mut out = first.clone();
                 for i in 1..op.inputs.len() {
                     if let Some(s) = get(i) {
@@ -1405,14 +1529,20 @@ fn infer_op_output_shapes(
                 let mut out = vec![0usize; out_len];
                 let axes_set: HashSet<usize> = axes
                     .iter()
-                    .map(|&a| if a < 0 { (out_len as i64 + a) as usize } else { a as usize })
+                    .map(|&a| {
+                        if a < 0 {
+                            (out_len as i64 + a) as usize
+                        } else {
+                            a as usize
+                        }
+                    })
                     .collect();
                 let mut src = 0;
-                for i in 0..out_len {
+                for (i, out_val) in out.iter_mut().enumerate().take(out_len) {
                     if axes_set.contains(&i) {
-                        out[i] = 1;
+                        *out_val = 1;
                     } else {
-                        out[i] = x[src];
+                        *out_val = x[src];
                         src += 1;
                     }
                 }
@@ -1429,7 +1559,13 @@ fn infer_op_output_shapes(
                     let ndim = x.len() as i64;
                     let axes_set: HashSet<usize> = axes
                         .iter()
-                        .map(|&a| if a < 0 { (ndim + a) as usize } else { a as usize })
+                        .map(|&a| {
+                            if a < 0 {
+                                (ndim + a) as usize
+                            } else {
+                                a as usize
+                            }
+                        })
                         .collect();
                     x.iter()
                         .enumerate()
@@ -1448,7 +1584,13 @@ fn infer_op_output_shapes(
                 let ndim = x.len() as i64;
                 let axes_set: HashSet<usize> = axes
                     .iter()
-                    .map(|&a| if a < 0 { (ndim + a) as usize } else { a as usize })
+                    .map(|&a| {
+                        if a < 0 {
+                            (ndim + a) as usize
+                        } else {
+                            a as usize
+                        }
+                    })
                     .collect();
                 let out: Vec<usize> = x
                     .iter()
@@ -1636,7 +1778,7 @@ impl XnnpackSubgraph {
         }
 
         let compiled = self.compiled.as_mut().unwrap();
-        let xnn_pad = (XNN_EXTRA_BYTES as usize + 3) / 4; // padding in f32 elements
+        let xnn_pad = (XNN_EXTRA_BYTES as usize).div_ceil(4); // padding in f32 elements
 
         // Ensure input tensors have XNN_EXTRA_BYTES padding and collect pointers.
         // Ensure output tensors are pre-allocated with padding.
@@ -1767,7 +1909,10 @@ impl XnnpackSubgraph {
                     {
                         if let Some(t) = values.get(inp) {
                             if t.dtype() != crate::DType::Float {
-                                tracing::debug!("XNNPACK: non-float input '{inp}' dtype={:?}", t.dtype());
+                                tracing::debug!(
+                                    "XNNPACK: non-float input '{inp}' dtype={:?}",
+                                    t.dtype()
+                                );
                                 self.compile_failed = true;
                                 return Ok(());
                             }
@@ -1833,12 +1978,15 @@ impl XnnpackSubgraph {
             values.entry(k.clone()).or_insert_with(|| v.clone());
         }
         for op in &self.ops {
-            super::execute_node(&op.node, values)
-                .with_context(|| format!("XNNPACK CPU fallback: {:?} {:?} -> {:?}", op.op, op.inputs, op.outputs))?;
+            super::execute_node(&op.node, values).with_context(|| {
+                format!(
+                    "XNNPACK CPU fallback: {:?} {:?} -> {:?}",
+                    op.op, op.inputs, op.outputs
+                )
+            })?;
         }
         Ok(())
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -1878,9 +2026,14 @@ fn compile_subgraph(
     let mut input_shapes = Vec::new();
     for (i, name) in external_inputs.iter().enumerate() {
         let shape = shape_map.get(name).cloned().unwrap_or_default();
-        let numel: usize = shape.iter().try_fold(1usize, |a, &d| a.checked_mul(d)).unwrap_or(0);
+        let numel: usize = shape
+            .iter()
+            .try_fold(1usize, |a, &d| a.checked_mul(d))
+            .unwrap_or(0);
         if numel == 0 || numel > MAX_BUF_ELEMS {
-            anyhow::bail!("XNNPACK: input '{name}' has unreasonable shape {shape:?} (numel={numel})");
+            anyhow::bail!(
+                "XNNPACK: input '{name}' has unreasonable shape {shape:?} (numel={numel})"
+            );
         }
         builder.define_external_input(name, i as u32, &shape)?;
         input_shapes.push(shape);
@@ -1890,9 +2043,14 @@ fn compile_subgraph(
     let mut output_shapes = Vec::new();
     for (i, name) in required_outputs.iter().enumerate() {
         let shape = shape_map.get(name).cloned().unwrap_or_default();
-        let numel: usize = shape.iter().try_fold(1usize, |a, &d| a.checked_mul(d)).unwrap_or(0);
+        let numel: usize = shape
+            .iter()
+            .try_fold(1usize, |a, &d| a.checked_mul(d))
+            .unwrap_or(0);
         if numel == 0 || numel > MAX_BUF_ELEMS {
-            anyhow::bail!("XNNPACK: output '{name}' has unreasonable shape {shape:?} (numel={numel})");
+            anyhow::bail!(
+                "XNNPACK: output '{name}' has unreasonable shape {shape:?} (numel={numel})"
+            );
         }
         let ext_id = (external_inputs.len() + i) as u32;
         builder.define_external_output(name, ext_id, &shape)?;
