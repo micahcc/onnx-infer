@@ -1,5 +1,9 @@
 # onnx-infer
 
+PROJECT MIGRATED TO GITLAB: https://gitlab.com/micahcc/onnx-infer
+
+This is almost purely because they have 10GB of free git lfs and I don't want to pay to host test models :/
+
 Pure Rust ONNX inference engine targeting computer vision models. Zero heap
 allocations after warmup — all tensor buffers, intermediate values, and output
 maps are pre-allocated and reused across forward passes.
