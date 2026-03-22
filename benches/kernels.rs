@@ -38,7 +38,8 @@ fn bench_conv_3x3_64(c: &mut Criterion) {
     let kh = 3;
     let kw = 3;
 
-    let input = Tensor::new(dims![n, c_in, h, w], rand_vec(n * c_in * h * w));
+    // NHWC layout: [N, H, W, C]
+    let input = Tensor::new(dims![n, h, w, c_in], rand_vec(n * c_in * h * w));
     let weight = Tensor::new(dims![c_out, c_in, kh, kw], rand_vec(c_out * c_in * kh * kw));
     let bias = Tensor::new(dims![c_out], rand_vec(c_out));
 
@@ -53,8 +54,9 @@ fn bench_conv_3x3_64(c: &mut Criterion) {
         vec![1, 1],
         1,
         String::new(),
-        &[n, c_in, h, w],
+        &[n, h, w, c_in],
         &[c_out, c_in, kh, kw],
+        true,
     );
 
     c.bench_function("conv_3x3_c64_56x56", |b| {
@@ -74,7 +76,8 @@ fn bench_conv_1x1_128(c: &mut Criterion) {
     let kh = 1;
     let kw = 1;
 
-    let input = Tensor::new(dims![n, c_in, h, w], rand_vec(n * c_in * h * w));
+    // NHWC layout: [N, H, W, C]
+    let input = Tensor::new(dims![n, h, w, c_in], rand_vec(n * c_in * h * w));
     let weight = Tensor::new(dims![c_out, c_in, kh, kw], rand_vec(c_out * c_in * kh * kw));
     let bias = Tensor::new(dims![c_out], rand_vec(c_out));
 
@@ -89,8 +92,9 @@ fn bench_conv_1x1_128(c: &mut Criterion) {
         vec![1, 1],
         1,
         String::new(),
-        &[n, c_in, h, w],
+        &[n, h, w, c_in],
         &[c_out, c_in, kh, kw],
+        true,
     );
 
     c.bench_function("conv_1x1_c128_28x28", |b| {

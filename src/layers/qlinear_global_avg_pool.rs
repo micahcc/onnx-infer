@@ -2,12 +2,14 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 
+use crate::Layout;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 use crate::layers::global_avg_pool::GlobalAvgPool;
 
+#[derive(Debug)]
 pub struct QLinearGlobalAvgPool {
     pub inputs: Vec<String>,
     pub inner: GlobalAvgPool,
@@ -46,6 +48,9 @@ impl Layer for QLinearGlobalAvgPool {
 
         let x_tensor = self.tmp_values.get_mut(&self.inner.inputs[0]).unwrap();
         x_tensor.set_dims(&x_quant.dims);
+        if self.inner.nhwc {
+            x_tensor.layout = Layout::NHWC;
+        }
         let x_buf = x_tensor.as_mut_f32(x_quant.numel());
         crate::layers::dequantize_into(
             x_quant.floats().context("in QLinearGlobalAvgPool layer")?,
@@ -58,6 +63,7 @@ impl Layer for QLinearGlobalAvgPool {
 
         let numel = self.gap_output.numel();
         output.set_dims(&self.gap_output.dims);
+        output.layout = self.gap_output.layout;
         let out_buf = output.as_mut_f32(numel);
         crate::layers::quantize_u8_into(
             self.gap_output

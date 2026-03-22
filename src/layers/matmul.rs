@@ -9,6 +9,7 @@ use crate::broadcast_shape_into;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct MatMulPrecomp {
     pub m: usize,
     pub k: usize,
@@ -23,6 +24,7 @@ pub struct MatMulPrecomp {
     pub out_rank: usize,
 }
 
+#[derive(Debug)]
 pub struct MatMul {
     pub inputs: Vec<String>,
     pub shape_cache: Dims,

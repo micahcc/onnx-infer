@@ -20,9 +20,11 @@ impl If {
     pub fn new(
         inputs: Vec<String>,
         outputs: Vec<String>,
-        then_branch: Graph,
-        else_branch: Graph,
+        mut then_branch: Graph,
+        mut else_branch: Graph,
     ) -> Self {
+        crate::graph_opt::optimize(&mut then_branch);
+        crate::graph_opt::optimize(&mut else_branch);
         Self {
             inputs,
             outputs,

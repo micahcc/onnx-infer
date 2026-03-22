@@ -8,6 +8,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct Min {
     pub inputs: Vec<String>,
 }

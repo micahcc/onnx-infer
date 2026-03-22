@@ -9,6 +9,7 @@ use crate::broadcast_shape_into;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct PRelu {
     pub inputs: Vec<String>,
 }

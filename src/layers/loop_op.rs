@@ -36,7 +36,8 @@ pub struct Loop {
 }
 
 impl Loop {
-    pub fn new(inputs: Vec<String>, outputs: Vec<String>, body: Graph) -> Self {
+    pub fn new(inputs: Vec<String>, outputs: Vec<String>, mut body: Graph) -> Self {
+        crate::graph_opt::optimize(&mut body);
         Self {
             inputs,
             outputs,
@@ -314,6 +315,10 @@ impl Loop {
                     }
                     PlanNode::Scan(scan_layer) => {
                         scan_layer.execute(values)?;
+                    }
+                    #[cfg(feature = "xnnpack")]
+                    PlanNode::XnnpackSubgraph(sg) => {
+                        sg.execute(values)?;
                     }
                 }
             }

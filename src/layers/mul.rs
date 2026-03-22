@@ -5,6 +5,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct Mul {
     pub inputs: Vec<String>,
     pub legacy_broadcast: bool,

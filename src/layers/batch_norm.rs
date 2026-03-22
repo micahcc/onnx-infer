@@ -8,12 +8,14 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct BatchNormPrecomp {
     pub n: usize,
     pub c: usize,
     pub spatial: usize,
 }
 
+#[derive(Debug)]
 pub struct BatchNorm {
     pub inputs: Vec<String>,
     pub epsilon: f32,

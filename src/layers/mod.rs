@@ -15,6 +15,7 @@ pub mod concat;
 pub mod constant;
 pub mod constant_of_shape;
 pub mod conv;
+pub mod conv_transpose;
 pub mod dequantize_linear;
 pub mod div;
 pub mod dropout;
@@ -81,6 +82,8 @@ pub mod transpose;
 pub mod unary_ops;
 pub mod unsqueeze;
 pub mod where_op;
+#[cfg(feature = "xnnpack")]
+pub mod xnnpack_subgraph;
 
 use std::collections::HashMap;
 
@@ -95,7 +98,7 @@ use crate::Tensor;
 use crate::broadcast_index;
 use crate::broadcast_shape_into;
 
-pub trait Layer: Send {
+pub trait Layer: Send + std::fmt::Debug {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()>;
 }
 

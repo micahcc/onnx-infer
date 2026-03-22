@@ -26,7 +26,7 @@ fn is_inverse_transpose(perm: &[i64]) -> bool {
 }
 
 fn get_transpose_perm(node: &Node) -> Option<Vec<i64>> {
-    if node.op_type != OpType::Transpose {
+    if !matches!(node.op_type, OpType::Transpose | OpType::LayoutTranspose) {
         return None;
     }
     node.attrs.get_ints("perm")
@@ -38,6 +38,8 @@ fn are_inverse_perms(a: &[i64], b: &[i64]) -> bool {
 
 /// Ops that require NHWC layout (spatial 2D ops).
 fn requires_nhwc(op: OpType) -> bool {
+    // Spatial ops whose CPU execution handles NHWC natively.
+    // BatchNormalization is folded into Conv by graph_opt before this runs.
     matches!(
         op,
         OpType::Conv
@@ -48,8 +50,6 @@ fn requires_nhwc(op: OpType) -> bool {
             | OpType::Upsample
             | OpType::QLinearConv
             | OpType::QLinearGlobalAveragePool
-            | OpType::BatchNormalization
-            | OpType::Lrn
     )
 }
 
@@ -131,6 +131,21 @@ fn make_transpose_node(name: &str, input: &str, output: &str, perm: &[i64; 4]) -
     }
 }
 
+/// Create a LayoutTranspose node — a synthetic transpose inserted by graph_opt
+/// that explicitly changes the data layout (NCHW↔NHWC). Unlike regular Transpose,
+/// this carries layout semantics: the output layout differs from the input layout.
+fn make_layout_transpose_node(name: &str, input: &str, output: &str, perm: &[i64; 4]) -> Node {
+    let mut attrs_map = HashMap::new();
+    attrs_map.insert("perm".to_string(), Attr::Ints(perm.to_vec()));
+    Node {
+        op_type: OpType::LayoutTranspose,
+        name: name.to_string(),
+        inputs: vec![input.to_string()],
+        outputs: vec![output.to_string()],
+        attrs: Attrs(attrs_map),
+    }
+}
+
 fn unique_name(prefix: &str, counter: &mut usize) -> String {
     *counter += 1;
     format!("{prefix}_{}", *counter)
@@ -171,8 +186,10 @@ pub fn optimize(graph: &mut Graph) {
     let mut counter = 0usize;
     fold_batchnorm_into_conv(graph);
     insert_layout_transposes(graph, &mut counter);
-    // Run transpose elimination passes iteratively until no more changes
-    for _ in 0..20 {
+
+    // Run transpose elimination passes iteratively until no more changes.
+    // Limit is high because push_unary/push_binary process one move at a time.
+    for _ in 0..200 {
         let changed = eliminate_inverse_transposes(graph)
             | push_transposes_through_unary(graph, &mut counter)
             | push_transposes_through_binary(graph, &mut counter);
@@ -220,8 +237,8 @@ fn insert_layout_transposes(graph: &mut Graph, counter: &mut usize) {
                 continue;
             }
             let nhwc_name = unique_name("__nchw2nhwc", counter);
-            new_nodes.push(make_transpose_node(
-                &format!("transpose_{nhwc_name}"),
+            new_nodes.push(make_layout_transpose_node(
+                &format!("layout_transpose_{nhwc_name}"),
                 &orig_input,
                 &nhwc_name,
                 &NCHW_TO_NHWC,
@@ -238,8 +255,8 @@ fn insert_layout_transposes(graph: &mut Graph, counter: &mut usize) {
             }
             let nhwc_name = unique_name("__nhwc_out", counter);
             modified.outputs[i] = nhwc_name.clone();
-            output_transposes.push(make_transpose_node(
-                &format!("transpose_{}", unique_name("__nhwc2nchw", counter)),
+            output_transposes.push(make_layout_transpose_node(
+                &format!("layout_transpose_{}", unique_name("__nhwc2nchw", counter)),
                 &nhwc_name,
                 &orig_output,
                 &NHWC_TO_NCHW,
@@ -262,6 +279,10 @@ fn eliminate_inverse_transposes(graph: &mut Graph) -> bool {
     let mut rewrites: HashMap<String, String> = HashMap::new();
 
     for (i, node) in graph.nodes.iter().enumerate() {
+        // Only cancel LayoutTranspose pairs — regular Transposes are part of model computation
+        if node.op_type != OpType::LayoutTranspose {
+            continue;
+        }
         let Some(perm) = get_transpose_perm(node) else {
             continue;
         };
@@ -273,6 +294,9 @@ fn eliminate_inverse_transposes(graph: &mut Graph) -> bool {
             continue;
         };
         let producer = &graph.nodes[producer_idx];
+        if producer.op_type != OpType::LayoutTranspose {
+            continue;
+        }
         let Some(prod_perm) = get_transpose_perm(producer) else {
             continue;
         };
@@ -328,12 +352,15 @@ fn eliminate_inverse_transposes(graph: &mut Graph) -> bool {
 /// This lets the transpose reach and cancel with an inverse transpose downstream.
 fn push_transposes_through_unary(graph: &mut Graph, counter: &mut usize) -> bool {
     let consumer_map = build_consumer_map(&graph.nodes);
-    let mut changed = false;
 
     // Collect moves to make (avoid borrowing issues)
     let mut moves: Vec<(usize, usize)> = Vec::new(); // (transpose_idx, consumer_idx)
 
     for (i, node) in graph.nodes.iter().enumerate() {
+        // Only push LayoutTranspose — regular Transposes are model computation
+        if node.op_type != OpType::LayoutTranspose {
+            continue;
+        }
         let Some(perm) = get_transpose_perm(node) else {
             continue;
         };
@@ -367,7 +394,9 @@ fn push_transposes_through_unary(graph: &mut Graph, counter: &mut usize) -> bool
         moves.push((i, consumer_idx));
     }
 
-    for (transpose_idx, consumer_idx) in moves {
+    // Process one move at a time since each remove+insert shifts indices.
+    // The outer loop in optimize() will call us again for the rest.
+    if let Some(&(transpose_idx, consumer_idx)) = moves.first() {
         let transpose_input = graph.nodes[transpose_idx].inputs[0].clone();
         let consumer_output = graph.nodes[consumer_idx].outputs[0].clone();
 
@@ -390,10 +419,10 @@ fn push_transposes_through_unary(graph: &mut Graph, counter: &mut usize) -> bool
             graph.nodes.insert(consumer_idx, t);
         }
 
-        changed = true;
+        true
+    } else {
+        false
     }
-
-    changed
 }
 
 /// Push transposes through binary elementwise ops.
@@ -426,6 +455,10 @@ fn push_transposes_through_binary(graph: &mut Graph, counter: &mut usize) -> boo
                 continue 'outer;
             };
             let prod = &graph.nodes[prod_idx];
+            // Only push LayoutTranspose — regular Transposes are model computation
+            if prod.op_type != OpType::LayoutTranspose {
+                continue 'outer;
+            }
             let Some(p) = get_transpose_perm(prod) else {
                 continue 'outer;
             };
@@ -476,12 +509,24 @@ fn push_transposes_through_binary(graph: &mut Graph, counter: &mut usize) -> boo
         graph.nodes[binary_idx].outputs[0] = intermediate.clone();
 
         let perm_arr: [i64; 4] = perm.try_into().unwrap();
-        let t = make_transpose_node(
-            &unique_name("__binary_transpose", counter),
-            &intermediate,
-            &binary_output,
-            &perm_arr,
-        );
+        // Preserve LayoutTranspose type when pushing through binary ops.
+        // Check if the source transposes were LayoutTranspose.
+        let is_layout = graph.nodes[prod0_idx].op_type == OpType::LayoutTranspose;
+        let t = if is_layout {
+            make_layout_transpose_node(
+                &unique_name("__binary_layout_transpose", counter),
+                &intermediate,
+                &binary_output,
+                &perm_arr,
+            )
+        } else {
+            make_transpose_node(
+                &unique_name("__binary_transpose", counter),
+                &intermediate,
+                &binary_output,
+                &perm_arr,
+            )
+        };
 
         // Mark the old transpose nodes for removal by making them identity-like
         // (they'll be cleaned up by dead node removal)
@@ -764,12 +809,17 @@ pub fn dump(graph: &Graph) -> String {
         let inputs_str = node.inputs.join(", ");
 
         let mut extra = String::new();
-        if node.op_type == OpType::Transpose {
+        if matches!(node.op_type, OpType::Transpose | OpType::LayoutTranspose) {
             if let Some(perm) = node.attrs.get_ints("perm") {
+                let prefix = if node.op_type == OpType::LayoutTranspose {
+                    "LAYOUT "
+                } else {
+                    ""
+                };
                 if is_nchw_to_nhwc(&perm) {
-                    extra = " [NCHW→NHWC]".to_string();
+                    extra = format!(" [{prefix}NCHW→NHWC]");
                 } else if is_nhwc_to_nchw(&perm) {
-                    extra = " [NHWC→NCHW]".to_string();
+                    extra = format!(" [{prefix}NHWC→NCHW]");
                 } else {
                     extra = format!(" perm={perm:?}");
                 }
@@ -943,12 +993,12 @@ mod tests {
         let transpose_count = graph
             .nodes
             .iter()
-            .filter(|n| n.op_type == OpType::Transpose)
+            .filter(|n| n.op_type == OpType::LayoutTranspose)
             .count();
         // We expect: 1 NCHW→NHWC at input, 1 NHWC→NCHW at output (pushed past Relu)
         assert_eq!(
             transpose_count, 2,
-            "Expected 2 transposes, got {transpose_count}"
+            "Expected 2 layout transposes, got {transpose_count}"
         );
     }
 
@@ -983,13 +1033,13 @@ mod tests {
         let transpose_count = graph
             .nodes
             .iter()
-            .filter(|n| n.op_type == OpType::Transpose)
+            .filter(|n| n.op_type == OpType::LayoutTranspose)
             .count();
         // We expect: 1 NCHW→NHWC at entry, Conv, Relu, Conv, 1 NHWC→NCHW at exit
         // The pair in the middle should have been eliminated
         assert_eq!(
             transpose_count, 2,
-            "Expected 2 transposes, got {transpose_count}"
+            "Expected 2 layout transposes, got {transpose_count}"
         );
     }
 

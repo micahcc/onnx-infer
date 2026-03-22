@@ -8,6 +8,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct RoiAlign {
     pub inputs: Vec<String>,
     pub is_avg: bool,

@@ -9,6 +9,7 @@ use crate::get_tensor;
 use crate::layers::Layer;
 use crate::onnx_ir::ElemType;
 
+#[derive(Debug)]
 pub struct Cast {
     pub inputs: Vec<String>,
     pub to_int: bool,

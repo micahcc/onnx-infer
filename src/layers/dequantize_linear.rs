@@ -8,6 +8,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct DequantizePrecomp {
     pub axis: usize,
     pub outer: usize,
@@ -15,6 +16,7 @@ pub struct DequantizePrecomp {
     pub inner: usize,
 }
 
+#[derive(Debug)]
 pub struct DequantizeLinear {
     pub inputs: Vec<String>,
     pub axis: i64,

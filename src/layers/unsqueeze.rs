@@ -7,6 +7,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct Unsqueeze {
     pub inputs: Vec<String>,
     pub axes_attr: Vec<i64>,

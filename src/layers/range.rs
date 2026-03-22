@@ -9,6 +9,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct Range {
     pub inputs: Vec<String>,
 }

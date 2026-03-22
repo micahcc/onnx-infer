@@ -11,6 +11,7 @@ exclude = ["fixtures/"]
 cli = ["dep:clap", "dep:image", "dep:prost-reflect", "dep:serde_json"]
 accelerate = []
 blas = []
+xnnpack = ["dep:bindgen"]
 
 
 [dependencies]
@@ -45,6 +46,7 @@ collapsible_if = "allow"
 prost = "0"
 prost-build = "0"
 protox = "0.9"
+bindgen = { version = "0.71", optional = true }
 
 [[bin]]
 name = "onnx-infer"

@@ -14,6 +14,46 @@ use crate::onnx::TensorProto;
 
 pub type Dims = SmallVec<[usize; 8]>;
 
+/// Data layout for spatial tensors.
+///
+/// ONNX convention is NCHW (batch, channels, height, width).
+/// graph_opt may insert LayoutTranspose nodes that convert to NHWC for XNNPACK.
+/// `Unknown` is used for non-spatial tensors (1D, 2D) or after rank-changing ops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Layout {
+    #[default]
+    NCHW,
+    NHWC,
+    Unknown,
+}
+
+/// Shape + layout metadata for a tensor, used in shape_map during plan building.
+#[derive(Debug, Clone)]
+pub struct ShapeLayout {
+    pub dims: Dims,
+    pub layout: Layout,
+}
+
+impl ShapeLayout {
+    pub fn new(dims: Dims, layout: Layout) -> Self {
+        Self { dims, layout }
+    }
+
+    pub fn nchw(dims: Dims) -> Self {
+        Self {
+            dims,
+            layout: Layout::NCHW,
+        }
+    }
+
+    pub fn unknown(dims: Dims) -> Self {
+        Self {
+            dims,
+            layout: Layout::Unknown,
+        }
+    }
+}
+
 #[macro_export]
 macro_rules! dims {
     ($elem:expr; $n:expr) => { smallvec::smallvec![$elem; $n] };
@@ -31,6 +71,7 @@ pub enum TensorData {
 pub struct Tensor {
     pub dims: Dims,
     pub data: TensorData,
+    pub layout: Layout,
 }
 
 impl Tensor {
@@ -38,6 +79,7 @@ impl Tensor {
         Self {
             dims,
             data: TensorData::F32(data),
+            layout: Layout::NCHW,
         }
     }
 
@@ -45,6 +87,7 @@ impl Tensor {
         Self {
             dims,
             data: TensorData::I64(data),
+            layout: Layout::NCHW,
         }
     }
 
@@ -52,6 +95,7 @@ impl Tensor {
         Self {
             dims,
             data: TensorData::Strings(data),
+            layout: Layout::NCHW,
         }
     }
 
@@ -172,6 +216,7 @@ impl Tensor {
 
     pub fn copy_from(&mut self, other: &Tensor) {
         self.dims.clone_from(&other.dims);
+        self.layout = other.layout;
         match &other.data {
             TensorData::F32(src) => {
                 let dst = self.as_mut_f32(src.len());
@@ -189,6 +234,7 @@ impl Tensor {
 
     pub fn copy_cast_f32(&mut self, src: &Tensor) -> anyhow::Result<()> {
         self.dims.clone_from(&src.dims);
+        self.layout = src.layout;
         let len = src.numel();
         let buf = self.as_mut_f32(len);
         match &src.data {
@@ -211,6 +257,7 @@ impl Default for Tensor {
         Self {
             dims: Dims::new(),
             data: TensorData::F32(vec![]),
+            layout: Layout::NCHW,
         }
     }
 }

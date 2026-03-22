@@ -4,6 +4,7 @@ use crate::Result;
 use crate::Tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct Constant {
     pub value: Tensor,
 }

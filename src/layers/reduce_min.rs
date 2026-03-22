@@ -9,6 +9,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct ReduceMinPrecomp {
     pub axes_mask: [bool; 8],
     pub out_dims: [usize; 8],
@@ -19,6 +20,7 @@ pub struct ReduceMinPrecomp {
     pub in_rank: usize,
 }
 
+#[derive(Debug)]
 pub struct ReduceMin {
     pub inputs: Vec<String>,
     pub keepdims: bool,

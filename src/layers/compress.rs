@@ -8,6 +8,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct Compress {
     pub inputs: Vec<String>,
     pub axis: Option<i64>,

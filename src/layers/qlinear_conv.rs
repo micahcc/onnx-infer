@@ -2,12 +2,14 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 
+use crate::Layout;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 use crate::layers::conv::Conv;
 
+#[derive(Debug)]
 pub struct QLinearConv {
     pub inputs: Vec<String>,
     pub inner: Conv,
@@ -31,13 +33,15 @@ impl QLinearConv {
     }
 }
 
-/// im2col for i16: unfold input patches, converting f32-encoded quantized values
-/// to i16 by subtracting zero_point. Range -255..255 fits safely in i16.
-fn im2col_i16(
+/// im2col for i16 with NHWC input layout.
+/// Converts f32-encoded quantized values to i16 by subtracting zero_point.
+fn im2col_i16_nhwc(
     input: &[f32],
     col: &mut [i16],
     zero_point: f32,
+    c_in: usize,
     c_in_per_group: usize,
+    group_ch_offset: usize,
     h_in: usize,
     w_in: usize,
     kh: usize,
@@ -54,7 +58,6 @@ fn im2col_i16(
     let zp = zero_point.round() as i16;
     let spatial_out = h_out * w_out;
     for ic in 0..c_in_per_group {
-        let in_plane = &input[ic * h_in * w_in..];
         for fh in 0..kh {
             for fw in 0..kw {
                 let col_row = (ic * kh + fh) * kw + fw;
@@ -67,7 +70,11 @@ fn im2col_i16(
                         let iw = ow * sw + fw * dw;
                         let col_idx = col_row_off + oh * w_out + ow;
                         if valid_h && iw >= p1 && iw - p1 < w_in {
-                            col[col_idx] = in_plane[ih_actual * w_in + (iw - p1)] as i16 - zp;
+                            // NHWC: input[ih * W * C + iw * C + channel]
+                            col[col_idx] = input
+                                [(ih_actual * w_in + (iw - p1)) * c_in + group_ch_offset + ic]
+                                as i16
+                                - zp;
                         } else {
                             col[col_idx] = 0;
                         }
@@ -80,6 +87,11 @@ fn im2col_i16(
 
 impl Layer for QLinearConv {
     fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+        assert!(
+            self.inner.nhwc,
+            "QLinearConv::execute requires NHWC input layout"
+        );
+
         let x_quant = get_tensor(values, &self.inputs[0])?;
         let x_scale = get_tensor(values, &self.inputs[1])?
             .floats()
@@ -121,6 +133,7 @@ impl Layer for QLinearConv {
                     self.inner.auto_pad,
                     &self.inner.pads,
                     self.inner.group,
+                    self.inner.nhwc,
                 ));
                 self.inner.shape_cache.clone_from(&x_quant.dims);
             }
@@ -163,16 +176,18 @@ impl Layer for QLinearConv {
         let buf = output.as_mut_f32(total);
         let inv_y_scale = 1.0 / y_scale;
 
+        // NHWC path: im2col from NHWC input, GEMM, scatter to NHWC output
         for batch in 0..p.n {
-            let in_batch = batch * p.c_in * p.h_in * p.w_in;
-            for g in 0..group {
-                let in_group = in_batch + g * p.c_in_per_group * p.h_in * p.w_in;
+            let in_batch = batch * p.h_in * p.w_in * p.c_in;
 
-                im2col_i16(
-                    &x_quant_f[in_group..],
+            for g in 0..group {
+                im2col_i16_nhwc(
+                    &x_quant_f[in_batch..],
                     &mut self.col_buf,
                     x_zp,
+                    p.c_in,
                     p.c_in_per_group,
+                    g * p.c_in_per_group,
                     p.h_in,
                     p.w_in,
                     kh,
@@ -202,8 +217,8 @@ impl Layer for QLinearConv {
                     gemm_n,
                 );
 
-                // Scale i32 → f32 and quantize output
-                let out_group = batch * p.c_out * spatial_out + g * p.c_out_per_group * spatial_out;
+                // Scale i32 → f32, quantize, and scatter to NHWC output
+                let out_batch = batch * p.h_out * p.w_out * p.c_out;
                 for oc in 0..gemm_m {
                     let abs_oc = g * p.c_out_per_group + oc;
                     let combined_scale = x_scale
@@ -222,18 +237,19 @@ impl Layer for QLinearConv {
                     } else {
                         0.0
                     };
-                    let row_start = out_group + oc * spatial_out;
                     let gemm_row = &self.gemm_buf[oc * gemm_n..];
                     for s in 0..spatial_out {
                         let float_val = gemm_row[s] as f32 * combined_scale + bias_val;
-                        buf[row_start + s] =
+                        // NHWC: buf[(batch * H_out * W_out + s) * C_out + abs_oc]
+                        buf[out_batch + s * p.c_out + abs_oc] =
                             (float_val * inv_y_scale + y_zp).round().clamp(0.0, 255.0);
                     }
                 }
             }
         }
 
-        output.set_dims(&[p.n, p.c_out, p.h_out, p.w_out]);
+        output.set_dims(&[p.n, p.h_out, p.w_out, p.c_out]);
+        output.layout = Layout::NHWC;
         Ok(())
     }
 }

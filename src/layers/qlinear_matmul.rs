@@ -8,6 +8,7 @@ use crate::get_tensor;
 use crate::layers::Layer;
 use crate::layers::matmul::MatMul;
 
+#[derive(Debug)]
 pub struct QLinearMatMul {
     pub inputs: Vec<String>,
     pub inner: MatMul,

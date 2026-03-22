@@ -3,12 +3,14 @@ use std::collections::HashMap;
 use anyhow::Context;
 
 use crate::Dims;
+use crate::Layout;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 use crate::layers::conv::AutoPad;
 
+#[derive(Debug)]
 pub struct AveragePoolPrecomp {
     pub n: usize,
     pub c: usize,
@@ -23,6 +25,7 @@ pub struct AveragePoolPrecomp {
     pub total: usize,
 }
 
+#[derive(Debug)]
 pub struct AveragePool {
     pub inputs: Vec<String>,
     pub kh: usize,
@@ -32,6 +35,7 @@ pub struct AveragePool {
     pub pads: [usize; 4],
     pub auto_pad: AutoPad,
     pub count_include_pad: bool,
+    pub nhwc: bool,
     pub shape_cache: Dims,
     pub precomp: Option<AveragePoolPrecomp>,
 }
@@ -45,11 +49,10 @@ impl AveragePool {
         sw: usize,
         auto_pad: AutoPad,
         pads: &[usize; 4],
+        nhwc: bool,
     ) -> AveragePoolPrecomp {
-        let n = shape[0];
-        let c = shape[1];
-        let h_in = shape[2];
-        let w_in = shape[3];
+        assert!(nhwc, "AveragePool::compute_shapes requires NHWC");
+        let (n, c, h_in, w_in) = (shape[0], shape[3], shape[1], shape[2]);
         let (p0, p1, p2, p3) = match auto_pad {
             AutoPad::SameUpper | AutoPad::SameLower => {
                 let oh = h_in.div_ceil(sh);
@@ -90,6 +93,7 @@ impl AveragePool {
         auto_pad: String,
         count_include_pad: i64,
         initial_shape: &[usize],
+        nhwc: bool,
     ) -> Result<Self> {
         if kernel_shape.is_empty() {
             anyhow::bail!("AveragePool missing kernel_shape");
@@ -121,6 +125,7 @@ impl AveragePool {
                     sw,
                     auto_pad_enum,
                     &pads_arr,
+                    nhwc,
                 )),
             )
         } else {
@@ -136,6 +141,7 @@ impl AveragePool {
             pads: pads_arr,
             auto_pad: auto_pad_enum,
             count_include_pad: count_include_pad != 0,
+            nhwc,
             shape_cache,
             precomp,
         })
@@ -157,6 +163,7 @@ impl Layer for AveragePool {
                     self.sw,
                     self.auto_pad,
                     &self.pads,
+                    self.nhwc,
                 ));
                 self.shape_cache.clone_from(&input.dims);
                 self.precomp.as_ref().expect("just set")
@@ -173,73 +180,46 @@ impl Layer for AveragePool {
         let buf = output.as_mut_f32(p.total);
         buf.fill(0.0);
 
-        // Compute the range of output pixels that don't need bounds checks
-        let oh_safe_start = if p.p0 > 0 { p.p0.div_ceil(sh) } else { 0 };
-        let ow_safe_start = if p.p1 > 0 { p.p1.div_ceil(sw) } else { 0 };
-        let oh_safe_end = if p.h_in + p.p0 >= kh {
-            ((p.h_in + p.p0 - kh) / sh + 1).min(p.h_out)
-        } else {
-            0
-        };
-        let ow_safe_end = if p.w_in + p.p1 >= kw {
-            ((p.w_in + p.p1 - kw) / sw + 1).min(p.w_out)
-        } else {
-            0
-        };
+        assert!(self.nhwc, "AveragePool::execute requires NHWC input layout");
 
         for batch in 0..p.n {
-            for ch in 0..p.c {
-                let in_base = (batch * p.c + ch) * p.h_in * p.w_in;
-                let out_base = (batch * p.c + ch) * p.h_out * p.w_out;
-                for oh in 0..p.h_out {
-                    for ow in 0..p.w_out {
-                        let mut sum = 0.0f32;
-                        let mut valid_count = 0usize;
-                        if oh >= oh_safe_start
-                            && oh < oh_safe_end
-                            && ow >= ow_safe_start
-                            && ow < ow_safe_end
-                        {
-                            // No bounds checks needed — all kernel positions are valid
-                            let ih_start = oh * sh - p.p0;
-                            let iw_start = ow * sw - p.p1;
-                            for fh in 0..kh {
-                                let row = in_base + (ih_start + fh) * p.w_in + iw_start;
-                                for fw in 0..kw {
-                                    sum += input_f[row + fw];
+            let in_batch = batch * p.h_in * p.w_in * p.c;
+            let out_batch = batch * p.h_out * p.w_out * p.c;
+            for oh in 0..p.h_out {
+                for ow in 0..p.w_out {
+                    let out_off = out_batch + (oh * p.w_out + ow) * p.c;
+                    let mut valid_count = 0usize;
+                    for fh in 0..kh {
+                        for fw in 0..kw {
+                            let ih = oh * sh + fh;
+                            let iw = ow * sw + fw;
+                            if ih >= p.p0 && iw >= p.p1 && ih - p.p0 < p.h_in && iw - p.p1 < p.w_in
+                            {
+                                let in_off = in_batch + ((ih - p.p0) * p.w_in + (iw - p.p1)) * p.c;
+                                for ch in 0..p.c {
+                                    buf[out_off + ch] += input_f[in_off + ch];
                                 }
-                            }
-                            valid_count = kernel_area;
-                        } else {
-                            for fh in 0..kh {
-                                for fw in 0..kw {
-                                    let ih = oh * sh + fh;
-                                    let iw = ow * sw + fw;
-                                    if ih >= p.p0
-                                        && iw >= p.p1
-                                        && ih - p.p0 < p.h_in
-                                        && iw - p.p1 < p.w_in
-                                    {
-                                        let idx = in_base + (ih - p.p0) * p.w_in + (iw - p.p1);
-                                        sum += input_f[idx];
-                                        valid_count += 1;
-                                    }
-                                }
+                                valid_count += 1;
                             }
                         }
-                        let denom = if count_include_pad {
-                            kernel_area
-                        } else {
-                            valid_count
-                        };
-                        buf[out_base + oh * p.w_out + ow] =
-                            if denom > 0 { sum / denom as f32 } else { 0.0 };
+                    }
+                    let denom = if count_include_pad {
+                        kernel_area
+                    } else {
+                        valid_count
+                    };
+                    if denom > 0 {
+                        let inv = 1.0 / denom as f32;
+                        for ch in 0..p.c {
+                            buf[out_off + ch] *= inv;
+                        }
                     }
                 }
             }
         }
+        output.set_dims(&[p.n, p.h_out, p.w_out, p.c]);
+        output.layout = Layout::NHWC;
 
-        output.set_dims(&[p.n, p.c, p.h_out, p.w_out]);
         Ok(())
     }
 }

@@ -73,6 +73,8 @@ pub mod layers;
 pub mod onnx_ir;
 pub mod tensor_data;
 pub mod utils;
+#[cfg(feature = "xnnpack")]
+pub mod xnnpack_ffi;
 pub use dtype::DType;
 pub use dtype::ONNX_DOUBLE;
 pub use dtype::ONNX_FLOAT;
@@ -84,6 +86,8 @@ pub use dtype::ONNX_UINT8;
 pub use inference_engine::InferenceEngine;
 pub use inference_error::Result;
 pub use tensor_data::Dims;
+pub use tensor_data::Layout;
+pub use tensor_data::ShapeLayout;
 pub use tensor_data::Tensor;
 pub use tensor_data::TensorData;
 pub use utils::broadcast_index;

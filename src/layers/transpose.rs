@@ -9,6 +9,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct TransposePrecomp {
     pub perm: [usize; 8],
     pub in_strides: [usize; 8],
@@ -19,6 +20,7 @@ pub struct TransposePrecomp {
     pub perm_in_strides: [usize; 8],
 }
 
+#[derive(Debug)]
 pub struct Transpose {
     pub inputs: Vec<String>,
     pub perm: Option<Vec<usize>>,

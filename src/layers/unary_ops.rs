@@ -9,6 +9,7 @@ use crate::layers::Layer;
 
 macro_rules! unary_op {
     ($name:ident, |$v:ident| $body:expr) => {
+        #[derive(Debug)]
         pub struct $name {
             pub inputs: Vec<String>,
         }
@@ -77,6 +78,7 @@ unary_op!(IsInf, |v| if v.is_infinite() { 1.0 } else { 0.0 });
 
 // Activations with parameters
 
+#[derive(Debug)]
 pub struct Elu {
     pub inputs: Vec<String>,
     pub alpha: f32,
@@ -105,6 +107,7 @@ impl Layer for Elu {
     }
 }
 
+#[derive(Debug)]
 pub struct Celu {
     pub inputs: Vec<String>,
     pub alpha: f32,
@@ -130,6 +133,7 @@ impl Layer for Celu {
     }
 }
 
+#[derive(Debug)]
 pub struct Selu {
     pub inputs: Vec<String>,
     pub alpha: f32,
@@ -164,6 +168,7 @@ impl Layer for Selu {
     }
 }
 
+#[derive(Debug)]
 pub struct HardSigmoid {
     pub inputs: Vec<String>,
     pub alpha: f32,
@@ -193,6 +198,7 @@ impl Layer for HardSigmoid {
     }
 }
 
+#[derive(Debug)]
 pub struct ThresholdedRelu {
     pub inputs: Vec<String>,
     pub alpha: f32,

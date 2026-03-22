@@ -6,11 +6,13 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 
+#[derive(Debug)]
 pub struct FlattenPrecomp {
     pub outer: usize,
     pub inner: usize,
 }
 
+#[derive(Debug)]
 pub struct Flatten {
     pub inputs: Vec<String>,
     pub axis: usize,
