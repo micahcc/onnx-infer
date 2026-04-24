@@ -11,7 +11,7 @@
 //! use onnx_infer::{InferenceEngine, Tensor, dims};
 //!
 //! let model_bytes = std::fs::read("model.onnx").unwrap();
-//! let mut engine = InferenceEngine::new(&model_bytes).unwrap();
+//! let mut engine = InferenceEngine::new(&model_bytes, Default::default()).unwrap();
 //!
 //! let input = Tensor::new(dims![1, 1, 28, 28], vec![0.0; 784]);
 //! let mut inputs = HashMap::new();
@@ -33,7 +33,7 @@
 //! # use std::collections::HashMap;
 //! # use onnx_infer::{InferenceEngine, Tensor, dims};
 //! # let model_bytes = std::fs::read("model.onnx").unwrap();
-//! # let mut engine = InferenceEngine::new(&model_bytes).unwrap();
+//! # let mut engine = InferenceEngine::new(&model_bytes, Default::default()).unwrap();
 //! let mut outputs = HashMap::new();
 //! let output_names = vec!["Plus214_Output_0".to_string()];
 //!
@@ -53,7 +53,7 @@
 //! # use std::collections::HashMap;
 //! # use onnx_infer::{InferenceEngine, dims};
 //! # let model_bytes = std::fs::read("model.onnx").unwrap();
-//! # let engine = InferenceEngine::new(&model_bytes).unwrap();
+//! # let engine = InferenceEngine::new(&model_bytes, Default::default()).unwrap();
 //! println!("shapes: {:?}", engine.shape_map());
 //! ```
 
@@ -84,6 +84,7 @@ pub use dtype::ONNX_INT64;
 pub use dtype::ONNX_STRING;
 pub use dtype::ONNX_UINT8;
 pub use inference_engine::InferenceEngine;
+pub use inference_engine::InferenceOptions;
 pub use inference_error::Result;
 pub use tensor_data::Dims;
 pub use tensor_data::Layout;

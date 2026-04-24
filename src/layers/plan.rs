@@ -682,11 +682,15 @@ pub fn build_node_with_opset(
             node.attrs.get_float("min").unwrap_or(f32::NEG_INFINITY),
             node.attrs.get_float("max").unwrap_or(f32::INFINITY),
         )),
-        OpType::BatchNormalization => Box::new(batch_norm::BatchNorm::new(
-            inputs,
-            node.attrs.get_float("epsilon").unwrap_or(1e-5),
-            input_shapes[0],
-        )),
+        OpType::BatchNormalization => {
+            let nhwc = input_layout(0) == Layout::NHWC;
+            Box::new(batch_norm::BatchNorm::new(
+                inputs,
+                node.attrs.get_float("epsilon").unwrap_or(1e-5),
+                input_shapes[0],
+                nhwc,
+            ))
+        }
         OpType::Sigmoid => Box::new(sigmoid::Sigmoid::new(inputs)),
         OpType::Exp => Box::new(exp::Exp::new(inputs)),
         OpType::Log => Box::new(log::Log::new(inputs)),

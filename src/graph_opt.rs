@@ -38,11 +38,10 @@ fn are_inverse_perms(a: &[i64], b: &[i64]) -> bool {
 
 /// Ops that require NHWC layout (spatial 2D ops).
 fn requires_nhwc(op: OpType) -> bool {
-    // Spatial ops whose CPU execution handles NHWC natively.
-    // BatchNormalization is folded into Conv by graph_opt before this runs.
     matches!(
         op,
         OpType::Conv
+            | OpType::BatchNormalization
             | OpType::MaxPool
             | OpType::AveragePool
             | OpType::GlobalAveragePool
@@ -185,7 +184,8 @@ fn build_producer_map(nodes: &[Node]) -> HashMap<String, usize> {
 pub fn optimize(graph: &mut Graph) {
     let mut counter = 0usize;
     fold_batchnorm_into_conv(graph);
-    insert_layout_transposes(graph, &mut counter);
+    let ndim_map = infer_ndims(graph);
+    insert_layout_transposes(graph, &mut counter, &ndim_map);
 
     // Run transpose elimination passes iteratively until no more changes.
     // Limit is high because push_unary/push_binary process one move at a time.
@@ -208,14 +208,145 @@ pub fn optimize_cpu(graph: &mut Graph) {
     remove_dead_nodes(graph);
 }
 
-/// Insert NCHW→NHWC before spatial ops and NHWC→NCHW after their outputs.
-fn insert_layout_transposes(graph: &mut Graph, counter: &mut usize) {
+/// Build a map from tensor name to number of dimensions, using graph inputs,
+/// initializers, and simple forward propagation through the graph.
+fn infer_ndims(graph: &Graph) -> HashMap<String, usize> {
+    let mut ndims: HashMap<String, usize> = HashMap::new();
+
+    // Seed from graph inputs
+    for inp in &graph.inputs {
+        if let Some(shape) = &inp.shape {
+            if !shape.is_empty() {
+                ndims.insert(inp.name.clone(), shape.len());
+            }
+        }
+    }
+
+    // Seed from initializers
+    for (name, tensor) in &graph.initializers {
+        if !tensor.dims.is_empty() {
+            ndims.insert(name.clone(), tensor.dims.len());
+        }
+    }
+
+    // Forward propagate: most ops preserve ndim from input 0
+    for node in &graph.nodes {
+        let input0_ndim = node.inputs.first().and_then(|n| ndims.get(n)).copied();
+
+        let out_ndim: Option<usize> = match node.op_type {
+            // Ops that preserve ndim from input 0
+            OpType::Conv
+            | OpType::BatchNormalization
+            | OpType::MaxPool
+            | OpType::AveragePool
+            | OpType::GlobalAveragePool
+            | OpType::Relu
+            | OpType::LeakyRelu
+            | OpType::Sigmoid
+            | OpType::Tanh
+            | OpType::Exp
+            | OpType::Log
+            | OpType::Softplus
+            | OpType::Clip
+            | OpType::Abs
+            | OpType::Neg
+            | OpType::Sqrt
+            | OpType::Floor
+            | OpType::Ceil
+            | OpType::Round
+            | OpType::Identity
+            | OpType::Dropout
+            | OpType::Softmax
+            | OpType::Sin
+            | OpType::Cos
+            | OpType::Tan
+            | OpType::Asin
+            | OpType::Acos
+            | OpType::Atan
+            | OpType::Sinh
+            | OpType::Cosh
+            | OpType::Asinh
+            | OpType::Acosh
+            | OpType::Atanh
+            | OpType::PRelu
+            | OpType::Lrn
+            | OpType::Selu
+            | OpType::Elu
+            | OpType::Celu
+            | OpType::HardSigmoid
+            | OpType::ThresholdedRelu
+            | OpType::Cast
+            | OpType::Erf
+            | OpType::Sign
+            | OpType::Reciprocal
+            | OpType::IsNaN
+            | OpType::IsInf
+            | OpType::Softsign
+            | OpType::DequantizeLinear
+            | OpType::QuantizeLinear
+            | OpType::Add
+            | OpType::Sub
+            | OpType::Mul
+            | OpType::Div
+            | OpType::Max
+            | OpType::Min
+            | OpType::Less
+            | OpType::Equal
+            | OpType::Greater
+            | OpType::Resize
+            | OpType::Upsample
+            | OpType::Transpose
+            | OpType::LayoutTranspose
+            | OpType::Concat
+            | OpType::MatMul => input0_ndim,
+
+            OpType::Flatten | OpType::Gemm => Some(2),
+
+            OpType::Squeeze => input0_ndim.map(|nd| {
+                let axes_count = node.attrs.get_ints("axes").map(|a| a.len()).unwrap_or(1);
+                nd.saturating_sub(axes_count)
+            }),
+            OpType::Unsqueeze => input0_ndim.map(|nd| {
+                let axes_count = node.attrs.get_ints("axes").map(|a| a.len()).unwrap_or(1);
+                nd + axes_count
+            }),
+
+            _ => None,
+        };
+
+        if let Some(nd) = out_ndim {
+            for out in &node.outputs {
+                if !out.is_empty() {
+                    ndims.insert(out.clone(), nd);
+                }
+            }
+        }
+    }
+
+    ndims
+}
+
+fn insert_layout_transposes(
+    graph: &mut Graph,
+    counter: &mut usize,
+    ndim_map: &HashMap<String, usize>,
+) {
     let mut new_nodes = Vec::with_capacity(graph.nodes.len() * 2);
 
     for node in graph.nodes.drain(..) {
         if !requires_nhwc(node.op_type) {
             new_nodes.push(node);
             continue;
+        }
+
+        // BatchNorm can operate on non-4D data (e.g. after Flatten).
+        // Only insert layout transposes around BN when input is known to be 4D.
+        if node.op_type == OpType::BatchNormalization {
+            let input_ndim = node.inputs.first().and_then(|n| ndim_map.get(n)).copied();
+            if input_ndim.is_some() && input_ndim != Some(4) {
+                new_nodes.push(node);
+                continue;
+            }
         }
 
         let mut modified = node;
@@ -346,18 +477,17 @@ fn eliminate_inverse_transposes(graph: &mut Graph) -> bool {
     true
 }
 
-/// Push a transpose forward through a unary/elementwise op.
-/// If we have: Transpose(perm) → UnaryOp → ...
-/// We can rewrite to: UnaryOp → Transpose(perm)
-/// This lets the transpose reach and cancel with an inverse transpose downstream.
+/// Push a LayoutTranspose forward through a unary/elementwise op.
+/// Rewrites `Transpose(perm) → UnaryOp` to `UnaryOp → Transpose(perm)`,
+/// letting the transpose reach and cancel with an inverse transpose downstream.
+///
+/// When a transpose has multiple consumers, it is first duplicated so each
+/// consumer gets its own single-consumer copy (needed for patterns like Mish:
+/// `x * tanh(softplus(x))` where the NHWC→NCHW output feeds both Softplus and Mul).
 fn push_transposes_through_unary(graph: &mut Graph, counter: &mut usize) -> bool {
     let consumer_map = build_consumer_map(&graph.nodes);
 
-    // Collect moves to make (avoid borrowing issues)
-    let mut moves: Vec<(usize, usize)> = Vec::new(); // (transpose_idx, consumer_idx)
-
     for (i, node) in graph.nodes.iter().enumerate() {
-        // Only push LayoutTranspose — regular Transposes are model computation
         if node.op_type != OpType::LayoutTranspose {
             continue;
         }
@@ -371,58 +501,82 @@ fn push_transposes_through_unary(graph: &mut Graph, counter: &mut usize) -> bool
         let Some(consumers) = consumer_map.get(output_name) else {
             continue;
         };
-        if consumers.len() != 1 {
+
+        // At least one consumer must be pushable (unary op consuming on input 0)
+        let has_pushable = consumers.iter().any(|&ci| {
+            let c = &graph.nodes[ci];
+            transpose_can_pass_through(c.op_type)
+                && c.inputs.first().is_some_and(|n| n == output_name)
+        });
+        if !has_pushable {
             continue;
         }
+
+        // Multi-consumer: duplicate the transpose so each gets its own copy, then return.
+        // The outer loop will call us again to do the actual push-through.
+        if consumers.len() > 1 {
+            let orig_output = node.outputs[0].clone();
+            let transpose_input = node.inputs[0].clone();
+            let perm_arr: [i64; 4] = perm.try_into().unwrap();
+            let consumers = consumers.clone();
+            for &consumer_idx in consumers.iter().skip(1) {
+                let dup_output = unique_name("__dup_transpose", counter);
+                let dup = make_layout_transpose_node(
+                    &format!("layout_transpose_{dup_output}"),
+                    &transpose_input,
+                    &dup_output,
+                    &perm_arr,
+                );
+                for inp in &mut graph.nodes[consumer_idx].inputs {
+                    if *inp == orig_output {
+                        *inp = dup_output.clone();
+                    }
+                }
+                graph.nodes.insert(i + 1, dup);
+            }
+            return true;
+        }
+
+        // Single consumer: push the transpose through if the consumer is a unary op
         let consumer_idx = consumers[0];
         let consumer = &graph.nodes[consumer_idx];
         if !transpose_can_pass_through(consumer.op_type) {
             continue;
         }
-        // Consumer must have exactly 1 input (the transposed tensor) for simple push-through
-        // Some ops like Clip have optional inputs (min, max) that are scalar — skip those
-        let data_inputs: Vec<usize> = consumer
+        // Must consume only on input 0
+        let is_input0 = consumer
             .inputs
             .iter()
             .enumerate()
-            .filter(|(_, name)| !name.is_empty() && *name == output_name)
-            .map(|(idx, _)| idx)
-            .collect();
-        if data_inputs.len() != 1 || data_inputs[0] != 0 {
+            .all(|(idx, name)| name.is_empty() || *name != *output_name || idx == 0);
+        if !is_input0
+            || consumer
+                .inputs
+                .first()
+                .map(|n| n != output_name)
+                .unwrap_or(true)
+        {
             continue;
         }
-        moves.push((i, consumer_idx));
-    }
 
-    // Process one move at a time since each remove+insert shifts indices.
-    // The outer loop in optimize() will call us again for the rest.
-    if let Some(&(transpose_idx, consumer_idx)) = moves.first() {
-        let transpose_input = graph.nodes[transpose_idx].inputs[0].clone();
+        // Rewire: consumer takes the pre-transpose input, transpose moves after
+        let transpose_input = graph.nodes[i].inputs[0].clone();
         let consumer_output = graph.nodes[consumer_idx].outputs[0].clone();
-
-        // Rewire: consumer takes the pre-transpose input
-        graph.nodes[consumer_idx].inputs[0] = transpose_input;
-
-        // Consumer now produces an intermediate; new transpose produces the original output
         let intermediate = unique_name("__push_unary", counter);
+
+        graph.nodes[consumer_idx].inputs[0] = transpose_input;
         graph.nodes[consumer_idx].outputs[0] = intermediate.clone();
+        graph.nodes[i].inputs[0] = intermediate;
+        graph.nodes[i].outputs[0] = consumer_output;
 
-        // Update transpose to sit after the consumer
-        graph.nodes[transpose_idx].inputs[0] = intermediate;
-        graph.nodes[transpose_idx].outputs[0] = consumer_output;
-
-        // Move the transpose node after the consumer
-        if transpose_idx < consumer_idx {
-            // transpose is before consumer — move it after
-            let t = graph.nodes.remove(transpose_idx);
-            // consumer_idx shifted by -1 since we removed an earlier element
+        if i < consumer_idx {
+            let t = graph.nodes.remove(i);
             graph.nodes.insert(consumer_idx, t);
         }
-
-        true
-    } else {
-        false
+        return true;
     }
+
+    false
 }
 
 /// Push transposes through binary elementwise ops.
