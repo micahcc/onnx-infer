@@ -135,7 +135,7 @@ pub fn is_xnnpack_compatible(op: OpType) -> bool {
             | OpType::Cast
             | OpType::ReduceMin
             | OpType::Softplus
-            | OpType::BatchNormalization
+            | OpType::BatchNormalization2d
     )
 }
 
@@ -340,7 +340,7 @@ impl SubgraphBuilder {
             OpType::Cast => self.add_cast(cap, shape_map),
             OpType::ReduceMin => self.add_reduce_min(cap, shape_map),
             OpType::Softplus => self.add_softplus(cap, shape_map),
-            OpType::BatchNormalization => self.add_batchnorm(cap, shape_map, initializers),
+            OpType::BatchNormalization2d => self.add_batchnorm(cap, shape_map, initializers),
             _ => anyhow::bail!("XNNPACK: unsupported op {:?}", cap.op),
         }
     }
@@ -1582,7 +1582,7 @@ fn infer_op_output_shapes(
         | OpType::Cast
         | OpType::Identity
         | OpType::Softplus
-        | OpType::BatchNormalization => {
+        | OpType::BatchNormalization2d => {
             if let Some(x) = get(0) {
                 result.push((op.outputs[0].clone(), x.clone()));
             }

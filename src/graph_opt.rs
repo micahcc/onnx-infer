@@ -41,7 +41,7 @@ fn requires_nhwc(op: OpType) -> bool {
     matches!(
         op,
         OpType::Conv
-            | OpType::BatchNormalization
+            | OpType::BatchNormalization2d
             | OpType::MaxPool
             | OpType::AveragePool
             | OpType::GlobalAveragePool
@@ -184,7 +184,8 @@ pub fn optimize(graph: &mut Graph) {
     let mut counter = 0usize;
     fold_batchnorm_into_conv(graph);
     let ndim_map = infer_ndims(graph);
-    insert_layout_transposes(graph, &mut counter, &ndim_map);
+    promote_batchnorm_2d(graph, &ndim_map);
+    insert_layout_transposes(graph, &mut counter);
 
     // Run transpose elimination passes iteratively until no more changes.
     // Limit is high because push_unary/push_binary process one move at a time.
@@ -236,6 +237,7 @@ fn infer_ndims(graph: &Graph) -> HashMap<String, usize> {
             // Ops that preserve ndim from input 0
             OpType::Conv
             | OpType::BatchNormalization
+            | OpType::BatchNormalization2d
             | OpType::MaxPool
             | OpType::AveragePool
             | OpType::GlobalAveragePool
@@ -325,11 +327,22 @@ fn infer_ndims(graph: &Graph) -> HashMap<String, usize> {
     ndims
 }
 
-fn insert_layout_transposes(
-    graph: &mut Graph,
-    counter: &mut usize,
-    ndim_map: &HashMap<String, usize>,
-) {
+/// Rewrite `BatchNormalization` nodes whose input is known to be 4D into
+/// `BatchNormalization2d`.  This lets `requires_nhwc` / `insert_layout_transposes`
+/// treat them as spatial ops without a runtime ndim check.
+fn promote_batchnorm_2d(graph: &mut Graph, ndim_map: &HashMap<String, usize>) {
+    for node in &mut graph.nodes {
+        if node.op_type != OpType::BatchNormalization {
+            continue;
+        }
+        let ndim = node.inputs.first().and_then(|n| ndim_map.get(n)).copied();
+        if ndim == Some(4) {
+            node.op_type = OpType::BatchNormalization2d;
+        }
+    }
+}
+
+fn insert_layout_transposes(graph: &mut Graph, counter: &mut usize) {
     let mut new_nodes = Vec::with_capacity(graph.nodes.len() * 2);
 
     for node in graph.nodes.drain(..) {
@@ -338,34 +351,11 @@ fn insert_layout_transposes(
             continue;
         }
 
-        // BatchNorm can operate on non-4D data (e.g. after Flatten).
-        // Only insert layout transposes around BN when input is known to be 4D.
-        if node.op_type == OpType::BatchNormalization {
-            let input_ndim = node.inputs.first().and_then(|n| ndim_map.get(n)).copied();
-            if input_ndim.is_some() && input_ndim != Some(4) {
-                new_nodes.push(node);
-                continue;
-            }
-        }
-
         let mut modified = node;
 
-        // Transpose data input(s) NCHW→NHWC.
-        // For Conv: input 0 is data, inputs 1+ are weights (don't transpose weights here,
-        // weight layout is handled by the XNNPACK layer).
-        // For pooling/GAP/resize: input 0 is data.
-        // For BatchNorm: input 0 is data, 1-4 are 1D params.
-        let data_input_count = match modified.op_type {
-            OpType::Conv | OpType::QLinearConv => 1, // only data input
-            OpType::BatchNormalization => 1,
-            _ => 1,
-        };
-
-        for i in 0..data_input_count.min(modified.inputs.len()) {
-            let orig_input = modified.inputs[i].clone();
-            if orig_input.is_empty() {
-                continue;
-            }
+        // Transpose data input 0 NCHW→NHWC. Weights/params are handled by layers.
+        if let Some(orig_input) = modified.inputs.first().filter(|s| !s.is_empty()) {
+            let orig_input = orig_input.clone();
             let nhwc_name = unique_name("__nchw2nhwc", counter);
             new_nodes.push(make_layout_transpose_node(
                 &format!("layout_transpose_{nhwc_name}"),
@@ -373,7 +363,7 @@ fn insert_layout_transposes(
                 &nhwc_name,
                 &NCHW_TO_NHWC,
             ));
-            modified.inputs[i] = nhwc_name;
+            modified.inputs[0] = nhwc_name;
         }
 
         // Transpose outputs NHWC→NCHW
