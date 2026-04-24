@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use anyhow::Context;
 
 use crate::Dims;
-use crate::Layout;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
@@ -73,7 +72,7 @@ impl Layer for BatchNorm {
         let mean = get_tensor(values, &self.inputs[3])?;
         let var = get_tensor(values, &self.inputs[4])?;
 
-        let nhwc = self.nhwc || input.layout == Layout::NHWC;
+        let nhwc = self.nhwc;
 
         let p = match &self.precomp {
             Some(p) if self.shape_cache.as_slice() == input.dims.as_slice() => p,
