@@ -872,18 +872,10 @@ impl SubgraphBuilder {
             bias[i] = beta_f[i] - mean_f[i] * scale[i];
         }
 
-        // Determine channel dim position from shape. ONNX BN uses dim 1 (NCHW).
-        // After graph-opt layout transposes, spatial ops have NHWC with channels last.
-        // Detect by checking which dim matches C.
+        // graph_opt inserts layout transposes so BN always runs in NHWC (channels last).
         let param_shape = if shape.len() >= 2 {
             let mut ps = vec![1usize; shape.len()];
-            if shape.last() == Some(&c) {
-                // NHWC: channels are last
-                *ps.last_mut().unwrap() = c;
-            } else {
-                // NCHW: channels at dim 1
-                ps[1] = c;
-            }
+            *ps.last_mut().unwrap() = c;
             ps
         } else {
             vec![c]
