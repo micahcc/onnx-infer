@@ -1660,8 +1660,8 @@ fn infer_op_output_shapes(
                                 .filter(|&(i, _)| i != idx)
                                 .map(|(_, &d)| d)
                                 .product();
-                            if known > 0 {
-                                dims[idx] = total / known;
+                            if let Some(v) = total.checked_div(known) {
+                                dims[idx] = v;
                             }
                         }
                         result.push((op.outputs[0].clone(), dims));

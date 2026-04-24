@@ -744,9 +744,8 @@ impl OpType {
                         .filter(|&(i, _)| i != idx)
                         .map(|(_, &v)| v)
                         .product();
-                    #[allow(clippy::arithmetic_side_effects)]
-                    if known > 0 {
-                        dims[idx] = total / known;
+                    if let Some(v) = total.checked_div(known) {
+                        dims[idx] = v;
                     }
                 }
                 Some(dims)
