@@ -114,7 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inputs.insert(name.to_string(), tensor);
     }
 
-    let mut engine = onnx_infer::InferenceEngine::new(&model_bytes)?;
+    let mut engine = onnx_infer::InferenceEngine::new(&model_bytes, Default::default())?;
     engine.run(inputs)?;
 
     for (name, tensor) in &engine.outputs {

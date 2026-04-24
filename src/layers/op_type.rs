@@ -22,6 +22,9 @@ pub enum OpType {
     Atan,
     Atanh,
     BatchNormalization,
+    /// 2D spatial BatchNorm (4D tensor: N,C,H,W). Rewritten from BatchNormalization
+    /// by graph_opt when input is 4D. Always runs in NHWC layout.
+    BatchNormalization2d,
     Cast,
     CategoryMapper,
     Ceil,
@@ -272,7 +275,7 @@ impl OpType {
             Self::Conv | Self::ConvTranspose => &[F, F, F],
             Self::MatMul => &[F, F],
             Self::Gemm => &[F, F, F],
-            Self::BatchNormalization => &[F, F, F, F, F],
+            Self::BatchNormalization | Self::BatchNormalization2d => &[F, F, F, F, F],
             Self::MaxPool | Self::AveragePool | Self::GlobalAveragePool => &[F],
             Self::Resize | Self::Upsample => &[F],
             Self::DequantizeLinear => &[F, F, F],
@@ -375,6 +378,7 @@ impl OpType {
             | Self::Dropout
             | Self::Hardmax
             | Self::BatchNormalization
+            | Self::BatchNormalization2d
             | Self::Identity
             | Self::Cast
             | Self::DequantizeLinear
@@ -740,9 +744,8 @@ impl OpType {
                         .filter(|&(i, _)| i != idx)
                         .map(|(_, &v)| v)
                         .product();
-                    #[allow(clippy::arithmetic_side_effects)]
-                    if known > 0 {
-                        dims[idx] = total / known;
+                    if let Some(v) = total.checked_div(known) {
+                        dims[idx] = v;
                     }
                 }
                 Some(dims)

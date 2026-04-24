@@ -58,7 +58,9 @@ impl Layer for Reshape {
                 .filter(|&(i, _)| i != idx)
                 .map(|(_, &v)| v)
                 .product();
-            dims[idx] = total / known;
+            if let Some(v) = total.checked_div(known) {
+                dims[idx] = v;
+            }
         }
 
         output.copy_from(input);

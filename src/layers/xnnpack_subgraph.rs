@@ -134,6 +134,8 @@ pub fn is_xnnpack_compatible(op: OpType) -> bool {
             | OpType::Round
             | OpType::Cast
             | OpType::ReduceMin
+            | OpType::Softplus
+            | OpType::BatchNormalization2d
     )
 }
 
@@ -337,6 +339,8 @@ impl SubgraphBuilder {
             OpType::Round => self.add_round(cap, shape_map),
             OpType::Cast => self.add_cast(cap, shape_map),
             OpType::ReduceMin => self.add_reduce_min(cap, shape_map),
+            OpType::Softplus => self.add_softplus(cap, shape_map),
+            OpType::BatchNormalization2d => self.add_batchnorm(cap, shape_map, initializers),
             _ => anyhow::bail!("XNNPACK: unsupported op {:?}", cap.op),
         }
     }
@@ -757,6 +761,167 @@ impl SubgraphBuilder {
             xnn_unary_operator_xnn_unary_leaky_relu,
             Some(params),
         )
+    }
+
+    /// Decompose Softplus(x) = Log(1 + Exp(x)) into three XNNPACK ops.
+    fn add_softplus(
+        &mut self,
+        cap: &CapturedOp,
+        shape_map: &HashMap<String, Vec<usize>>,
+    ) -> Result<()> {
+        let input_name = &cap.inputs[0];
+        let output_name = &cap.outputs[0];
+        let shape = shape_map.get(input_name).cloned().unwrap_or_default();
+
+        // exp_out = Exp(x)
+        let exp_out_name = format!("{output_name}__softplus_exp");
+        let input_id = self.get_or_define_value(input_name, shape_map)?;
+        let exp_out_id = self.define_internal_value(&exp_out_name, &shape)?;
+        let status = unsafe {
+            xnn_define_unary(
+                self.subgraph,
+                xnn_unary_operator_xnn_unary_exp,
+                std::ptr::null(),
+                input_id,
+                exp_out_id,
+                0,
+            )
+        };
+        if status != xnn_status_xnn_status_success {
+            anyhow::bail!("xnn_define_unary (Softplus/Exp) failed: {status:?}");
+        }
+
+        // ones = constant 1.0 (scalar, will broadcast)
+        let ones_name = format!("{output_name}__softplus_ones");
+        let ones_id = self.define_static_value(&ones_name, &[1], vec![1.0f32])?;
+
+        // add_out = exp_out + 1.0
+        let add_out_name = format!("{output_name}__softplus_add");
+        let add_out_id = self.define_internal_value(&add_out_name, &shape)?;
+        let status = unsafe {
+            xnn_define_binary(
+                self.subgraph,
+                xnn_binary_operator_xnn_binary_add,
+                std::ptr::null(),
+                exp_out_id,
+                ones_id,
+                add_out_id,
+                0,
+            )
+        };
+        if status != xnn_status_xnn_status_success {
+            anyhow::bail!("xnn_define_binary (Softplus/Add) failed: {status:?}");
+        }
+
+        // output = Log(add_out)
+        let output_id = self.get_or_define_value(output_name, shape_map)?;
+        let status = unsafe {
+            xnn_define_unary(
+                self.subgraph,
+                xnn_unary_operator_xnn_unary_log,
+                std::ptr::null(),
+                add_out_id,
+                output_id,
+                0,
+            )
+        };
+        if status != xnn_status_xnn_status_success {
+            anyhow::bail!("xnn_define_unary (Softplus/Log) failed: {status:?}");
+        }
+
+        Ok(())
+    }
+
+    /// Decompose BatchNormalization into Mul(x, scale) + Add(bias) where
+    /// scale = gamma / sqrt(var + eps) and bias = beta - mean * scale.
+    fn add_batchnorm(
+        &mut self,
+        cap: &CapturedOp,
+        shape_map: &HashMap<String, Vec<usize>>,
+        initializers: &HashMap<String, Tensor>,
+    ) -> Result<()> {
+        let input_name = &cap.inputs[0];
+        let output_name = &cap.outputs[0];
+        let shape = shape_map.get(input_name).cloned().unwrap_or_default();
+        let epsilon = cap.node.attrs.get_float("epsilon").unwrap_or(1e-5);
+
+        // Get BN parameters from initializers
+        let gamma = initializers
+            .get(&cap.inputs[1])
+            .context("BN: missing gamma")?;
+        let beta = initializers
+            .get(&cap.inputs[2])
+            .context("BN: missing beta")?;
+        let mean = initializers
+            .get(&cap.inputs[3])
+            .context("BN: missing mean")?;
+        let var = initializers
+            .get(&cap.inputs[4])
+            .context("BN: missing var")?;
+
+        let gamma_f = gamma.floats()?;
+        let beta_f = beta.floats()?;
+        let mean_f = mean.floats()?;
+        let var_f = var.floats()?;
+
+        let c = gamma_f.len();
+        let mut scale = vec![0.0f32; c];
+        let mut bias = vec![0.0f32; c];
+        for i in 0..c {
+            scale[i] = gamma_f[i] / (var_f[i] + epsilon).sqrt();
+            bias[i] = beta_f[i] - mean_f[i] * scale[i];
+        }
+
+        // graph_opt inserts layout transposes so BN always runs in NHWC (channels last).
+        let param_shape = if shape.len() >= 2 {
+            let mut ps = vec![1usize; shape.len()];
+            *ps.last_mut().unwrap() = c;
+            ps
+        } else {
+            vec![c]
+        };
+
+        // mul_out = x * scale
+        let scale_name = format!("{output_name}__bn_scale");
+        let scale_id = self.define_static_value(&scale_name, &param_shape, scale)?;
+        let input_id = self.get_or_define_value(input_name, shape_map)?;
+        let mul_out_name = format!("{output_name}__bn_mul");
+        let mul_out_id = self.define_internal_value(&mul_out_name, &shape)?;
+        let status = unsafe {
+            xnn_define_binary(
+                self.subgraph,
+                xnn_binary_operator_xnn_binary_multiply,
+                std::ptr::null(),
+                input_id,
+                scale_id,
+                mul_out_id,
+                0,
+            )
+        };
+        if status != xnn_status_xnn_status_success {
+            anyhow::bail!("xnn_define_binary (BN/Mul) failed: {status:?}");
+        }
+
+        // output = mul_out + bias
+        let bias_name = format!("{output_name}__bn_bias");
+        let bias_id = self.define_static_value(&bias_name, &param_shape, bias)?;
+        let output_id = self.get_or_define_value(output_name, shape_map)?;
+        let status = unsafe {
+            xnn_define_binary(
+                self.subgraph,
+                xnn_binary_operator_xnn_binary_add,
+                std::ptr::null(),
+                mul_out_id,
+                bias_id,
+                output_id,
+                0,
+            )
+        };
+        if status != xnn_status_xnn_status_success {
+            anyhow::bail!("xnn_define_binary (BN/Add) failed: {status:?}");
+        }
+
+        Ok(())
     }
 
     fn add_unary(
@@ -1415,7 +1580,9 @@ fn infer_op_output_shapes(
         | OpType::LeakyRelu
         | OpType::Round
         | OpType::Cast
-        | OpType::Identity => {
+        | OpType::Identity
+        | OpType::Softplus
+        | OpType::BatchNormalization2d => {
             if let Some(x) = get(0) {
                 result.push((op.outputs[0].clone(), x.clone()));
             }
@@ -1493,8 +1660,8 @@ fn infer_op_output_shapes(
                                 .filter(|&(i, _)| i != idx)
                                 .map(|(_, &d)| d)
                                 .product();
-                            if known > 0 {
-                                dims[idx] = total / known;
+                            if let Some(v) = total.checked_div(known) {
+                                dims[idx] = v;
                             }
                         }
                         result.push((op.outputs[0].clone(), dims));

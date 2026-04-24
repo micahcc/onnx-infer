@@ -11,6 +11,45 @@ use crate::layers::PlanNode;
 use crate::onnx::ModelProto;
 use crate::onnx_ir;
 
+/// Options for creating an [`InferenceEngine`].
+///
+/// ```no_run
+/// # use onnx_infer::{InferenceEngine, InferenceOptions};
+/// let model_bytes = std::fs::read("model.onnx").unwrap();
+/// let mut engine = InferenceEngine::new(&model_bytes, InferenceOptions::default()).unwrap();
+/// ```
+///
+/// Enable XNNPACK acceleration:
+/// ```no_run
+/// # use onnx_infer::{InferenceEngine, InferenceOptions};
+/// # let model_bytes = std::fs::read("model.onnx").unwrap();
+/// let mut engine = InferenceEngine::new(
+///     &model_bytes,
+///     InferenceOptions { xnnpack: true, ..Default::default() },
+/// ).unwrap();
+/// ```
+#[derive(Clone, Debug)]
+pub struct InferenceOptions {
+    /// Batch size for models with dynamic batch dimensions. Default: 1.
+    pub batch_size: usize,
+
+    /// Explicit input sizes. When set, overrides shape inference from the model.
+    pub input_sizes: Option<HashMap<String, Dims>>,
+
+    /// Enable XNNPACK acceleration (requires the `xnnpack` feature). Default: false.
+    pub xnnpack: bool,
+}
+
+impl Default for InferenceOptions {
+    fn default() -> Self {
+        Self {
+            batch_size: 1,
+            input_sizes: None,
+            xnnpack: false,
+        }
+    }
+}
+
 pub struct InferenceEngine {
     graph: onnx_ir::Graph,
     plan: Option<Plan>,
@@ -18,29 +57,12 @@ pub struct InferenceEngine {
     input_names: Vec<String>,
     input_sizes: HashMap<String, Dims>,
     pub outputs: HashMap<String, Tensor>,
-    #[cfg(feature = "xnnpack")]
     use_xnnpack: bool,
 }
 
 impl InferenceEngine {
-    pub fn new(model_bytes: &[u8]) -> Result<Self> {
-        Self::with_batch_size(model_bytes, 1)
-    }
-
-    /// Create an engine with a fixed batch size.
-    ///
-    /// Models with dynamic batch dimensions (common in ONNX exports) use
-    /// symbolic dimension names like `"N"` or `"batch"`. This method resolves
-    /// all such dimensions to the given `batch_size`, enabling full shape
-    /// inference at build time, enabling full shape inference for spatial
-    /// ops like Conv and MaxPool.
-    ///
-    /// ```no_run
-    /// # use onnx_infer::InferenceEngine;
-    /// let model_bytes = std::fs::read("model.onnx").unwrap();
-    /// let mut engine = InferenceEngine::with_batch_size(&model_bytes, 1).unwrap();
-    /// ```
-    pub fn with_batch_size(model_bytes: &[u8], batch_size: usize) -> Result<Self> {
+    /// Create a new inference engine from model bytes and options.
+    pub fn new(model_bytes: &[u8], opts: InferenceOptions) -> Result<Self> {
         let model = ModelProto::decode(model_bytes).context("decoding model proto")?;
         let opset_version = model
             .opset_import
@@ -54,87 +76,37 @@ impl InferenceEngine {
 
         crate::graph_opt::optimize(&mut graph);
 
-        let initializer_names: std::collections::HashSet<&str> =
-            graph.initializers.keys().map(|k| k.as_str()).collect();
+        let input_sizes = if let Some(sizes) = opts.input_sizes {
+            sizes
+        } else {
+            let initializer_names: std::collections::HashSet<&str> =
+                graph.initializers.keys().map(|k| k.as_str()).collect();
+            let mut sizes = HashMap::new();
+            for input in &graph.inputs {
+                if input.name.is_empty() || initializer_names.contains(input.name.as_str()) {
+                    continue;
+                }
+                if let Some(shape) = &input.shape {
+                    let mut shape = shape.clone();
+                    if !shape.is_empty() && shape[0] == 0 {
+                        shape[0] = opts.batch_size;
+                    }
+                    if shape.iter().all(|&d| d > 0) {
+                        sizes.insert(input.name.clone(), shape);
+                    }
+                }
+            }
+            sizes
+        };
 
-        let mut input_sizes = HashMap::new();
-        for input in &graph.inputs {
-            if input.name.is_empty() || initializer_names.contains(input.name.as_str()) {
-                continue;
-            }
-            if let Some(shape) = &input.shape {
-                let mut shape = shape.clone();
-                if !shape.is_empty() && shape[0] == 0 {
-                    shape[0] = batch_size;
-                }
-                if shape.iter().all(|&d| d > 0) {
-                    input_sizes.insert(input.name.clone(), shape);
-                }
-            }
+        #[cfg(not(feature = "xnnpack"))]
+        if opts.xnnpack {
+            tracing::warn!(
+                "xnnpack requested but onnx-infer was compiled without the `xnnpack` feature — falling back to CPU"
+            );
         }
 
-        Self::build_from_graph(graph, input_sizes)
-    }
-
-    pub fn with_input_sizes(
-        model_bytes: &[u8],
-        input_sizes: HashMap<String, Dims>,
-    ) -> Result<Self> {
-        let model = ModelProto::decode(model_bytes).context("decoding model proto")?;
-        let opset_version = model
-            .opset_import
-            .iter()
-            .filter(|o| o.domain.is_empty())
-            .map(|o| o.version)
-            .max()
-            .unwrap_or(0);
-        let graph_proto = model.graph.as_ref().context("model has no graph")?;
-        let mut graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
-
-        crate::graph_opt::optimize(&mut graph);
-
-        Self::build_from_graph(graph, input_sizes)
-    }
-
-    /// Create an engine with XNNPACK acceleration.
-    ///
-    /// Applies full graph optimizations including NHWC layout transposes,
-    /// then compiles eligible op sequences into XNNPACK subgraphs.
-    #[cfg(feature = "xnnpack")]
-    pub fn with_xnnpack(model_bytes: &[u8]) -> Result<Self> {
-        let model = ModelProto::decode(model_bytes).context("decoding model proto")?;
-        let opset_version = model
-            .opset_import
-            .iter()
-            .filter(|o| o.domain.is_empty())
-            .map(|o| o.version)
-            .max()
-            .unwrap_or(0);
-        let graph_proto = model.graph.as_ref().context("model has no graph")?;
-        let mut graph = onnx_ir::convert_graph_with_opset(graph_proto, opset_version)?;
-
-        crate::graph_opt::optimize(&mut graph);
-
-        let initializer_names: std::collections::HashSet<&str> =
-            graph.initializers.keys().map(|k| k.as_str()).collect();
-
-        let mut input_sizes = HashMap::new();
-        for input in &graph.inputs {
-            if input.name.is_empty() || initializer_names.contains(input.name.as_str()) {
-                continue;
-            }
-            if let Some(shape) = &input.shape {
-                let mut shape = shape.clone();
-                if !shape.is_empty() && shape[0] == 0 {
-                    shape[0] = 1;
-                }
-                if shape.iter().all(|&d| d > 0) {
-                    input_sizes.insert(input.name.clone(), shape);
-                }
-            }
-        }
-
-        Self::build_from_graph_xnnpack(graph, input_sizes)
+        Self::build_from_graph(graph, input_sizes, opts.xnnpack)
     }
 
     /// Dump the current (possibly optimized) IR graph as human-readable text.
@@ -184,10 +156,10 @@ impl InferenceEngine {
         Ok((before, after))
     }
 
-    #[cfg(feature = "xnnpack")]
-    fn build_from_graph_xnnpack(
+    fn build_from_graph(
         graph: onnx_ir::Graph,
         input_sizes: HashMap<String, Dims>,
+        use_xnnpack: bool,
     ) -> Result<Self> {
         let initializer_names: std::collections::HashSet<&str> =
             graph.initializers.keys().map(|k| k.as_str()).collect();
@@ -205,12 +177,23 @@ impl InferenceEngine {
         }
 
         let all_shapes_known = input_names.iter().all(|n| input_sizes.contains_key(n));
+
         let plan = if all_shapes_known {
-            Some(Plan::build_with_xnnpack(
-                &graph,
-                &input_sizes,
-                &HashMap::new(),
-            )?)
+            #[cfg(feature = "xnnpack")]
+            if use_xnnpack {
+                Some(Plan::build_with_xnnpack(
+                    &graph,
+                    &input_sizes,
+                    &HashMap::new(),
+                )?)
+            } else {
+                Some(Plan::build(&graph, &input_sizes)?)
+            }
+            #[cfg(not(feature = "xnnpack"))]
+            {
+                let _ = use_xnnpack;
+                Some(Plan::build(&graph, &input_sizes)?)
+            }
         } else {
             None
         };
@@ -227,49 +210,7 @@ impl InferenceEngine {
             input_names,
             input_sizes,
             outputs,
-            #[cfg(feature = "xnnpack")]
-            use_xnnpack: true,
-        })
-    }
-
-    fn build_from_graph(graph: onnx_ir::Graph, input_sizes: HashMap<String, Dims>) -> Result<Self> {
-        let initializer_names: std::collections::HashSet<&str> =
-            graph.initializers.keys().map(|k| k.as_str()).collect();
-        let input_names: Vec<String> = graph
-            .inputs
-            .iter()
-            .filter(|i| !i.name.is_empty() && !initializer_names.contains(i.name.as_str()))
-            .map(|i| i.name.clone())
-            .collect();
-
-        let output_names: Vec<String> = graph.outputs.iter().map(|o| o.name.clone()).collect();
-        let mut outputs = HashMap::new();
-        for name in &output_names {
-            outputs.insert(name.clone(), Tensor::default());
-        }
-
-        // Build plan eagerly if all input shapes are known
-        let all_shapes_known = input_names.iter().all(|n| input_sizes.contains_key(n));
-        let plan = if all_shapes_known {
-            Some(Plan::build(&graph, &input_sizes)?)
-        } else {
-            None
-        };
-
-        let mut values = HashMap::new();
-        if let Some(ref plan) = plan {
-            Self::load_plan_values(&mut values, plan);
-        }
-
-        Ok(Self {
-            graph,
-            plan,
-            values,
-            input_names,
-            input_sizes,
-            outputs,
-            #[cfg(feature = "xnnpack")]
-            use_xnnpack: false,
+            use_xnnpack,
         })
     }
 
@@ -314,7 +255,10 @@ impl InferenceEngine {
             Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), inputs)?
         };
         #[cfg(not(feature = "xnnpack"))]
-        let plan = Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), inputs)?;
+        let plan = {
+            let _ = self.use_xnnpack;
+            Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), inputs)?
+        };
 
         // Reset values and reload from new plan
         self.values.clear();

@@ -686,6 +686,13 @@ pub fn build_node_with_opset(
             inputs,
             node.attrs.get_float("epsilon").unwrap_or(1e-5),
             input_shapes[0],
+            false,
+        )),
+        OpType::BatchNormalization2d => Box::new(batch_norm::BatchNorm::new(
+            inputs,
+            node.attrs.get_float("epsilon").unwrap_or(1e-5),
+            input_shapes[0],
+            true,
         )),
         OpType::Sigmoid => Box::new(sigmoid::Sigmoid::new(inputs)),
         OpType::Exp => Box::new(exp::Exp::new(inputs)),

@@ -9,6 +9,7 @@ use tracing_subscriber::prelude::*;
 
 use crate::DType;
 use crate::InferenceEngine;
+use crate::InferenceOptions;
 use crate::Tensor;
 use crate::onnx::ModelProto;
 use crate::onnx::TensorProto;
@@ -69,7 +70,7 @@ fn load_model_and_inputs(
 
 fn run_fixture(base: &Path, model_file: &str, test_set: usize) {
     let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
-    let mut engine = InferenceEngine::new(&model_bytes).expect("load model");
+    let mut engine = InferenceEngine::new(&model_bytes, Default::default()).expect("load model");
 
     let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
     let graph = model.graph.as_ref().expect("model has no graph");
@@ -126,7 +127,7 @@ fn run_fixture(base: &Path, model_file: &str, test_set: usize) {
 
 fn run_fixture_argmax(base: &Path, model_file: &str, test_set: usize) {
     let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
-    let mut engine = InferenceEngine::new(&model_bytes).expect("load model");
+    let mut engine = InferenceEngine::new(&model_bytes, Default::default()).expect("load model");
 
     let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
     let graph = model.graph.as_ref().expect("model has no graph");
@@ -172,7 +173,7 @@ fn run_quantized_fixture_with_tol(
     softmax_tol: f32,
 ) {
     let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
-    let mut engine = InferenceEngine::new(&model_bytes).expect("load model");
+    let mut engine = InferenceEngine::new(&model_bytes, Default::default()).expect("load model");
 
     let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
     let graph = model.graph.as_ref().expect("model has no graph");
@@ -232,7 +233,7 @@ fn run_multi_io_fixture(base: &Path, model_file: &str, test_set: usize) {
 
 fn run_multi_io_fixture_with_tol(base: &Path, model_file: &str, test_set: usize, tol: f32) {
     let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
-    let mut engine = InferenceEngine::new(&model_bytes).expect("load model");
+    let mut engine = InferenceEngine::new(&model_bytes, Default::default()).expect("load model");
 
     let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
     let graph = model.graph.as_ref().expect("model has no graph");
@@ -309,7 +310,7 @@ fn run_multi_io_fixture_with_tol(base: &Path, model_file: &str, test_set: usize,
 fn run_fixture_graphopt(base: &Path, model_file: &str, test_set: usize) {
     let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
     let mut engine =
-        InferenceEngine::with_graph_opt(&model_bytes).expect("load model with graph opt");
+        InferenceEngine::new(&model_bytes, Default::default()).expect("load model with graph opt");
 
     let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
     let graph = model.graph.as_ref().expect("model has no graph");
@@ -362,7 +363,7 @@ fn run_multi_io_fixture_graphopt_with_tol(
 ) {
     let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
     let mut engine =
-        InferenceEngine::with_graph_opt(&model_bytes).expect("load model with graph opt");
+        InferenceEngine::new(&model_bytes, Default::default()).expect("load model with graph opt");
 
     let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
     let graph = model.graph.as_ref().expect("model has no graph");
@@ -440,7 +441,7 @@ fn run_multi_io_fixture_graphopt_with_tol(
 fn run_quantized_fixture_graphopt(base: &Path, model_file: &str, test_set: usize) {
     let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
     let mut engine =
-        InferenceEngine::with_graph_opt(&model_bytes).expect("load model with graph opt");
+        InferenceEngine::new(&model_bytes, Default::default()).expect("load model with graph opt");
 
     let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
     let graph = model.graph.as_ref().expect("model has no graph");
@@ -1061,7 +1062,14 @@ fn test_version_rfb_640_set_0() {
 #[cfg(feature = "xnnpack")]
 fn run_fixture_xnnpack(base: &Path, model_file: &str, test_set: usize) {
     let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
-    let mut engine = InferenceEngine::with_xnnpack(&model_bytes).expect("load model with xnnpack");
+    let mut engine = InferenceEngine::new(
+        &model_bytes,
+        InferenceOptions {
+            xnnpack: true,
+            ..Default::default()
+        },
+    )
+    .expect("load model with xnnpack");
 
     let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
     let graph = model.graph.as_ref().expect("model has no graph");
@@ -1162,7 +1170,14 @@ fn run_multi_io_fixture_xnnpack(base: &Path, model_file: &str, test_set: usize) 
 #[cfg(feature = "xnnpack")]
 fn run_multi_io_fixture_xnnpack_with_tol(base: &Path, model_file: &str, test_set: usize, tol: f32) {
     let (model_bytes, inputs) = load_model_and_inputs(base, model_file, test_set);
-    let mut engine = InferenceEngine::with_xnnpack(&model_bytes).expect("load model with xnnpack");
+    let mut engine = InferenceEngine::new(
+        &model_bytes,
+        InferenceOptions {
+            xnnpack: true,
+            ..Default::default()
+        },
+    )
+    .expect("load model with xnnpack");
 
     let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
     let graph = model.graph.as_ref().expect("model has no graph");
