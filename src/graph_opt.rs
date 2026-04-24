@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
 
+use crate::Tensor;
 use crate::dims;
 use crate::layers::OpType;
 use crate::onnx_ir::Attr;
 use crate::onnx_ir::Attrs;
 use crate::onnx_ir::Graph;
 use crate::onnx_ir::Node;
-use crate::Tensor;
 
 const NCHW_TO_NHWC: [i64; 4] = [0, 2, 3, 1];
 const NHWC_TO_NCHW: [i64; 4] = [0, 3, 1, 2];
