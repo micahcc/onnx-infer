@@ -52,9 +52,8 @@ fn requires_nhwc(op: OpType) -> bool {
     )
 }
 
-/// Ops where a transpose can pass through without affecting semantics.
-/// These are elementwise/unary ops that don't care about layout.
-fn transpose_can_pass_through(op: OpType) -> bool {
+/// Ops that are layout-agnostic: a transpose can pass through without affecting semantics.
+fn is_layout_agnostic(op: OpType) -> bool {
     matches!(
         op,
         OpType::Relu
@@ -191,7 +190,7 @@ pub fn optimize(graph: &mut Graph) {
     // Limit is high because push_unary/push_binary process one move at a time.
     for _ in 0..200 {
         let changed = eliminate_inverse_transposes(graph)
-            | push_transposes_through_unary(graph, &mut counter)
+            | push_transposes_through_layout_agnostic(graph, &mut counter)
             | push_transposes_through_binary(graph, &mut counter);
         if !changed {
             break;
@@ -484,7 +483,7 @@ fn eliminate_inverse_transposes(graph: &mut Graph) -> bool {
 /// When a transpose has multiple consumers, it is first duplicated so each
 /// consumer gets its own single-consumer copy (needed for patterns like Mish:
 /// `x * tanh(softplus(x))` where the NHWC→NCHW output feeds both Softplus and Mul).
-fn push_transposes_through_unary(graph: &mut Graph, counter: &mut usize) -> bool {
+fn push_transposes_through_layout_agnostic(graph: &mut Graph, counter: &mut usize) -> bool {
     let consumer_map = build_consumer_map(&graph.nodes);
 
     for (i, node) in graph.nodes.iter().enumerate() {
@@ -505,8 +504,7 @@ fn push_transposes_through_unary(graph: &mut Graph, counter: &mut usize) -> bool
         // At least one consumer must be pushable (unary op consuming on input 0)
         let has_pushable = consumers.iter().any(|&ci| {
             let c = &graph.nodes[ci];
-            transpose_can_pass_through(c.op_type)
-                && c.inputs.first().is_some_and(|n| n == output_name)
+            is_layout_agnostic(c.op_type) && c.inputs.first().is_some_and(|n| n == output_name)
         });
         if !has_pushable {
             continue;
@@ -540,7 +538,7 @@ fn push_transposes_through_unary(graph: &mut Graph, counter: &mut usize) -> bool
         // Single consumer: push the transpose through if the consumer is a unary op
         let consumer_idx = consumers[0];
         let consumer = &graph.nodes[consumer_idx];
-        if !transpose_can_pass_through(consumer.op_type) {
+        if !is_layout_agnostic(consumer.op_type) {
             continue;
         }
         // Must consume only on input 0
