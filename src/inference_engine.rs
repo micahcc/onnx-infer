@@ -57,7 +57,6 @@ pub struct InferenceEngine {
     input_names: Vec<String>,
     input_sizes: HashMap<String, Dims>,
     pub outputs: HashMap<String, Tensor>,
-    #[cfg(feature = "xnnpack")]
     use_xnnpack: bool,
 }
 
@@ -100,15 +99,14 @@ impl InferenceEngine {
             sizes
         };
 
-        #[cfg(feature = "xnnpack")]
-        let use_xnnpack = opts.xnnpack;
+        #[cfg(not(feature = "xnnpack"))]
+        if opts.xnnpack {
+            tracing::warn!(
+                "xnnpack requested but onnx-infer was compiled without the `xnnpack` feature — falling back to CPU"
+            );
+        }
 
-        Self::build_from_graph(
-            graph,
-            input_sizes,
-            #[cfg(feature = "xnnpack")]
-            use_xnnpack,
-        )
+        Self::build_from_graph(graph, input_sizes, opts.xnnpack)
     }
 
     /// Dump the current (possibly optimized) IR graph as human-readable text.
@@ -161,7 +159,7 @@ impl InferenceEngine {
     fn build_from_graph(
         graph: onnx_ir::Graph,
         input_sizes: HashMap<String, Dims>,
-        #[cfg(feature = "xnnpack")] use_xnnpack: bool,
+        use_xnnpack: bool,
     ) -> Result<Self> {
         let initializer_names: std::collections::HashSet<&str> =
             graph.initializers.keys().map(|k| k.as_str()).collect();
@@ -180,8 +178,8 @@ impl InferenceEngine {
 
         let all_shapes_known = input_names.iter().all(|n| input_sizes.contains_key(n));
 
-        #[cfg(feature = "xnnpack")]
         let plan = if all_shapes_known {
+            #[cfg(feature = "xnnpack")]
             if use_xnnpack {
                 Some(Plan::build_with_xnnpack(
                     &graph,
@@ -191,13 +189,11 @@ impl InferenceEngine {
             } else {
                 Some(Plan::build(&graph, &input_sizes)?)
             }
-        } else {
-            None
-        };
-
-        #[cfg(not(feature = "xnnpack"))]
-        let plan = if all_shapes_known {
-            Some(Plan::build(&graph, &input_sizes)?)
+            #[cfg(not(feature = "xnnpack"))]
+            {
+                let _ = use_xnnpack;
+                Some(Plan::build(&graph, &input_sizes)?)
+            }
         } else {
             None
         };
@@ -214,7 +210,6 @@ impl InferenceEngine {
             input_names,
             input_sizes,
             outputs,
-            #[cfg(feature = "xnnpack")]
             use_xnnpack,
         })
     }
@@ -260,7 +255,10 @@ impl InferenceEngine {
             Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), inputs)?
         };
         #[cfg(not(feature = "xnnpack"))]
-        let plan = Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), inputs)?;
+        let plan = {
+            let _ = self.use_xnnpack;
+            Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), inputs)?
+        };
 
         // Reset values and reload from new plan
         self.values.clear();
