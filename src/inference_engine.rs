@@ -6,6 +6,7 @@ use prost::Message;
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
+use crate::TensorData;
 use crate::layers::Plan;
 use crate::layers::PlanNode;
 use crate::onnx::ModelProto;
@@ -224,17 +225,23 @@ impl InferenceEngine {
     }
 
     fn ensure_plan(&mut self, inputs: &HashMap<String, Tensor>) -> Result<()> {
-        // Check if we need to rebuild: no plan, or input shapes changed
+        // Check if we need to rebuild: no plan, or input shapes changed.
+        // Check both explicit inputs and values already in self.values
+        // (e.g. written via input_floats_mut).
         let needs_rebuild = match &self.plan {
             None => true,
-            Some(_) => {
-                // Check if any input shape differs from what we built with
-                inputs.iter().any(|(name, tensor)| {
+            Some(_) => inputs
+                .iter()
+                .chain(
+                    self.input_names
+                        .iter()
+                        .filter_map(|n| self.values.get(n).map(|t| (n, t))),
+                )
+                .any(|(name, tensor)| {
                     self.input_sizes
                         .get(name)
                         .is_none_or(|s| s.as_slice() != tensor.dims.as_slice())
-                })
-            }
+                }),
         };
 
         if !needs_rebuild {
@@ -243,6 +250,11 @@ impl InferenceEngine {
 
         // Derive input_sizes from actual input tensors
         let mut input_sizes = self.input_sizes.clone();
+        for name in &self.input_names {
+            if let Some(tensor) = self.values.get(name) {
+                input_sizes.insert(name.clone(), tensor.dims.clone());
+            }
+        }
         for (name, tensor) in inputs {
             input_sizes.insert(name.clone(), tensor.dims.clone());
         }
@@ -352,8 +364,8 @@ impl InferenceEngine {
         outputs: &mut HashMap<String, Tensor>,
     ) -> Result<()> {
         self.ensure_plan(&inputs)?;
-        for (k, v) in &inputs {
-            self.values.insert(k.clone(), v.clone());
+        for (k, v) in inputs {
+            self.values.insert(k, v);
         }
 
         let plan = self.plan.as_mut().unwrap();
@@ -419,6 +431,25 @@ impl InferenceEngine {
 
     pub fn value(&self, name: &str) -> Option<&Tensor> {
         self.values.get(name)
+    }
+
+    /// Returns a mutable slice to the f32 data of an input tensor, reusing
+    /// the existing allocation when possible. The tensor is resized to match
+    /// `dims`; no allocation occurs if the capacity is already sufficient.
+    pub fn input_floats_mut(&mut self, name: &str, dims: Dims) -> Result<&mut [f32]> {
+        let numel: usize = dims.iter().product();
+        let tensor = self
+            .values
+            .entry(name.to_string())
+            .or_insert_with(|| Tensor::new(dims.clone(), vec![0.0; numel]));
+        tensor.dims = dims;
+        match &mut tensor.data {
+            TensorData::F32(buf) => {
+                buf.resize(numel, 0.0);
+                Ok(buf.as_mut_slice())
+            }
+            _ => anyhow::bail!("expected f32 tensor for input '{name}'"),
+        }
     }
 
     pub fn shape_map(&self) -> HashMap<String, Dims> {
