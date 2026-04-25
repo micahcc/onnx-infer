@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-25 — Zero-allocation `run_planned` API
+
+- **`run_planned()`**: New method that runs inference using inputs pre-written
+  via `input_floats_mut()`, avoiding all input tensor allocation and copying.
+  Ideal for hot loops where the same engine is called repeatedly.
+
 ## 2026-03-21 — Fix XNNPACK Resize, zero-copy execution, recompilation
 
 - **XNNPACK Resize mode check**: XNNPACK only supports bilinear resize
