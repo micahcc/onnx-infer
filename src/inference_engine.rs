@@ -285,7 +285,27 @@ impl InferenceEngine {
         Ok(())
     }
 
-    pub fn run(&mut self, inputs: HashMap<String, Tensor>) -> Result<()> {
+    /// Run inference using inputs already written into the engine via
+    /// [`input_floats_mut`](Self::input_floats_mut). No input tensors are
+    /// allocated or copied — the engine executes directly on its internal
+    /// buffers.
+    /// Run inference using inputs already written into the engine via
+    /// [`input_floats_mut`](Self::input_floats_mut). No input tensors are
+    /// allocated or copied — the engine executes directly on its internal
+    /// buffers.
+    pub fn run_planned(&mut self) -> Result<&HashMap<String, Tensor>> {
+        self.ensure_plan(&HashMap::new())?;
+        let plan = self.plan.as_mut().unwrap();
+        let output_names = std::mem::take(&mut plan.output_names);
+        let mut outputs = std::mem::take(&mut self.outputs);
+        let result = self.run_inner(&HashMap::new(), &output_names, &mut outputs);
+        self.plan.as_mut().unwrap().output_names = output_names;
+        self.outputs = outputs;
+        result?;
+        Ok(&self.outputs)
+    }
+
+    pub fn run(&mut self, inputs: HashMap<String, Tensor>) -> Result<&HashMap<String, Tensor>> {
         self.ensure_plan(&inputs)?;
         let plan = self.plan.as_mut().unwrap();
         let output_names = std::mem::take(&mut plan.output_names);
@@ -294,7 +314,7 @@ impl InferenceEngine {
         self.plan.as_mut().unwrap().output_names = output_names;
         self.outputs = outputs;
         result?;
-        Ok(())
+        Ok(&self.outputs)
     }
 
     fn run_inner(

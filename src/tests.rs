@@ -9,6 +9,7 @@ use tracing_subscriber::prelude::*;
 
 use crate::DType;
 use crate::InferenceEngine;
+#[cfg(feature = "xnnpack")]
 use crate::InferenceOptions;
 use crate::Tensor;
 use crate::onnx::ModelProto;
@@ -660,6 +661,47 @@ fn test_mnist8_set_0() {
 fn test_mnist12_set_0() {
     let _t = setup_tracing("mnist12_set_0");
     run_fixture(&fixture("mnist-12"), "mnist-12.onnx", 0);
+}
+
+#[test]
+fn test_mnist12_input_floats_mut() {
+    let _t = setup_tracing("mnist12_input_floats_mut");
+    let base = fixture("mnist-12");
+    let (model_bytes, inputs) = load_model_and_inputs(&base, "mnist-12.onnx", 0);
+    let mut engine = InferenceEngine::new(&model_bytes, Default::default()).expect("load model");
+
+    let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
+    let graph = model.graph.as_ref().expect("model has no graph");
+    let output_name = graph.output[0].name.clone();
+
+    let test_dir = base.join("test_data_set_0");
+    let output_bytes = fs::read(test_dir.join("output_0.pb")).expect("read output");
+    let expected = Tensor::from_proto_bytes(&output_bytes).expect("parse output");
+
+    // Write input data via input_floats_mut instead of passing a HashMap
+    for (name, tensor) in &inputs {
+        let src = tensor.floats().expect("input should be float");
+        let dst = engine
+            .input_floats_mut(name, tensor.dims.clone())
+            .expect("input_floats_mut");
+        dst.copy_from_slice(src);
+    }
+
+    // Run twice to verify buffer reuse (no reallocation on second call)
+    for _ in 0..2 {
+        let outputs = engine.run_planned().expect("run_planned");
+        let output = &outputs[&output_name];
+        assert_eq!(output.dims, expected.dims);
+
+        let out_data = output.floats().expect("output should be float tensor");
+        let exp_data = expected.floats().expect("expected should be float tensor");
+        let max_err = out_data
+            .iter()
+            .zip(exp_data.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(max_err <= 1e-3, "max error {max_err} exceeds 1e-3");
+    }
 }
 
 #[test]
