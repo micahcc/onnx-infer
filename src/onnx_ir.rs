@@ -186,6 +186,43 @@ fn convert_value_info(vi: &crate::onnx::ValueInfoProto) -> ValueInfo {
     }
 }
 
+/// Extract tensor shape from an ONNX ValueInfoProto.
+/// Dynamic or missing dimensions are returned as 1.
+pub fn extract_tensor_shape(
+    value_info: &crate::onnx::ValueInfoProto,
+) -> anyhow::Result<Vec<usize>> {
+    let type_proto = value_info
+        .r#type
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("ValueInfo has no type"))?;
+    let value = type_proto
+        .value
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Type has no value"))?;
+
+    let tensor_type = match value {
+        crate::onnx::type_proto::Value::TensorType(t) => t,
+        _ => anyhow::bail!("Type is not a tensor"),
+    };
+
+    let shape_proto = tensor_type
+        .shape
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Tensor has no shape"))?;
+
+    Ok(shape_proto
+        .dim
+        .iter()
+        .map(|d| {
+            use crate::onnx::tensor_shape_proto::dimension::Value as DimValue;
+            match d.value.as_ref() {
+                Some(DimValue::DimValue(v)) => *v as usize,
+                _ => 1,
+            }
+        })
+        .collect())
+}
+
 fn convert_node(node: &crate::onnx::NodeProto) -> Result<Node> {
     let op_type =
         OpType::parse(&node.op_type).map_err(|s| anyhow::anyhow!("unsupported operator: {s}"))?;

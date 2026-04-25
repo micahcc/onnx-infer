@@ -86,6 +86,7 @@ pub use dtype::ONNX_UINT8;
 pub use inference_engine::InferenceEngine;
 pub use inference_engine::InferenceOptions;
 pub use inference_error::Result;
+pub use onnx_ir::extract_tensor_shape;
 pub use tensor_data::Dims;
 pub use tensor_data::Layout;
 pub use tensor_data::ShapeLayout;
