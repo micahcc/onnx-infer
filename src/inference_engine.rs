@@ -221,10 +221,6 @@ impl InferenceEngine {
     }
 
     fn switch_to_plan(&mut self, idx: usize) {
-        self.intermediates.clear();
-        for (k, v) in &self.plan_cache[idx].tensor_pool {
-            self.intermediates.insert(k.clone(), v.clone());
-        }
         self.current_plan = Some(idx);
     }
 

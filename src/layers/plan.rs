@@ -116,7 +116,6 @@ pub struct Plan {
     pub output_names: Vec<String>,
     pub shape_map: HashMap<String, ShapeLayout>,
     pub type_map: HashMap<String, DType>,
-    pub tensor_pool: HashMap<String, Tensor>,
 }
 
 impl Plan {
@@ -412,33 +411,6 @@ impl Plan {
             )?;
         }
 
-        // Pre-allocate tensors for all known shapes/types
-        let mut tensor_pool: HashMap<String, Tensor> = HashMap::new();
-        // Cap pre-allocation at 256MB per tensor to avoid capacity overflow
-        // from shape inference mismatches (e.g., NHWC shapes computed with NCHW logic)
-        const MAX_PREALLOC_ELEMS: usize = 256 * 1024 * 1024 / 4;
-        for (name, sl) in &shape_map {
-            if initializers.contains_key(name) {
-                continue;
-            }
-            let numel: usize = sl
-                .dims
-                .iter()
-                .try_fold(1usize, |acc, &d| acc.checked_mul(d))
-                .unwrap_or(0);
-            if numel == 0 || numel > MAX_PREALLOC_ELEMS {
-                continue;
-            }
-            let dtype = type_map.get(name).copied().unwrap_or(DType::Float);
-            let mut tensor = match dtype {
-                DType::Float => Tensor::new(sl.dims.clone(), vec![0.0; numel]),
-                DType::Int64 => Tensor::new_i64(sl.dims.clone(), vec![0; numel]),
-                DType::String => Tensor::new_strings(sl.dims.clone(), vec![vec![]; numel]),
-            };
-            tensor.layout = sl.layout;
-            tensor_pool.insert(name.clone(), tensor);
-        }
-
         // Log plan summary
         {
             let mut cpu_ops = 0usize;
@@ -482,7 +454,6 @@ impl Plan {
             output_names,
             shape_map,
             type_map,
-            tensor_pool,
         })
     }
 }

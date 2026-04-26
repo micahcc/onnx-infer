@@ -145,9 +145,6 @@ impl Scan {
         for (k, v) in std::mem::take(&mut plan.initializers) {
             self.values.insert(k, v);
         }
-        for (k, v) in std::mem::take(&mut plan.tensor_pool) {
-            self.values.insert(k, v);
-        }
         for name in &self.outer_refs {
             if let Some(t) = outer_values.get(name).or_else(|| inputs.get(name)).or_else(|| initializers.get(name)) {
                 self.values.insert(name.clone(), t.clone());

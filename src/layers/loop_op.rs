@@ -153,12 +153,9 @@ impl Loop {
             probe
         };
 
-        // Move initializers and tensor_pool into persistent values
+        // Move initializers into persistent values
         let mut plan = plan;
         for (k, v) in std::mem::take(&mut plan.initializers) {
-            self.values.insert(k, v);
-        }
-        for (k, v) in std::mem::take(&mut plan.tensor_pool) {
             self.values.insert(k, v);
         }
 
