@@ -19,7 +19,6 @@ use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
-use crate::Values;
 use crate::layers::OpType;
 use crate::onnx_ir::Node;
 use crate::xnnpack_ffi::*;
@@ -1874,7 +1873,6 @@ pub struct XnnpackSubgraph {
     compile_failed: bool,
     pub ops: Vec<CapturedOp>,
     required_outputs: Vec<String>,
-    initializers: HashMap<String, Tensor>,
     shape_hints: HashMap<String, Vec<usize>>,
 }
 
@@ -1885,14 +1883,12 @@ impl XnnpackSubgraph {
         ops: Vec<CapturedOp>,
         required_outputs: Vec<String>,
         shape_hints: HashMap<String, Vec<usize>>,
-        initializers: HashMap<String, Tensor>,
     ) -> Self {
         Self {
             compiled: None,
             compile_failed: false,
             ops,
             required_outputs,
-            initializers,
             shape_hints,
         }
     }
@@ -1909,33 +1905,23 @@ impl XnnpackSubgraph {
     ) -> Result<()> {
         let _span = tracing::trace_span!("xnnpack_subgraph").entered();
 
-        // Temporarily insert inputs and initializers so all lookups via values.get() work.
-        // xnnpack subgraph has deep internal logic that reads from the values map.
-        for (k, v) in initializers {
-            values.entry(k.clone()).or_insert_with(|| v.clone());
-        }
-        for (k, v) in inputs {
-            values.entry(k.clone()).or_insert_with(|| v.clone());
-        }
-
-        self.ensure_compiled(values)?;
+        self.ensure_compiled(values, inputs, initializers)?;
 
         if self.compile_failed {
-            return self.execute_fallback(values);
+            return self.execute_fallback(values, initializers);
         }
 
         let compiled = self.compiled.as_ref().unwrap();
-
         // Verify runtime input shapes match compiled shapes.
         // On shape mismatch, recompile with the new shapes.
         let mut needs_recompile = false;
         for (i, name) in compiled.input_names.iter().enumerate() {
-            if let Some(tensor) = values.get(name) {
+            if let Some(tensor) = inputs.get(name).or_else(|| values.get(name)) {
                 if tensor.dtype() != crate::DType::Float {
                     tracing::debug!("XNNPACK: dtype mismatch for '{name}'");
                     self.compiled = None;
                     self.compile_failed = true;
-                    return self.execute_fallback(values);
+                    return self.execute_fallback(values, initializers);
                 }
                 let runtime_shape: Vec<usize> = tensor.dims.to_vec();
                 if runtime_shape != compiled.input_shapes[i] {
@@ -1968,7 +1954,7 @@ impl XnnpackSubgraph {
             for op in &self.ops {
                 for name in &op.inputs {
                     if !name.is_empty() && !produced.contains(name.as_str()) {
-                        if let Some(t) = values.get(name) {
+                        if let Some(t) = inputs.get(name).or_else(|| values.get(name)) {
                             if !t.dims.is_empty() {
                                 self.shape_hints.insert(name.clone(), t.dims.to_vec());
                             }
@@ -1976,9 +1962,9 @@ impl XnnpackSubgraph {
                     }
                 }
             }
-            self.ensure_compiled(values)?;
+            self.ensure_compiled(values, inputs, initializers)?;
             if self.compile_failed {
-                return self.execute_fallback(values);
+                return self.execute_fallback(values, initializers);
             }
         }
 
@@ -1991,6 +1977,18 @@ impl XnnpackSubgraph {
         // changed (other ops may have reallocated them).
         let num_external = compiled.input_names.len() + compiled.output_names.len();
         let mut external_values = Vec::with_capacity(num_external);
+
+        // Ensure all external inputs are in values (may come from inputs or initializers).
+        // Always prefer fresh user inputs over stale intermediates.
+        for name in &compiled.input_names {
+            if let Some(t) = inputs.get(name) {
+                values.insert(name.clone(), t.clone());
+            } else if !values.contains_key(name) {
+                if let Some(t) = initializers.get(name) {
+                    values.insert(name.clone(), t.clone());
+                }
+            }
+        }
 
         for (i, name) in compiled.input_names.iter().enumerate() {
             let tensor = values
@@ -2026,7 +2024,7 @@ impl XnnpackSubgraph {
                 tracing::debug!("XNNPACK: reshape failed: {:?}", status);
                 self.compiled = None;
                 self.compile_failed = true;
-                return self.execute_fallback(values);
+                return self.execute_fallback(values, initializers);
             }
             compiled.is_setup = true;
         }
@@ -2042,7 +2040,7 @@ impl XnnpackSubgraph {
             tracing::debug!("XNNPACK: setup failed: {:?}", status);
             self.compiled = None;
             self.compile_failed = true;
-            return self.execute_fallback(values);
+            return self.execute_fallback(values, initializers);
         }
 
         let status = unsafe { xnn_invoke_runtime(compiled.runtime) };
@@ -2050,7 +2048,7 @@ impl XnnpackSubgraph {
             tracing::debug!("XNNPACK: invoke failed: {:?}", status);
             self.compiled = None;
             self.compile_failed = true;
-            return self.execute_fallback(values);
+            return self.execute_fallback(values, initializers);
         }
 
         // Truncate padding from input tensors (restore original length)
@@ -2074,7 +2072,12 @@ impl XnnpackSubgraph {
         Ok(())
     }
 
-    fn ensure_compiled(&mut self, values: &HashMap<String, Tensor>) -> Result<()> {
+    fn ensure_compiled(
+        &mut self,
+        values: &HashMap<String, Tensor>,
+        inputs: &HashMap<String, Tensor>,
+        initializers: &HashMap<String, Tensor>,
+    ) -> Result<()> {
         if self.compiled.is_some() || self.compile_failed {
             return Ok(());
         }
@@ -2096,7 +2099,7 @@ impl XnnpackSubgraph {
             .filter(|(k, _)| !produced.contains(k.as_str()))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        for (name, tensor) in &self.initializers {
+        for (name, tensor) in initializers {
             if !shape_map.contains_key(name) && !tensor.dims.is_empty() {
                 shape_map.insert(name.clone(), tensor.dims.to_vec());
             }
@@ -2106,9 +2109,9 @@ impl XnnpackSubgraph {
             for name in &op.inputs {
                 if !name.is_empty()
                     && !produced.contains(name.as_str())
-                    && !self.initializers.contains_key(name)
+                    && !initializers.contains_key(name)
                 {
-                    if let Some(t) = values.get(name) {
+                    if let Some(t) = inputs.get(name).or_else(|| values.get(name)) {
                         if !t.dims.is_empty() {
                             shape_map.insert(name.clone(), t.dims.to_vec());
                         }
@@ -2123,9 +2126,9 @@ impl XnnpackSubgraph {
                 for inp in &op.inputs {
                     if !inp.is_empty()
                         && !produced.contains(inp.as_str())
-                        && !self.initializers.contains_key(inp)
+                        && !initializers.contains_key(inp)
                     {
-                        if let Some(t) = values.get(inp) {
+                        if let Some(t) = inputs.get(inp).or_else(|| values.get(inp)) {
                             if t.dtype() != crate::DType::Float {
                                 tracing::debug!(
                                     "XNNPACK: non-float input '{inp}' dtype={:?}",
@@ -2141,13 +2144,13 @@ impl XnnpackSubgraph {
         }
 
         // Fill in any missing shapes (e.g. for Reshape outputs not in hints)
-        propagate_shapes(&self.ops, &mut shape_map, &self.initializers);
+        propagate_shapes(&self.ops, &mut shape_map, initializers);
 
         // Verify all shapes are known
         let mut missing_shape = false;
         for op in &self.ops {
             for name in op.inputs.iter().chain(op.outputs.iter()) {
-                if name.is_empty() || self.initializers.contains_key(name) {
+                if name.is_empty() || initializers.contains_key(name) {
                     continue;
                 }
                 match shape_map.get(name) {
@@ -2165,12 +2168,7 @@ impl XnnpackSubgraph {
             return Ok(());
         }
 
-        match compile_subgraph(
-            &self.ops,
-            &self.required_outputs,
-            &shape_map,
-            &self.initializers,
-        ) {
+        match compile_subgraph(&self.ops, &self.required_outputs, &shape_map, initializers) {
             Ok(compiled) => {
                 tracing::debug!(
                     "XNNPACK: compiled subgraph: {} inputs, {} outputs, {} ops",
@@ -2189,10 +2187,14 @@ impl XnnpackSubgraph {
         }
     }
 
-    fn execute_fallback(&mut self, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    fn execute_fallback(
+        &mut self,
+        values: &mut HashMap<String, Tensor>,
+        initializers: &HashMap<String, Tensor>,
+    ) -> Result<()> {
         // Run each captured op on CPU via the normal plan execution path.
         // Load subgraph-local initializers into values so ops can find them.
-        for (k, v) in &self.initializers {
+        for (k, v) in initializers {
             values.entry(k.clone()).or_insert_with(|| v.clone());
         }
         for op in &self.ops {

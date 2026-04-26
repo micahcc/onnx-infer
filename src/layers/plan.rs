@@ -438,7 +438,6 @@ impl Plan {
                 node_meta,
                 &mut shape_map,
                 &type_map,
-                initializers,
                 graph.opset_version,
                 &output_names,
             )?;
@@ -1300,7 +1299,6 @@ fn compile_xnnpack_subgraphs(
     node_meta: Vec<Option<(OpType, Vec<String>, Node)>>,
     shape_map: &mut HashMap<String, ShapeLayout>,
     type_map: &HashMap<String, DType>,
-    initializers: &HashMap<String, Tensor>,
     _opset_version: i64,
     graph_output_names: &[String],
 ) -> Result<Vec<PlanNode>> {
@@ -1434,18 +1432,6 @@ fn compile_xnnpack_subgraphs(
             })
             .collect();
 
-        // Collect initializers referenced by these ops
-        let mut sub_initializers: HashMap<String, Tensor> = HashMap::new();
-        for cap in &captured {
-            for inp in &cap.inputs {
-                if !inp.is_empty() && !sub_initializers.contains_key(inp) {
-                    if let Some(tensor) = initializers.get(inp) {
-                        sub_initializers.insert(inp.clone(), tensor.clone());
-                    }
-                }
-            }
-        }
-
         // Build shape hints for XNNPACK from the layout-aware shape_map
         let shape_map_vec: HashMap<String, Vec<usize>> = shape_map
             .iter()
@@ -1459,7 +1445,6 @@ fn compile_xnnpack_subgraphs(
             captured,
             required_outputs,
             shape_map_vec,
-            sub_initializers,
         );
 
         nodes.insert(run.start, PlanNode::XnnpackSubgraph(Box::new(subgraph)));

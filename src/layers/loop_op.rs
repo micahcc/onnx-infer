@@ -362,7 +362,7 @@ impl Loop {
                     }
                     #[cfg(feature = "xnnpack")]
                     PlanNode::XnnpackSubgraph(sg) => {
-                        sg.execute(values)?;
+                        sg.execute(values, &HashMap::new(), &HashMap::new())?;
                     }
                 }
             }

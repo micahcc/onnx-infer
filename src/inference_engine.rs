@@ -202,7 +202,7 @@ impl InferenceEngine {
             Plan::build_with_xnnpack(
                 &self.graph,
                 &input_sizes,
-                &self.inputs,
+                &HashMap::new(),
                 &mut self.initializers,
             )?
         } else {
@@ -279,7 +279,8 @@ impl InferenceEngine {
     ) -> Result<()> {
         let _span = tracing::trace_span!("inference").entered();
 
-        let plan = &mut self.plan_cache[self.current_plan.unwrap()];
+        let plan_idx = self.current_plan.unwrap();
+        let plan = &mut self.plan_cache[plan_idx];
         for node in &mut plan.nodes {
             match node {
                 PlanNode::Single { output, layer } => {
