@@ -1664,6 +1664,18 @@ fn infer_op_output_shapes(
                                 dims[idx] = v;
                             }
                         }
+                        // If the shape tensor was constant-folded with a fixed batch
+                        // size, the product may not match the actual input total when
+                        // batch changes at runtime. Re-infer the first mismatched
+                        // dimension (typically the batch axis).
+                        let shape_total: usize = dims.iter().product();
+                        if total > 0 && shape_total > 0 && shape_total != total {
+                            // Find the dimension that differs from the input and infer it
+                            let known: usize = dims[1..].iter().product();
+                            if known > 0 {
+                                dims[0] = total / known;
+                            }
+                        }
                         result.push((op.outputs[0].clone(), dims));
                     }
                 }
@@ -1926,10 +1938,21 @@ impl XnnpackSubgraph {
             // Drop old runtime and recompile with current shapes
             self.compiled = None;
             self.compile_failed = false;
-            // Update shape hints from current runtime values
+            // Collect names produced by ops in this subgraph
+            let mut produced: HashSet<&str> = HashSet::new();
             for op in &self.ops {
-                for name in op.inputs.iter().chain(op.outputs.iter()) {
-                    if !name.is_empty() {
+                for out in &op.outputs {
+                    produced.insert(out);
+                }
+            }
+            // Remove stale shape hints for produced tensors so propagate_shapes
+            // can recompute them from the new input shapes.
+            self.shape_hints
+                .retain(|k, _| !produced.contains(k.as_str()));
+            // Update shape hints only for external inputs (not produced)
+            for op in &self.ops {
+                for name in &op.inputs {
+                    if !name.is_empty() && !produced.contains(name.as_str()) {
                         if let Some(t) = values.get(name) {
                             if !t.dims.is_empty() {
                                 self.shape_hints.insert(name.clone(), t.dims.to_vec());
@@ -2041,16 +2064,35 @@ impl XnnpackSubgraph {
             return Ok(());
         }
 
-        // Build shape_map from hints + initializers + runtime values
-        let mut shape_map = self.shape_hints.clone();
+        // Identify external inputs and produced tensors
+        let mut produced: HashSet<&str> = HashSet::new();
+        for op in &self.ops {
+            for out in &op.outputs {
+                produced.insert(out);
+            }
+        }
+
+        // Build shape_map: start from hints but override external input shapes
+        // with runtime values (batch dimension may have changed), and remove
+        // stale shapes for produced tensors so propagate_shapes recomputes them.
+        let mut shape_map: HashMap<String, Vec<usize>> = self
+            .shape_hints
+            .iter()
+            .filter(|(k, _)| !produced.contains(k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         for (name, tensor) in &self.initializers {
             if !shape_map.contains_key(name) && !tensor.dims.is_empty() {
                 shape_map.insert(name.clone(), tensor.dims.to_vec());
             }
         }
+        // External inputs: prefer runtime shape over hints (batch may differ)
         for op in &self.ops {
-            for name in op.inputs.iter().chain(op.outputs.iter()) {
-                if !name.is_empty() && !shape_map.contains_key(name) {
+            for name in &op.inputs {
+                if !name.is_empty()
+                    && !produced.contains(name.as_str())
+                    && !self.initializers.contains_key(name)
+                {
                     if let Some(t) = values.get(name) {
                         if !t.dims.is_empty() {
                             shape_map.insert(name.clone(), t.dims.to_vec());
@@ -2062,12 +2104,6 @@ impl XnnpackSubgraph {
 
         // Check for non-float external inputs
         {
-            let mut produced: HashSet<&str> = HashSet::new();
-            for op in &self.ops {
-                for out in &op.outputs {
-                    produced.insert(out);
-                }
-            }
             for op in &self.ops {
                 for inp in &op.inputs {
                     if !inp.is_empty()

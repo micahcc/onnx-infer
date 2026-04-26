@@ -198,15 +198,8 @@ impl Plan {
         }
         for (name, user_dims) in input_sizes {
             if let Some(existing) = shape_map.get_mut(name) {
-                if existing.dims.len() == user_dims.len() {
-                    for (i, d) in existing.dims.iter_mut().enumerate() {
-                        if *d == 0 {
-                            *d = user_dims[i];
-                        }
-                    }
-                } else {
-                    existing.dims = user_dims.clone();
-                }
+                // Override with user-provided dims (supports dynamic batch)
+                existing.dims = user_dims.clone();
             } else {
                 shape_map.insert(name.clone(), ShapeLayout::nchw(user_dims.clone()));
             }

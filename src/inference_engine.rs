@@ -272,13 +272,31 @@ impl InferenceEngine {
             Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), inputs)?
         };
 
+        // Preserve input tensors written via input_floats_mut before clearing
+        let saved_inputs: Vec<(String, Tensor)> = self
+            .input_names
+            .iter()
+            .filter_map(|n| self.values.remove_entry(n))
+            .collect();
+
         // Reset values and reload from new plan
         self.values.clear();
         Self::load_plan_values(&mut self.values, &plan);
 
+        // Restore saved input tensors
+        for (name, tensor) in saved_inputs {
+            self.values.insert(name, tensor);
+        }
+
         // Update cached input sizes
         for (name, tensor) in inputs {
             self.input_sizes.insert(name.clone(), tensor.dims.clone());
+        }
+        // Also update from restored inputs
+        for name in &self.input_names {
+            if let Some(tensor) = self.values.get(name) {
+                self.input_sizes.insert(name.clone(), tensor.dims.clone());
+            }
         }
 
         self.plan = Some(plan);
