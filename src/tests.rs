@@ -1435,3 +1435,163 @@ fn test_xnnpack_yolov4_11_set_0() {
 fn test_xnnpack_tinyyolov2_7_set_0() {
     run_multi_io_fixture_xnnpack(&fixture("tinyyolov2-7"), "model.onnx", 0);
 }
+
+/// Verify that running inference twice with different inputs produces different
+/// outputs. This catches the bug where user inputs were accidentally added to
+/// the constant-folding map during plan building, causing the entire network to
+/// be baked with the first frame's data.
+#[test]
+fn test_different_inputs_produce_different_outputs() {
+    let base = fixture("bvlcalexnet-12");
+    let (model_bytes, inputs) = load_model_and_inputs(&base, "bvlcalexnet-12.onnx", 0);
+
+    let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
+    let graph = model.graph.as_ref().expect("model has no graph");
+    let output_name = graph.output[0].name.clone();
+    let input_name = graph.input[0].name.clone();
+
+    let mut engine = InferenceEngine::new(&model_bytes, Default::default()).expect("load model");
+
+    // First run with real input
+    engine.run(inputs.clone()).expect("run 1");
+    let out1: Vec<f32> = engine.outputs[&output_name]
+        .floats()
+        .expect("float output")
+        .to_vec();
+
+    // Second run with zeroed input (same shape, all zeros)
+    let orig = &inputs[&input_name];
+    let zero_tensor = Tensor::new(
+        orig.dims.clone(),
+        vec![0.0f32; orig.floats().unwrap().len()],
+    );
+    let mut zero_inputs = HashMap::new();
+    zero_inputs.insert(input_name, zero_tensor);
+    engine.run(zero_inputs).expect("run 2");
+    let out2: Vec<f32> = engine.outputs[&output_name]
+        .floats()
+        .expect("float output")
+        .to_vec();
+
+    // Outputs must differ — if they're identical, user inputs were constant-folded
+    assert_ne!(
+        out1, out2,
+        "Two runs with different inputs produced identical outputs; \
+        user inputs may have been constant-folded into the plan"
+    );
+}
+
+/// Same as above but with XNNPACK enabled — catches the bug where user inputs
+/// were baked into XNNPACK subgraphs as static data via constants.get() instead
+/// of constants.get_static().
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_xnnpack_different_inputs_produce_different_outputs() {
+    let base = fixture("bvlcalexnet-12");
+    let (model_bytes, inputs) = load_model_and_inputs(&base, "bvlcalexnet-12.onnx", 0);
+
+    let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
+    let graph = model.graph.as_ref().expect("model has no graph");
+    let output_name = graph.output[0].name.clone();
+    let input_name = graph.input[0].name.clone();
+
+    let mut engine = InferenceEngine::new(
+        &model_bytes,
+        InferenceOptions {
+            xnnpack: true,
+            ..Default::default()
+        },
+    )
+    .expect("load model with xnnpack");
+
+    // First run with real input
+    engine.run(inputs.clone()).expect("run 1");
+    let out1: Vec<f32> = engine.outputs[&output_name]
+        .floats()
+        .expect("float output")
+        .to_vec();
+
+    // Second run with zeroed input
+    let orig = &inputs[&input_name];
+    let zero_tensor = Tensor::new(
+        orig.dims.clone(),
+        vec![0.0f32; orig.floats().unwrap().len()],
+    );
+    let mut zero_inputs = HashMap::new();
+    zero_inputs.insert(input_name, zero_tensor);
+    engine.run(zero_inputs).expect("run 2");
+    let out2: Vec<f32> = engine.outputs[&output_name]
+        .floats()
+        .expect("float output")
+        .to_vec();
+
+    assert_ne!(
+        out1, out2,
+        "XNNPACK: two runs with different inputs produced identical outputs; \
+        user inputs may have been baked as static data in the XNNPACK subgraph"
+    );
+}
+
+/// Verify XNNPACK path produces same results as CPU path for a classifier.
+/// This catches bugs in XNNPACK op compilation (including Slice, Reshape, etc.)
+/// that would silently produce wrong results.
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_xnnpack_matches_cpu() {
+    let base = fixture("bvlcalexnet-12");
+    let (model_bytes, inputs) = load_model_and_inputs(&base, "bvlcalexnet-12.onnx", 0);
+
+    let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
+    let graph = model.graph.as_ref().expect("model has no graph");
+    let output_name = graph.output[0].name.clone();
+
+    // CPU run
+    let mut cpu_engine =
+        InferenceEngine::new(&model_bytes, Default::default()).expect("load model (CPU)");
+    cpu_engine.run(inputs.clone()).expect("CPU inference");
+    let cpu_f = cpu_engine.outputs[&output_name]
+        .floats()
+        .expect("CPU float")
+        .to_vec();
+
+    // XNNPACK run
+    let mut xnn_engine = InferenceEngine::new(
+        &model_bytes,
+        InferenceOptions {
+            xnnpack: true,
+            ..Default::default()
+        },
+    )
+    .expect("load model (XNNPACK)");
+    xnn_engine.run(inputs).expect("XNNPACK inference");
+    let xnn_f = xnn_engine.outputs[&output_name]
+        .floats()
+        .expect("XNNPACK float")
+        .to_vec();
+
+    assert_eq!(cpu_f.len(), xnn_f.len());
+    for (i, (c, x)) in cpu_f.iter().zip(xnn_f.iter()).enumerate() {
+        assert!(
+            (c - x).abs() < 0.01 || (c - x).abs() / c.abs().max(1e-6) < 0.01,
+            "output [{i}]: CPU={c}, XNNPACK={x}"
+        );
+    }
+
+    // Top-1 class should match
+    let cpu_top = cpu_f
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        .unwrap()
+        .0;
+    let xnn_top = xnn_f
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        .unwrap()
+        .0;
+    assert_eq!(
+        cpu_top, xnn_top,
+        "Top-1 class mismatch: CPU={cpu_top}, XNNPACK={xnn_top}"
+    );
+}

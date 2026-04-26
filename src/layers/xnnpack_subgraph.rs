@@ -334,7 +334,7 @@ impl SubgraphBuilder {
             OpType::Identity => self.add_identity(cap, shape_map),
             OpType::Unsqueeze => self.add_static_reshape(cap, shape_map),
             OpType::Squeeze => self.add_static_reshape(cap, shape_map),
-            OpType::Slice => self.add_slice(cap, shape_map),
+            OpType::Slice => self.add_slice(cap, shape_map, constants),
             OpType::Resize => self.add_resize(cap, shape_map),
             OpType::Round => self.add_round(cap, shape_map),
             OpType::Cast => self.add_cast(cap, shape_map),
@@ -1259,6 +1259,7 @@ impl SubgraphBuilder {
         &mut self,
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
+        constants: &crate::Constants,
     ) -> Result<()> {
         let in_shape = shape_map.get(&cap.inputs[0]).cloned().unwrap_or_default();
         let out_shape = shape_map.get(&cap.outputs[0]).cloned().unwrap_or_default();
@@ -1266,7 +1267,48 @@ impl SubgraphBuilder {
             anyhow::bail!("XNNPACK Slice: unknown input or output dims");
         }
         let ndim = in_shape.len();
-        let offsets = vec![0usize; ndim];
+
+        // Compute start offsets from attributes (opset 9) or constant inputs (opset 10+)
+        let mut offsets = vec![0usize; ndim];
+        let starts_attr = cap.node.attrs.get_ints("starts");
+        let axes_attr = cap.node.attrs.get_ints("axes");
+        let (starts, axes) = if let Some(s) = starts_attr {
+            (Some(s), axes_attr)
+        } else {
+            let s = cap
+                .inputs
+                .get(1)
+                .and_then(|n| constants.get(n))
+                .and_then(|t| t.ints().ok().map(|v| v.to_vec()));
+            let a = cap
+                .inputs
+                .get(3)
+                .and_then(|n| constants.get(n))
+                .and_then(|t| t.ints().ok().map(|v| v.to_vec()));
+            (s, a)
+        };
+        if let Some(starts) = starts {
+            for (i, &s) in starts.iter().enumerate() {
+                let axis = if let Some(ref a) = axes {
+                    let v = a[i];
+                    if v < 0 {
+                        (ndim as i64 + v) as usize
+                    } else {
+                        v as usize
+                    }
+                } else {
+                    i
+                };
+                let dim = in_shape[axis] as i64;
+                let start = if s < 0 {
+                    (dim + s).max(0) as usize
+                } else {
+                    (s as usize).min(in_shape[axis])
+                };
+                offsets[axis] = start;
+            }
+        }
+
         let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
         let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
         let status = unsafe {
@@ -1670,6 +1712,80 @@ fn infer_op_output_shapes(
                         }
                         result.push((op.outputs[0].clone(), dims));
                     }
+                }
+            }
+        }
+
+        OpType::Slice => {
+            if let Some(x) = get(0) {
+                let ndim = x.len();
+                // Try attribute-based (opset 9) first, then input-based (opset 10+)
+                let starts_attr = op.node.attrs.get_ints("starts");
+                let ends_attr = op.node.attrs.get_ints("ends");
+                let axes_attr = op.node.attrs.get_ints("axes");
+
+                let (starts, ends, axes) = if let (Some(s), Some(e)) = (starts_attr, ends_attr) {
+                    let a = axes_attr;
+                    (Some(s), Some(e), a)
+                } else {
+                    // Input-based: inputs[1]=starts, inputs[2]=ends, inputs[3]=axes
+                    let s = op
+                        .inputs
+                        .get(1)
+                        .and_then(|n| constants.get(n))
+                        .and_then(|t| t.ints().ok().map(|v| v.to_vec()));
+                    let e = op
+                        .inputs
+                        .get(2)
+                        .and_then(|n| constants.get(n))
+                        .and_then(|t| t.ints().ok().map(|v| v.to_vec()));
+                    let a = op
+                        .inputs
+                        .get(3)
+                        .and_then(|n| constants.get(n))
+                        .and_then(|t| t.ints().ok().map(|v| v.to_vec()));
+                    (s, e, a)
+                };
+
+                if let (Some(starts), Some(ends)) = (starts, ends) {
+                    let steps: Vec<i64> = op
+                        .inputs
+                        .get(4)
+                        .and_then(|n| constants.get(n))
+                        .and_then(|t| t.ints().ok().map(|v| v.to_vec()))
+                        .unwrap_or_else(|| vec![1; starts.len()]);
+                    let mut out = x.clone();
+                    for i in 0..starts.len() {
+                        let axis = if let Some(ref a) = axes {
+                            let v = a[i];
+                            if v < 0 {
+                                (ndim as i64 + v) as usize
+                            } else {
+                                v as usize
+                            }
+                        } else {
+                            i
+                        };
+                        let dim = x[axis] as i64;
+                        let mut s = starts[i];
+                        let mut e = ends[i];
+                        let step = steps[i].unsigned_abs() as usize;
+                        // Clamp
+                        if s < 0 {
+                            s += dim;
+                        }
+                        if e < 0 {
+                            e += dim;
+                        }
+                        s = s.clamp(0, dim);
+                        e = e.clamp(0, dim);
+                        if e > dim {
+                            e = dim;
+                        }
+                        let len = (e - s).unsigned_abs() as usize;
+                        out[axis] = (len + step - 1) / step;
+                    }
+                    result.push((op.outputs[0].clone(), out));
                 }
             }
         }
@@ -2099,7 +2215,7 @@ impl XnnpackSubgraph {
             for name in &op.inputs {
                 if !name.is_empty()
                     && !produced.contains(name.as_str())
-                    && constants.get(name).is_none()
+                    && constants.get_static(name).is_none()
                 {
                     if let Some(t) = constants.inputs.get(name).or_else(|| values.get(name)) {
                         if !t.dims.is_empty() {
@@ -2116,7 +2232,7 @@ impl XnnpackSubgraph {
                 for inp in &op.inputs {
                     if !inp.is_empty()
                         && !produced.contains(inp.as_str())
-                        && constants.get(inp).is_none()
+                        && constants.get_static(inp).is_none()
                     {
                         if let Some(t) = constants.inputs.get(inp).or_else(|| values.get(inp)) {
                             if t.dtype() != crate::DType::Float {
@@ -2225,7 +2341,7 @@ fn compile_subgraph(
     let mut external_input_set: HashSet<String> = HashSet::new();
     for op in ops {
         for inp in &op.inputs {
-            if !inp.is_empty() && !produced.contains(inp) && constants.get(inp).is_none() {
+            if !inp.is_empty() && !produced.contains(inp) && constants.get_static(inp).is_none() {
                 external_input_set.insert(inp.clone());
             }
         }
@@ -2276,7 +2392,7 @@ fn compile_subgraph(
     for op in ops {
         for inp in &op.inputs {
             if !inp.is_empty() && !builder.value_ids.contains_key(inp) && !produced.contains(inp) {
-                if let Some(tensor) = constants.get(inp) {
+                if let Some(tensor) = constants.get_static(inp) {
                     if tensor.dtype() == crate::DType::Float {
                         let shape: Vec<usize> = tensor.dims.iter().copied().collect();
                         let data = tensor.floats().context("XNNPACK initializer")?.to_vec();

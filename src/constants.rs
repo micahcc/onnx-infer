@@ -29,4 +29,13 @@ impl<'a> Constants<'a> {
             .or_else(|| self.folded.get(name))
             .or_else(|| self.initializers.get(name))
     }
+
+    /// Look up a name in folded constants and initializers only (not user inputs).
+    /// Use this to determine whether a tensor is a true constant that can be
+    /// baked into a compiled subgraph as static data.
+    pub fn get_static(&self, name: &str) -> Option<&Tensor> {
+        self.folded
+            .get(name)
+            .or_else(|| self.initializers.get(name))
+    }
 }
