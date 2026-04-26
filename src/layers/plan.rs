@@ -127,7 +127,7 @@ impl Plan {
     pub fn build(
         graph: &Graph,
         input_sizes: &HashMap<String, Dims>,
-        initializers: &mut HashMap<String, Tensor>,
+        initializers: &HashMap<String, Tensor>,
     ) -> Result<Self> {
         Self::build_full(
             graph,
@@ -142,7 +142,7 @@ impl Plan {
         graph: &Graph,
         input_sizes: &HashMap<String, Dims>,
         type_hints: &HashMap<String, DType>,
-        initializers: &mut HashMap<String, Tensor>,
+        initializers: &HashMap<String, Tensor>,
     ) -> Result<Self> {
         Self::build_full(
             graph,
@@ -158,7 +158,7 @@ impl Plan {
         graph: &Graph,
         input_sizes: &HashMap<String, Dims>,
         input_values: &HashMap<String, Tensor>,
-        initializers: &mut HashMap<String, Tensor>,
+        initializers: &HashMap<String, Tensor>,
     ) -> Result<Self> {
         Self::build_full_inner(
             graph,
@@ -175,7 +175,7 @@ impl Plan {
         input_sizes: &HashMap<String, Dims>,
         type_hints: &HashMap<String, DType>,
         input_values: &HashMap<String, Tensor>,
-        initializers: &mut HashMap<String, Tensor>,
+        initializers: &HashMap<String, Tensor>,
     ) -> Result<Self> {
         Self::build_full_inner(
             graph,
@@ -193,7 +193,7 @@ impl Plan {
         type_hints: &HashMap<String, DType>,
         input_values: &HashMap<String, Tensor>,
         #[allow(unused)] enable_xnnpack: bool,
-        initializers: &mut HashMap<String, Tensor>,
+        initializers: &HashMap<String, Tensor>,
     ) -> Result<Self> {
         let output_names: Vec<String> = graph.outputs.iter().map(|o| o.name.clone()).collect();
 

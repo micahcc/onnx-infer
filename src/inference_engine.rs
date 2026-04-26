@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::Context;
 use prost::Message;
@@ -59,7 +60,7 @@ pub struct InferenceEngine {
     use_xnnpack: bool,
 
     /// Graph weights + folded constants from plan building. Shared across plans.
-    initializers: HashMap<String, Tensor>,
+    initializers: Arc<HashMap<String, Tensor>>,
 
     /// Pre-allocated intermediate buffers + execution results. Swapped per plan.
     intermediates: HashMap<String, Tensor>,
@@ -108,7 +109,7 @@ impl InferenceEngine {
             outputs.insert(name.clone(), Tensor::default());
         }
 
-        let initializers = std::mem::take(&mut graph.initializers);
+        let initializers = Arc::new(std::mem::take(&mut graph.initializers));
 
         Ok(Self {
             graph,
@@ -194,19 +195,14 @@ impl InferenceEngine {
 
         #[cfg(feature = "xnnpack")]
         let plan = if self.use_xnnpack {
-            Plan::build_with_xnnpack(
-                &self.graph,
-                &input_sizes,
-                &self.inputs,
-                &mut self.initializers,
-            )?
+            Plan::build_with_xnnpack(&self.graph, &input_sizes, &self.inputs, &self.initializers)?
         } else {
             Plan::build_full(
                 &self.graph,
                 &input_sizes,
                 &HashMap::new(),
                 &self.inputs,
-                &mut self.initializers,
+                &self.initializers,
             )?
         };
         #[cfg(not(feature = "xnnpack"))]
@@ -217,7 +213,7 @@ impl InferenceEngine {
                 &input_sizes,
                 &HashMap::new(),
                 &self.inputs,
-                &mut self.initializers,
+                &self.initializers,
             )?
         };
 
@@ -278,7 +274,7 @@ impl InferenceEngine {
         let constants = Constants {
             inputs: &self.inputs,
             folded: self.plan_cache[plan_idx].folded.clone(),
-            initializers: &self.initializers,
+            initializers: self.initializers.clone(),
         };
         let plan = &mut self.plan_cache[plan_idx];
         for node in &mut plan.nodes {

@@ -9,7 +9,7 @@ use crate::Tensor;
 pub struct Constants<'a> {
     pub inputs: &'a HashMap<String, Tensor>,
     pub folded: Arc<HashMap<String, Tensor>>,
-    pub initializers: &'a HashMap<String, Tensor>,
+    pub initializers: Arc<HashMap<String, Tensor>>,
 }
 
 impl<'a> Constants<'a> {
@@ -19,7 +19,7 @@ impl<'a> Constants<'a> {
         Constants {
             inputs: &EMPTY,
             folded: Arc::new(HashMap::new()),
-            initializers: &EMPTY,
+            initializers: Arc::new(HashMap::new()),
         }
     }
 

@@ -2187,7 +2187,7 @@ impl XnnpackSubgraph {
         for (k, v) in constants.folded.iter() {
             values.entry(k.clone()).or_insert_with(|| v.clone());
         }
-        for (k, v) in constants.initializers {
+        for (k, v) in constants.initializers.iter() {
             values.entry(k.clone()).or_insert_with(|| v.clone());
         }
         for (k, v) in constants.inputs {
