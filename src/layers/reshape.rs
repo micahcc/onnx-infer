@@ -64,7 +64,7 @@ impl Layer for Reshape {
 
         // If the shape was a static initializer with no -1 or 0, the total may
         // not match the actual input (e.g., batch dimension changed). Re-infer dim 0.
-        if infer_idx.is_none() && !new_shape.iter().any(|&s| s == 0) {
+        if infer_idx.is_none() && !new_shape.contains(&0) {
             let shape_total: usize = dims[..dim_count].iter().product();
             if shape_total != total && shape_total > 0 && dim_count > 1 {
                 let known: usize = dims[1..dim_count].iter().product();

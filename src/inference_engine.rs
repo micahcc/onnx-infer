@@ -45,17 +45,12 @@ fn plan_matches_inputs(
 ///     InferenceOptions { xnnpack: true, ..Default::default() },
 /// ).unwrap();
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct InferenceOptions {
     /// Enable XNNPACK acceleration (requires the `xnnpack` feature). Default: false.
     pub xnnpack: bool,
 }
 
-impl Default for InferenceOptions {
-    fn default() -> Self {
-        Self { xnnpack: false }
-    }
-}
 
 pub struct InferenceEngine {
     graph: onnx_ir::Graph,
