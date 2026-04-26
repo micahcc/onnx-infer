@@ -113,7 +113,7 @@ impl InferenceEngine {
             outputs.insert(name.clone(), Tensor::default());
         }
 
-        let initializers = graph.initializers.clone();
+        let initializers = std::mem::take(&mut graph.initializers);
 
         Ok(Self {
             graph,

@@ -165,6 +165,12 @@ impl Scan {
             }
         }
 
+        for (k, v) in &self.body.initializers {
+            if !self.values.contains_key(k) {
+                self.values.insert(k.clone(), v.clone());
+            }
+        }
+
         let plan = Plan::build_with_types(&self.body, &shape_hints, &type_hints, &mut self.values)?;
         for name in &self.outer_refs {
             if let Some(t) = outer_values

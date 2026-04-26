@@ -127,6 +127,13 @@ impl Loop {
             }
         }
 
+        // Seed body initializers into values
+        for (k, v) in &self.body.initializers {
+            if !self.values.contains_key(k) {
+                self.values.insert(k.clone(), v.clone());
+            }
+        }
+
         // Build plan to determine steady-state types via type inference
         let probe =
             Plan::build_with_types(&self.body, &HashMap::new(), &type_hints, &mut self.values)?;
