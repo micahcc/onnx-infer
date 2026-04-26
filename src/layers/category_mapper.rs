@@ -4,9 +4,9 @@ use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::Values;
 
 /// CategoryMapper (ai.onnx.ml): maps string inputs to int64 using a lookup table.
 #[derive(Debug)]

@@ -5,10 +5,10 @@ use anyhow::Context;
 use crate::Layout;
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::get_tensor;
 use crate::layers::Layer;
 use crate::layers::global_avg_pool::GlobalAvgPool;
-use crate::Values;
 
 #[derive(Debug)]
 pub struct QLinearGlobalAvgPool {
@@ -61,7 +61,11 @@ impl Layer for QLinearGlobalAvgPool {
         );
 
         let empty = std::collections::HashMap::new();
-        let inner_vals = Values { intermediates: &self.tmp_values, inputs: &empty, initializers: &empty };
+        let inner_vals = Values {
+            intermediates: &self.tmp_values,
+            inputs: &empty,
+            initializers: &empty,
+        };
         self.inner.execute(&inner_vals, &mut self.gap_output)?;
 
         let numel = self.gap_output.numel();

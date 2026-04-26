@@ -85,7 +85,6 @@ pub mod where_op;
 #[cfg(feature = "xnnpack")]
 pub mod xnnpack_subgraph;
 
-
 pub use op_type::OpType;
 pub use plan::Plan;
 pub use plan::PlanNode;

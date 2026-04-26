@@ -1,9 +1,8 @@
-
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::Values;
 
 #[derive(Debug)]
 pub struct Shape {

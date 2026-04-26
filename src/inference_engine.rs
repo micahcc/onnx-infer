@@ -3,15 +3,15 @@ use std::collections::HashMap;
 use anyhow::Context;
 use prost::Message;
 
-use crate::layers::Plan;
-use crate::layers::PlanNode;
-use crate::onnx::ModelProto;
-use crate::onnx_ir;
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
 use crate::TensorData;
 use crate::Values;
+use crate::layers::Plan;
+use crate::layers::PlanNode;
+use crate::onnx::ModelProto;
+use crate::onnx_ir;
 
 fn plan_matches_inputs(
     input_names: &[String],
@@ -198,21 +198,33 @@ impl InferenceEngine {
         }
 
         #[cfg(feature = "xnnpack")]
-        let mut plan = if self.use_xnnpack {
-            Plan::build_with_xnnpack(&self.graph, &input_sizes, &self.inputs)?
+        let plan = if self.use_xnnpack {
+            Plan::build_with_xnnpack(
+                &self.graph,
+                &input_sizes,
+                &self.inputs,
+                &mut self.initializers,
+            )?
         } else {
-            Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), &self.inputs)?
+            Plan::build_full(
+                &self.graph,
+                &input_sizes,
+                &HashMap::new(),
+                &self.inputs,
+                &mut self.initializers,
+            )?
         };
         #[cfg(not(feature = "xnnpack"))]
-        let mut plan = {
+        let plan = {
             let _ = self.use_xnnpack;
-            Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), &self.inputs)?
+            Plan::build_full(
+                &self.graph,
+                &input_sizes,
+                &HashMap::new(),
+                &self.inputs,
+                &mut self.initializers,
+            )?
         };
-
-        // Move all initializers (graph weights + folded constants) into shared storage.
-        for (k, v) in plan.initializers.drain() {
-            self.initializers.insert(k, v);
-        }
 
         let idx = self.plan_cache.len();
         self.plan_cache.push(plan);
@@ -288,19 +300,35 @@ impl InferenceEngine {
                     self.intermediates.insert(key, out);
                 }
                 PlanNode::Loop(loop_layer) => {
-                    loop_layer.execute(&mut self.intermediates, &self.inputs, &self.initializers)?;
+                    loop_layer.execute(
+                        &mut self.intermediates,
+                        &self.inputs,
+                        &self.initializers,
+                    )?;
                 }
                 PlanNode::Split(split_layer) => {
-                    split_layer.execute(&mut self.intermediates, &self.inputs, &self.initializers)?;
+                    split_layer.execute(
+                        &mut self.intermediates,
+                        &self.inputs,
+                        &self.initializers,
+                    )?;
                 }
                 PlanNode::If(if_layer) => {
                     if_layer.execute(&mut self.intermediates, &self.inputs, &self.initializers)?;
                 }
                 PlanNode::TopK(topk_layer) => {
-                    topk_layer.execute(&mut self.intermediates, &self.inputs, &self.initializers)?;
+                    topk_layer.execute(
+                        &mut self.intermediates,
+                        &self.inputs,
+                        &self.initializers,
+                    )?;
                 }
                 PlanNode::Scan(scan_layer) => {
-                    scan_layer.execute(&mut self.intermediates, &self.inputs, &self.initializers)?;
+                    scan_layer.execute(
+                        &mut self.intermediates,
+                        &self.inputs,
+                        &self.initializers,
+                    )?;
                 }
                 #[cfg(feature = "xnnpack")]
                 PlanNode::XnnpackSubgraph(sg) => {

@@ -112,23 +112,39 @@ pub enum PlanNode {
 
 pub struct Plan {
     pub nodes: Vec<PlanNode>,
-    pub initializers: HashMap<String, Tensor>,
     pub output_names: Vec<String>,
     pub shape_map: HashMap<String, ShapeLayout>,
     pub type_map: HashMap<String, DType>,
 }
 
 impl Plan {
-    pub fn build(graph: &Graph, input_sizes: &HashMap<String, Dims>) -> Result<Self> {
-        Self::build_full(graph, input_sizes, &HashMap::new(), &HashMap::new())
+    pub fn build(
+        graph: &Graph,
+        input_sizes: &HashMap<String, Dims>,
+        initializers: &mut HashMap<String, Tensor>,
+    ) -> Result<Self> {
+        Self::build_full(
+            graph,
+            input_sizes,
+            &HashMap::new(),
+            &HashMap::new(),
+            initializers,
+        )
     }
 
     pub fn build_with_types(
         graph: &Graph,
         input_sizes: &HashMap<String, Dims>,
         type_hints: &HashMap<String, DType>,
+        initializers: &mut HashMap<String, Tensor>,
     ) -> Result<Self> {
-        Self::build_full(graph, input_sizes, type_hints, &HashMap::new())
+        Self::build_full(
+            graph,
+            input_sizes,
+            type_hints,
+            &HashMap::new(),
+            initializers,
+        )
     }
 
     #[cfg(feature = "xnnpack")]
@@ -136,8 +152,16 @@ impl Plan {
         graph: &Graph,
         input_sizes: &HashMap<String, Dims>,
         input_values: &HashMap<String, Tensor>,
+        initializers: &mut HashMap<String, Tensor>,
     ) -> Result<Self> {
-        Self::build_full_inner(graph, input_sizes, &HashMap::new(), input_values, true)
+        Self::build_full_inner(
+            graph,
+            input_sizes,
+            &HashMap::new(),
+            input_values,
+            true,
+            initializers,
+        )
     }
 
     pub fn build_full(
@@ -145,8 +169,16 @@ impl Plan {
         input_sizes: &HashMap<String, Dims>,
         type_hints: &HashMap<String, DType>,
         input_values: &HashMap<String, Tensor>,
+        initializers: &mut HashMap<String, Tensor>,
     ) -> Result<Self> {
-        Self::build_full_inner(graph, input_sizes, type_hints, input_values, false)
+        Self::build_full_inner(
+            graph,
+            input_sizes,
+            type_hints,
+            input_values,
+            false,
+            initializers,
+        )
     }
 
     fn build_full_inner(
@@ -155,13 +187,12 @@ impl Plan {
         type_hints: &HashMap<String, DType>,
         input_values: &HashMap<String, Tensor>,
         #[allow(unused)] enable_xnnpack: bool,
+        initializers: &mut HashMap<String, Tensor>,
     ) -> Result<Self> {
-        let mut initializers = graph.initializers.clone();
-
         let output_names: Vec<String> = graph.outputs.iter().map(|o| o.name.clone()).collect();
 
         let mut type_map: HashMap<String, DType> = HashMap::new();
-        for (name, tensor) in &initializers {
+        for (name, tensor) in initializers.iter() {
             type_map.insert(name.clone(), tensor.dtype());
         }
         for (name, &dtype) in type_hints {
@@ -177,7 +208,7 @@ impl Plan {
         let mut shape_map: HashMap<String, ShapeLayout> = HashMap::new();
         // Layout-only map for ops whose shapes aren't known but layout is.
         let mut layout_only: HashMap<String, Layout> = HashMap::new();
-        for (name, tensor) in &initializers {
+        for (name, tensor) in initializers.iter() {
             shape_map.insert(
                 name.clone(),
                 ShapeLayout::new(tensor.dims.clone(), tensor.layout),
@@ -259,7 +290,7 @@ impl Plan {
                 node,
                 &node.inputs,
                 &known_values,
-                &initializers,
+                initializers,
                 &shape_map,
             ) {
                 if let Some(out_name) = out_name {
@@ -361,7 +392,9 @@ impl Plan {
                                 }
                             }
                         }
-                        if let Ok(()) = loop_layer.execute(&mut temp_values, &HashMap::new(), &HashMap::new()) {
+                        if let Ok(()) =
+                            loop_layer.execute(&mut temp_values, &HashMap::new(), &HashMap::new())
+                        {
                             let mut folded = true;
                             for out_name in &node.outputs {
                                 if !out_name.is_empty() {
@@ -405,7 +438,7 @@ impl Plan {
                 node_meta,
                 &mut shape_map,
                 &type_map,
-                &initializers,
+                initializers,
                 graph.opset_version,
                 &output_names,
             )?;
@@ -450,7 +483,6 @@ impl Plan {
 
         Ok(Self {
             nodes,
-            initializers,
             output_names,
             shape_map,
             type_map,
@@ -507,7 +539,11 @@ fn try_propagate_value(
     if let PlanNode::Single { mut layer, .. } = plan_node {
         let mut output = Tensor::default();
         let empty = HashMap::new();
-        let vals = crate::Values { intermediates: &temp_values, inputs: &empty, initializers: &empty };
+        let vals = crate::Values {
+            intermediates: &temp_values,
+            inputs: &empty,
+            initializers: &empty,
+        };
         layer.execute(&vals, &mut output).ok()?;
         Some(output)
     } else {
@@ -1235,13 +1271,19 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
         PlanNode::Single { output, layer } => {
             let mut out = values.remove(output.as_str()).unwrap_or_default();
             let empty = HashMap::new();
-            let vals = crate::Values { intermediates: values, inputs: &empty, initializers: &empty };
+            let vals = crate::Values {
+                intermediates: values,
+                inputs: &empty,
+                initializers: &empty,
+            };
             let result = layer.execute(&vals, &mut out);
             values.insert(output.clone(), out);
             result
         }
         PlanNode::Loop(loop_layer) => loop_layer.execute(values, &HashMap::new(), &HashMap::new()),
-        PlanNode::Split(split_layer) => split_layer.execute(values, &HashMap::new(), &HashMap::new()),
+        PlanNode::Split(split_layer) => {
+            split_layer.execute(values, &HashMap::new(), &HashMap::new())
+        }
         PlanNode::If(if_layer) => if_layer.execute(values, &HashMap::new(), &HashMap::new()),
         PlanNode::TopK(topk_layer) => topk_layer.execute(values, &HashMap::new(), &HashMap::new()),
         PlanNode::Scan(scan_layer) => scan_layer.execute(values, &HashMap::new(), &HashMap::new()),

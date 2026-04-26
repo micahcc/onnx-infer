@@ -1,13 +1,12 @@
-
 use anyhow::Context;
 
 use crate::Dims;
 use crate::Layout;
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::Values;
 
 #[derive(Debug, Clone, Copy)]
 pub enum AutoPad {
@@ -255,11 +254,7 @@ impl Conv {
     /// Naive scalar convolution — matches the original accumulation order.
     /// Used by QLinearConv to avoid BLAS-induced rounding differences in quantized pipelines.
     /// Always operates in NCHW layout.
-    pub fn execute_naive(
-        &mut self,
-        values: &Values,
-        output: &mut Tensor,
-    ) -> Result<()> {
+    pub fn execute_naive(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
         let weight = get_tensor(values, &self.inputs[1])?;
 

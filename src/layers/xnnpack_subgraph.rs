@@ -19,10 +19,10 @@ use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::layers::OpType;
 use crate::onnx_ir::Node;
 use crate::xnnpack_ffi::*;
-use crate::Values;
 
 // ---------------------------------------------------------------------------
 // Helper structs

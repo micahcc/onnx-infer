@@ -1,13 +1,12 @@
-
 use anyhow::Context;
 
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::broadcast_shape_into;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::Values;
 
 #[derive(Debug)]
 pub struct MatMulPrecomp {
@@ -87,11 +86,7 @@ impl MatMul {
 impl MatMul {
     /// Naive scalar matmul — used by QLinearMatMul to avoid BLAS-induced rounding
     /// differences in quantized pipelines.
-    pub fn execute_naive(
-        &mut self,
-        values: &Values,
-        output: &mut Tensor,
-    ) -> Result<()> {
+    pub fn execute_naive(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let a = get_tensor(values, &self.inputs[0])?;
         let b = get_tensor(values, &self.inputs[1])?;
 

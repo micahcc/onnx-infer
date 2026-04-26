@@ -106,7 +106,10 @@ impl Loop {
         self.outer_refs = outer_ref_set.into_iter().collect();
 
         let lookup = |name: &str| -> Option<&Tensor> {
-            outer_values.get(name).or_else(|| inputs.get(name)).or_else(|| initializers.get(name))
+            outer_values
+                .get(name)
+                .or_else(|| inputs.get(name))
+                .or_else(|| initializers.get(name))
         };
 
         // First pass: build type_hints from actual values and determine carried output types
@@ -125,7 +128,8 @@ impl Loop {
         }
 
         // Build plan to determine steady-state types via type inference
-        let probe = Plan::build_with_types(&self.body, &HashMap::new(), &type_hints)?;
+        let probe =
+            Plan::build_with_types(&self.body, &HashMap::new(), &type_hints, &mut self.values)?;
 
         // Determine steady-state carried types from output inference
         let mut needs_rebuild = false;
@@ -148,20 +152,17 @@ impl Loop {
 
         // Rebuild with corrected types if any carried input/output types differed
         let plan = if needs_rebuild {
-            Plan::build_with_types(&self.body, &HashMap::new(), &type_hints)?
+            Plan::build_with_types(&self.body, &HashMap::new(), &type_hints, &mut self.values)?
         } else {
             probe
         };
 
-        // Move initializers into persistent values
-        let mut plan = plan;
-        for (k, v) in std::mem::take(&mut plan.initializers) {
-            self.values.insert(k, v);
-        }
-
         // Copy outer references
         let lookup = |name: &str| -> Option<&Tensor> {
-            outer_values.get(name).or_else(|| inputs.get(name)).or_else(|| initializers.get(name))
+            outer_values
+                .get(name)
+                .or_else(|| inputs.get(name))
+                .or_else(|| initializers.get(name))
         };
         for name in &self.outer_refs {
             if let Some(t) = lookup(name) {
@@ -180,7 +181,11 @@ impl Loop {
         }
         for (j, name) in self.carried_in_names.iter().enumerate() {
             if !self.values.contains_key(name) {
-                if let Some(src) = outer_values.get(&self.inputs[j + 2]).or_else(|| inputs.get(&self.inputs[j + 2])).or_else(|| initializers.get(&self.inputs[j + 2])) {
+                if let Some(src) = outer_values
+                    .get(&self.inputs[j + 2])
+                    .or_else(|| inputs.get(&self.inputs[j + 2]))
+                    .or_else(|| initializers.get(&self.inputs[j + 2]))
+                {
                     let mut t = src.clone();
                     // Cast to steady-state type if needed
                     if t.dtype() != self.carried_types[j] && self.carried_types[j] == DType::Float {
@@ -217,7 +222,8 @@ impl Loop {
             self.init(outer_values, inputs, initializers)?;
         }
 
-        let trip_tensor = outer_values.get(&self.inputs[0])
+        let trip_tensor = outer_values
+            .get(&self.inputs[0])
             .or_else(|| inputs.get(&self.inputs[0]))
             .or_else(|| initializers.get(&self.inputs[0]))
             .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
@@ -229,7 +235,10 @@ impl Loop {
         // Copy initial carried state, casting to steady-state type
         for j in 0..num_carried {
             let name = &self.inputs[j + 2];
-            let src = outer_values.get(name).or_else(|| inputs.get(name)).or_else(|| initializers.get(name))
+            let src = outer_values
+                .get(name)
+                .or_else(|| inputs.get(name))
+                .or_else(|| initializers.get(name))
                 .ok_or_else(|| anyhow::anyhow!("Tensor '{name}' not found"))?;
             if src.dtype() != self.carried_types[j] && self.carried_types[j] == DType::Float {
                 self.carried[j]
@@ -242,7 +251,11 @@ impl Loop {
 
         // Update outer references
         for name in &self.outer_refs {
-            if let Some(outer) = outer_values.get(name).or_else(|| inputs.get(name)).or_else(|| initializers.get(name)) {
+            if let Some(outer) = outer_values
+                .get(name)
+                .or_else(|| inputs.get(name))
+                .or_else(|| initializers.get(name))
+            {
                 if let Some(body) = self.values.get_mut(name) {
                     body.copy_from(outer);
                 }
@@ -316,7 +329,11 @@ impl Loop {
                             .remove_entry(output.as_str())
                             .unwrap_or_else(|| (output.clone(), Tensor::default()));
                         let empty = HashMap::new();
-                        let vals = crate::Values { intermediates: values, inputs: &empty, initializers: &empty };
+                        let vals = crate::Values {
+                            intermediates: values,
+                            inputs: &empty,
+                            initializers: &empty,
+                        };
                         let result = layer.execute(&vals, &mut out);
                         values.insert(key, out);
                         result?;

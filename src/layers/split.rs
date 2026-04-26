@@ -40,7 +40,8 @@ impl Split {
         inputs: &HashMap<String, Tensor>,
         initializers: &HashMap<String, Tensor>,
     ) -> Result<()> {
-        let input = values.get(&self.inputs[0])
+        let input = values
+            .get(&self.inputs[0])
             .or_else(|| inputs.get(&self.inputs[0]))
             .or_else(|| initializers.get(&self.inputs[0]))
             .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
@@ -92,7 +93,11 @@ impl Split {
 
             match dtype {
                 DType::Float => {
-                    let in_t = values.get(&self.inputs[0]).or_else(|| inputs.get(&self.inputs[0])).or_else(|| initializers.get(&self.inputs[0])).unwrap();
+                    let in_t = values
+                        .get(&self.inputs[0])
+                        .or_else(|| inputs.get(&self.inputs[0]))
+                        .or_else(|| initializers.get(&self.inputs[0]))
+                        .unwrap();
                     let in_data = in_t.floats().context("in Split layer")?;
                     let buf = out.as_mut_f32(numel);
                     let mut idx = 0;
@@ -106,7 +111,11 @@ impl Split {
                     }
                 }
                 DType::Int64 => {
-                    let in_t = values.get(&self.inputs[0]).or_else(|| inputs.get(&self.inputs[0])).or_else(|| initializers.get(&self.inputs[0])).unwrap();
+                    let in_t = values
+                        .get(&self.inputs[0])
+                        .or_else(|| inputs.get(&self.inputs[0]))
+                        .or_else(|| initializers.get(&self.inputs[0]))
+                        .unwrap();
                     let in_data = in_t.ints().context("in Split layer")?;
                     let buf = out.as_mut_i64(numel);
                     let mut idx = 0;

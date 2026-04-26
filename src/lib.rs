@@ -92,10 +92,10 @@ pub use tensor_data::Layout;
 pub use tensor_data::ShapeLayout;
 pub use tensor_data::Tensor;
 pub use tensor_data::TensorData;
+pub use utils::Values;
 pub use utils::broadcast_index;
 pub use utils::broadcast_shape;
 pub use utils::broadcast_shape_into;
-pub use utils::Values;
 pub use utils::get_tensor;
 pub use utils::get_tensor_map;
 

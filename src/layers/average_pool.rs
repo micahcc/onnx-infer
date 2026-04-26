@@ -1,14 +1,13 @@
-
 use anyhow::Context;
 
 use crate::Dims;
 use crate::Layout;
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::get_tensor;
 use crate::layers::Layer;
 use crate::layers::conv::AutoPad;
-use crate::Values;
 
 #[derive(Debug)]
 pub struct AveragePoolPrecomp {

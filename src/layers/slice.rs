@@ -1,12 +1,11 @@
-
 use anyhow::Context;
 
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::Values;
 
 fn read_i64_into(t: &Tensor, buf: &mut [i64; 8]) -> anyhow::Result<usize> {
     let len = t.numel();

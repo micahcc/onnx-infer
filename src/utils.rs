@@ -27,10 +27,7 @@ pub fn get_tensor<'a>(values: &Values<'a>, name: &str) -> Result<&'a Tensor> {
         .ok_or_else(|| anyhow::anyhow!("Tensor '{name}' not found"))
 }
 
-pub fn get_tensor_map<'a>(
-    values: &'a HashMap<String, Tensor>,
-    name: &str,
-) -> Result<&'a Tensor> {
+pub fn get_tensor_map<'a>(values: &'a HashMap<String, Tensor>, name: &str) -> Result<&'a Tensor> {
     values
         .get(name)
         .ok_or_else(|| anyhow::anyhow!("Tensor '{name}' not found"))

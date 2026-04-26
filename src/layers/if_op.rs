@@ -38,7 +38,8 @@ impl If {
         inputs: &HashMap<String, Tensor>,
         initializers: &HashMap<String, Tensor>,
     ) -> Result<()> {
-        let cond = values.get(&self.inputs[0])
+        let cond = values
+            .get(&self.inputs[0])
             .or_else(|| inputs.get(&self.inputs[0]))
             .or_else(|| initializers.get(&self.inputs[0]))
             .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;

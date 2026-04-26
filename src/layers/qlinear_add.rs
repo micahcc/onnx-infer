@@ -1,13 +1,12 @@
-
 use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::broadcast_index;
 use crate::broadcast_shape_into;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::Values;
 
 #[derive(Debug)]
 pub struct QLinearAdd {

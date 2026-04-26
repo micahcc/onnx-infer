@@ -33,10 +33,15 @@ impl TopK {
         initializers: &HashMap<String, Tensor>,
     ) -> Result<()> {
         let lookup = |name: &str| -> Option<&Tensor> {
-            values.get(name).or_else(|| inputs.get(name)).or_else(|| initializers.get(name))
+            values
+                .get(name)
+                .or_else(|| inputs.get(name))
+                .or_else(|| initializers.get(name))
         };
-        let input = lookup(&self.inputs[0]).ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
-        let k_tensor = lookup(&self.inputs[1]).ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[1]))?;
+        let input = lookup(&self.inputs[0])
+            .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
+        let k_tensor = lookup(&self.inputs[1])
+            .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[1]))?;
         let k = k_tensor.i64_at(0).context("in TopK layer: reading k")? as usize;
 
         let rank = input.dims.len() as i64;

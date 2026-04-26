@@ -1,13 +1,12 @@
-
 use anyhow::Context;
 
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::dims;
 use crate::get_tensor;
 use crate::layers::Layer;
-use crate::Values;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LstmDirection {
