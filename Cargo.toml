@@ -1,6 +1,6 @@
 [package]
 name = "onnx-infer"
-version = "0.4.14"
+version = "0.4.16"
 edition = "2024"
 description = "Pure Rust ONNX inference engine for computer vision models"
 license = "BSD-3-Clause"
@@ -27,6 +27,7 @@ tracing = "0.1"
 
 [dev-dependencies]
 approx = "0"
+test-case = "3"
 tracing-chrome = "0"
 tracing-subscriber = "0"
 criterion = { version = "0", features = ["html_reports"] }
