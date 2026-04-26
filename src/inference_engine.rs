@@ -51,7 +51,6 @@ pub struct InferenceOptions {
     pub xnnpack: bool,
 }
 
-
 pub struct InferenceEngine {
     graph: onnx_ir::Graph,
     plan_cache: Vec<Plan>,
