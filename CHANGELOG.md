@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-04-25 — Engine cleanup: lazy plan construction with caching
+
+- **Lazy plans**: Plans are no longer built at construction time; they are built
+  on first inference and cached by input shapes. Switching between batch sizes
+  reuses cached plans without rebuilding.
+- **`pub inputs`**: The engine's value map is now a public field (`inputs`).
+- **Removed `batch_size` and `input_sizes`** from `InferenceOptions`. Dynamic
+  batch dimensions are resolved automatically from actual input tensor shapes.
+
 ## 2026-04-25 — Zero-allocation `run_planned` API
 
 - **`run_planned()`**: New method that runs inference using inputs pre-written
