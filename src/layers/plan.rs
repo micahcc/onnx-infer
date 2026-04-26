@@ -471,12 +471,12 @@ fn try_propagate_value(
     shape_map: &HashMap<String, ShapeLayout>,
 ) -> Option<Tensor> {
     if op == OpType::Shape {
+        // Only fold Shape if the input is a known constant (initializer or previously folded).
+        // Shape of runtime tensors must be computed at runtime because shape inference
+        // can be inaccurate for dynamic dimensions (e.g. spatial dims in detection models).
         let name = input_names.first().filter(|s| !s.is_empty())?;
-        let sl = shape_map.get(name)?;
-        if sl.dims.contains(&0) {
-            return None;
-        }
-        let dims: Vec<i64> = sl.dims.iter().map(|&d| d as i64).collect();
+        let tensor = known_values.get(name).or_else(|| initializers.get(name))?;
+        let dims: Vec<i64> = tensor.dims.iter().map(|&d| d as i64).collect();
         return Some(Tensor::new_i64(dims![dims.len()], dims));
     }
 

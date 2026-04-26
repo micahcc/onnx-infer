@@ -171,12 +171,14 @@ Removed `bindgen` build dependency. Cleaned up CI, nix flake, and CLAUDE.md.
 ## 2026-03-20 — CI for XNNPACK and BLAS, XNNPACK bug fixes, runtime disable flag
 
 ### CI
+
 - Added separate CI jobs for no-features, BLAS (OpenBLAS), and XNNPACK
 - All test jobs fetch Git LFS fixtures
 - XNNPACK job uses `nix develop` to get pre-built XNNPACK
 - Removed `--all-features` from clippy (was broken without native libs)
 
 ### XNNPACK bug fixes
+
 - Fixed Gemm `XNN_FLAG_TRANSPOSE_WEIGHTS` logic (was inverted): ONNX `transB=1`
   means weight is `[O,I]` matching XNNPACK default, `transB=0` means `[I,O]`
   needing the transpose flag. This fixed all ResNet models producing all-zero
@@ -185,6 +187,7 @@ Removed `bindgen` build dependency. Cleaned up CI, nix flake, and CLAUDE.md.
   moved `w_scales` value in QLinearConv
 
 ### Runtime flag
+
 - `XNNPACK_DISABLE=1` env var disables XNNPACK acceleration at runtime
   (falls back to CPU for all ops), useful for testing and debugging
 
@@ -194,6 +197,7 @@ Added 41 vision models from ONNX Model Zoo (classification, object detection,
 body analysis) as test fixtures with input/output validation.
 
 ### New operators
+
 - LRN (Local Response Normalization)
 - AveragePool
 - ReduceMean
@@ -202,12 +206,14 @@ body analysis) as test fixtures with input/output validation.
 - And (logical)
 
 ### Bug fix: Softmax opset versioning
+
 Softmax default axis changed between opsets: axis=1 for opset<13, axis=-1
 for opset>=13. The engine was always using -1, causing incorrect results for
 older models (e.g. SqueezeNet 1.0 opset 12). Fixed by threading opset version
 from ModelProto through Graph to plan builder.
 
 ### Infrastructure
+
 - `onnx_ir::Graph` now carries `opset_version`
 - `convert_graph_with_opset()` accepts opset version from model proto
 - `build_node_with_opset()` in plan.rs for opset-aware layer construction
@@ -273,6 +279,7 @@ redundant execution. This removes the nodes that previously broke XNNPACK
 subgraph runs.
 
 Key impact:
+
 - mobilenetv2-12: 100% XNNPACK-eligible (Constant nodes for Clip min/max no longer break runs)
 - mnist-1: 12 constant nodes folded away
 - yolov4-11: 28 constant nodes folded, now 98% eligible
