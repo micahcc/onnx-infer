@@ -963,12 +963,7 @@ fn test_yolov4_11_set_0(xnnpack: bool) {
 #[cfg_attr(feature = "xnnpack", test_case(true ; "xnnpack"))]
 fn test_tinyyolov3_11_set_0(xnnpack: bool) {
     let _t = setup_tracing("tinyyolov3_11_set_0");
-    run_multi_io_fixture(
-        &fixture("tiny-yolov3-11"),
-        "yolov3-tiny.onnx",
-        0,
-        xnnpack,
-    );
+    run_multi_io_fixture(&fixture("tiny-yolov3-11"), "yolov3-tiny.onnx", 0, xnnpack);
 }
 
 // --- BiDAF models ---
@@ -1071,48 +1066,28 @@ fn test_rcnn_ilsvrc13_9_set_0(xnnpack: bool) {
 #[cfg_attr(feature = "xnnpack", test_case(true ; "xnnpack"))]
 fn test_resnet18_v1_7_set_0(xnnpack: bool) {
     let _t = setup_tracing("resnet18_v1_7_set_0");
-    run_fixture(
-        &fixture("resnet18-v1-7"),
-        "resnet18-v1-7.onnx",
-        0,
-        xnnpack,
-    );
+    run_fixture(&fixture("resnet18-v1-7"), "resnet18-v1-7.onnx", 0, xnnpack);
 }
 
 #[test_case(false ; "cpu")]
 #[cfg_attr(feature = "xnnpack", test_case(true ; "xnnpack"))]
 fn test_resnet18_v2_7_set_0(xnnpack: bool) {
     let _t = setup_tracing("resnet18_v2_7_set_0");
-    run_fixture(
-        &fixture("resnet18-v2-7"),
-        "resnet18-v2-7.onnx",
-        0,
-        xnnpack,
-    );
+    run_fixture(&fixture("resnet18-v2-7"), "resnet18-v2-7.onnx", 0, xnnpack);
 }
 
 #[test_case(false ; "cpu")]
 #[cfg_attr(feature = "xnnpack", test_case(true ; "xnnpack"))]
 fn test_resnet34_v1_7_set_0(xnnpack: bool) {
     let _t = setup_tracing("resnet34_v1_7_set_0");
-    run_fixture(
-        &fixture("resnet34-v1-7"),
-        "resnet34-v1-7.onnx",
-        0,
-        xnnpack,
-    );
+    run_fixture(&fixture("resnet34-v1-7"), "resnet34-v1-7.onnx", 0, xnnpack);
 }
 
 #[test_case(false ; "cpu")]
 #[cfg_attr(feature = "xnnpack", test_case(true ; "xnnpack"))]
 fn test_resnet34_v2_7_set_0(xnnpack: bool) {
     let _t = setup_tracing("resnet34_v2_7_set_0");
-    run_fixture(
-        &fixture("resnet34-v2-7"),
-        "resnet34-v2-7.onnx",
-        0,
-        xnnpack,
-    );
+    run_fixture(&fixture("resnet34-v2-7"), "resnet34-v2-7.onnx", 0, xnnpack);
 }
 
 #[test_case(false ; "cpu")]
@@ -1131,12 +1106,7 @@ fn test_resnet50_v1_12_set_0(xnnpack: bool) {
 #[cfg_attr(feature = "xnnpack", test_case(true ; "xnnpack"))]
 fn test_resnet50_v2_7_set_0(xnnpack: bool) {
     let _t = setup_tracing("resnet50_v2_7_set_0");
-    run_fixture(
-        &fixture("resnet50-v2-7"),
-        "resnet50-v2-7.onnx",
-        0,
-        xnnpack,
-    );
+    run_fixture(&fixture("resnet50-v2-7"), "resnet50-v2-7.onnx", 0, xnnpack);
 }
 
 #[test_case(false ; "cpu")]
@@ -1233,7 +1203,12 @@ fn test_squeezenet10_12_set_0(xnnpack: bool) {
 #[cfg_attr(feature = "xnnpack", test_case(true ; "xnnpack"))]
 fn test_squeezenet11_7_set_0(xnnpack: bool) {
     let _t = setup_tracing("squeezenet11_7_set_0");
-    run_fixture(&fixture("squeezenet1.1-7"), "squeezenet1.1.onnx", 0, xnnpack);
+    run_fixture(
+        &fixture("squeezenet1.1-7"),
+        "squeezenet1.1.onnx",
+        0,
+        xnnpack,
+    );
 }
 
 // --- VGG models ---
@@ -1368,12 +1343,7 @@ fn test_yolov3_12_set_0(xnnpack: bool) {
 #[cfg_attr(feature = "xnnpack", test_case(true ; "xnnpack"))]
 fn test_arcfaceresnet100_8_set_0(xnnpack: bool) {
     let _t = setup_tracing("arcfaceresnet100_8_set_0");
-    run_fixture(
-        &fixture("arcfaceresnet100-8"),
-        "resnet100.onnx",
-        0,
-        xnnpack,
-    );
+    run_fixture(&fixture("arcfaceresnet100-8"), "resnet100.onnx", 0, xnnpack);
 }
 
 // --- Emotion FERPlus models ---
@@ -1428,8 +1398,7 @@ fn test_different_inputs_produce_different_outputs(xnnpack: bool) {
     let output_name = graph.output[0].name.clone();
     let input_name = graph.input[0].name.clone();
 
-    let mut engine =
-        InferenceEngine::new(&model_bytes, make_options(xnnpack)).expect("load model");
+    let mut engine = InferenceEngine::new(&model_bytes, make_options(xnnpack)).expect("load model");
 
     // First run with real input
     engine.run(inputs.clone()).expect("run 1");
