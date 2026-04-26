@@ -362,7 +362,7 @@ impl Plan {
                                 }
                             }
                         }
-                        if let Ok(()) = loop_layer.execute(&mut temp_values) {
+                        if let Ok(()) = loop_layer.execute(&mut temp_values, &HashMap::new(), &HashMap::new()) {
                             let mut folded = true;
                             for out_name in &node.outputs {
                                 if !out_name.is_empty() {
@@ -535,7 +535,9 @@ fn try_propagate_value(
     let plan_node = build_node(op, node, input_names.to_vec(), shape_map).ok()?;
     if let PlanNode::Single { mut layer, .. } = plan_node {
         let mut output = Tensor::default();
-        layer.execute(&temp_values, &mut output).ok()?;
+        let empty = HashMap::new();
+        let vals = crate::Values { intermediates: &temp_values, inputs: &empty, initializers: &empty };
+        layer.execute(&vals, &mut output).ok()?;
         Some(output)
     } else {
         None
@@ -1162,7 +1164,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
             _ => anyhow::bail!("Loop: no body graph"),
         };
         let mut loop_layer = loop_op::Loop::new(node.inputs.clone(), node.outputs.clone(), body);
-        return loop_layer.execute(values);
+        return loop_layer.execute(values, &HashMap::new(), &HashMap::new());
     }
 
     if op == OpType::Split {
@@ -1170,7 +1172,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
         let split_sizes = node.attrs.get_ints("split").unwrap_or_default();
         let mut split_layer =
             split::Split::new(node.inputs.clone(), node.outputs.clone(), axis, split_sizes);
-        return split_layer.execute(values);
+        return split_layer.execute(values, &HashMap::new(), &HashMap::new());
     }
 
     if op == OpType::If {
@@ -1188,7 +1190,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
             then_branch,
             else_branch,
         );
-        return if_layer.execute(values);
+        return if_layer.execute(values, &HashMap::new(), &HashMap::new());
     }
 
     if op == OpType::TopK {
@@ -1196,7 +1198,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
         let largest = node.attrs.get_int("largest").unwrap_or(1) != 0;
         let mut topk_layer =
             topk::TopK::new(node.inputs.clone(), node.outputs.clone(), axis, largest);
-        return topk_layer.execute(values);
+        return topk_layer.execute(values, &HashMap::new(), &HashMap::new());
     }
 
     if op == OpType::Scan {
@@ -1221,7 +1223,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
             scan_input_directions,
             scan_output_directions,
         );
-        return scan_layer.execute(values);
+        return scan_layer.execute(values, &HashMap::new(), &HashMap::new());
     }
 
     if node.outputs.is_empty() || node.outputs[0].is_empty() {
@@ -1261,15 +1263,17 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
     match &mut plan_node {
         PlanNode::Single { output, layer } => {
             let mut out = values.remove(output.as_str()).unwrap_or_default();
-            let result = layer.execute(values, &mut out);
+            let empty = HashMap::new();
+            let vals = crate::Values { intermediates: values, inputs: &empty, initializers: &empty };
+            let result = layer.execute(&vals, &mut out);
             values.insert(output.clone(), out);
             result
         }
-        PlanNode::Loop(loop_layer) => loop_layer.execute(values),
-        PlanNode::Split(split_layer) => split_layer.execute(values),
-        PlanNode::If(if_layer) => if_layer.execute(values),
-        PlanNode::TopK(topk_layer) => topk_layer.execute(values),
-        PlanNode::Scan(scan_layer) => scan_layer.execute(values),
+        PlanNode::Loop(loop_layer) => loop_layer.execute(values, &HashMap::new(), &HashMap::new()),
+        PlanNode::Split(split_layer) => split_layer.execute(values, &HashMap::new(), &HashMap::new()),
+        PlanNode::If(if_layer) => if_layer.execute(values, &HashMap::new(), &HashMap::new()),
+        PlanNode::TopK(topk_layer) => topk_layer.execute(values, &HashMap::new(), &HashMap::new()),
+        PlanNode::Scan(scan_layer) => scan_layer.execute(values, &HashMap::new(), &HashMap::new()),
         #[cfg(feature = "xnnpack")]
         PlanNode::XnnpackSubgraph(_) => {
             anyhow::bail!("XnnpackSubgraph cannot be executed via execute_node")

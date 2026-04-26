@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
+use crate::Values;
 
 #[derive(Debug)]
 pub struct FlattenPrecomp {
@@ -47,7 +47,7 @@ impl Flatten {
 }
 
 impl Layer for Flatten {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
         let p = match &self.precomp {
             Some(p) if self.shape_cache.as_slice() == input.dims.as_slice() => p,

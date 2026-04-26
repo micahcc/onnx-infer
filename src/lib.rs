@@ -95,7 +95,9 @@ pub use tensor_data::TensorData;
 pub use utils::broadcast_index;
 pub use utils::broadcast_shape;
 pub use utils::broadcast_shape_into;
+pub use utils::Values;
 pub use utils::get_tensor;
+pub use utils::get_tensor_map;
 
 #[cfg(test)]
 mod tests;

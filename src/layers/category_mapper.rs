@@ -6,6 +6,7 @@ use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
+use crate::Values;
 
 /// CategoryMapper (ai.onnx.ml): maps string inputs to int64 using a lookup table.
 #[derive(Debug)]
@@ -35,7 +36,7 @@ impl CategoryMapper {
 }
 
 impl Layer for CategoryMapper {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
         let strings = input.strings().context("in CategoryMapper layer")?;
         let numel = strings.len();

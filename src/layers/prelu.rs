@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 
 use anyhow::Context;
 
@@ -8,6 +7,7 @@ use crate::broadcast_index;
 use crate::broadcast_shape_into;
 use crate::get_tensor;
 use crate::layers::Layer;
+use crate::Values;
 
 #[derive(Debug)]
 pub struct PRelu {
@@ -21,7 +21,7 @@ impl PRelu {
 }
 
 impl Layer for PRelu {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
         let slope = get_tensor(values, &self.inputs[1])?;
         let inp = input.floats().context("in PRelu layer")?;

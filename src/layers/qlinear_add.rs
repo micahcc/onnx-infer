@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 
 use anyhow::Context;
 
@@ -8,6 +7,7 @@ use crate::broadcast_index;
 use crate::broadcast_shape_into;
 use crate::get_tensor;
 use crate::layers::Layer;
+use crate::Values;
 
 #[derive(Debug)]
 pub struct QLinearAdd {
@@ -27,7 +27,7 @@ impl QLinearAdd {
 }
 
 impl Layer for QLinearAdd {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let x_quant = get_tensor(values, &self.inputs[0])?;
         let x_scale = get_tensor(values, &self.inputs[1])?
             .floats()

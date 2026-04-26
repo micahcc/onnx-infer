@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
+use crate::Values;
 
 #[derive(Debug)]
 pub struct Identity {
@@ -17,7 +17,7 @@ impl Identity {
 }
 
 impl Layer for Identity {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
         output.copy_from(input);
         Ok(())

@@ -1,8 +1,8 @@
-use std::collections::HashMap;
 
 use crate::Result;
 use crate::Tensor;
 use crate::layers::Layer;
+use crate::Values;
 
 #[derive(Debug)]
 pub struct Constant {
@@ -16,7 +16,7 @@ impl Constant {
 }
 
 impl Layer for Constant {
-    fn execute(&mut self, _values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, _values: &Values, output: &mut Tensor) -> Result<()> {
         output.copy_from(&self.value);
         Ok(())
     }

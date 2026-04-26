@@ -22,6 +22,7 @@ use crate::Tensor;
 use crate::layers::OpType;
 use crate::onnx_ir::Node;
 use crate::xnnpack_ffi::*;
+use crate::Values;
 
 // ---------------------------------------------------------------------------
 // Helper structs
@@ -1900,8 +1901,22 @@ impl XnnpackSubgraph {
         &self.required_outputs
     }
 
-    pub fn execute(&mut self, values: &mut HashMap<String, Tensor>) -> Result<()> {
+    pub fn execute(
+        &mut self,
+        values: &mut HashMap<String, Tensor>,
+        inputs: &HashMap<String, Tensor>,
+        initializers: &HashMap<String, Tensor>,
+    ) -> Result<()> {
         let _span = tracing::trace_span!("xnnpack_subgraph").entered();
+
+        // Temporarily insert inputs and initializers so all lookups via values.get() work.
+        // xnnpack subgraph has deep internal logic that reads from the values map.
+        for (k, v) in initializers {
+            values.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        for (k, v) in inputs {
+            values.entry(k.clone()).or_insert_with(|| v.clone());
+        }
 
         self.ensure_compiled(values)?;
 

@@ -11,6 +11,7 @@ use crate::Dims;
 use crate::Result;
 use crate::Tensor;
 use crate::TensorData;
+use crate::Values;
 
 fn plan_matches_inputs(
     input_names: &[String],
@@ -62,7 +63,15 @@ pub struct InferenceEngine {
     input_names: Vec<String>,
     use_xnnpack: bool,
 
+    /// Graph weights + folded constants from plan building. Shared across plans.
+    initializers: HashMap<String, Tensor>,
+
+    /// Pre-allocated intermediate buffers + execution results. Swapped per plan.
+    intermediates: HashMap<String, Tensor>,
+
+    /// User-provided input tensors.
     pub inputs: HashMap<String, Tensor>,
+
     pub outputs: HashMap<String, Tensor>,
 }
 
@@ -104,13 +113,17 @@ impl InferenceEngine {
             outputs.insert(name.clone(), Tensor::default());
         }
 
+        let initializers = graph.initializers.clone();
+
         Ok(Self {
             graph,
             plan_cache: Vec::new(),
             current_plan: None,
             input_names,
-            outputs,
+            initializers,
+            intermediates: HashMap::new(),
             inputs: HashMap::new(),
+            outputs,
             use_xnnpack: opts.xnnpack,
         })
     }
@@ -162,25 +175,14 @@ impl InferenceEngine {
         Ok((before, after))
     }
 
-    fn load_plan_values(inputs: &mut HashMap<String, Tensor>, plan: &Plan) {
-        for (k, v) in &plan.initializers {
-            inputs.insert(k.clone(), v.clone());
-        }
-        for (k, v) in &plan.tensor_pool {
-            inputs.insert(k.clone(), v.clone());
-        }
-    }
-
     /// Find or build a plan matching the current input shapes.
     fn ensure_plan(&mut self) -> Result<()> {
-        // Check if current plan already matches
         if let Some(idx) = self.current_plan {
             if plan_matches_inputs(&self.input_names, &self.inputs, &self.plan_cache[idx]) {
                 return Ok(());
             }
         }
 
-        // Search cache for a matching plan
         for (idx, plan) in self.plan_cache.iter().enumerate() {
             if plan_matches_inputs(&self.input_names, &self.inputs, plan) {
                 self.switch_to_plan(idx);
@@ -188,7 +190,6 @@ impl InferenceEngine {
             }
         }
 
-        // Build input sizes map only when we need a new plan
         let mut input_sizes = HashMap::new();
         for name in &self.input_names {
             if let Some(tensor) = self.inputs.get(name) {
@@ -197,16 +198,21 @@ impl InferenceEngine {
         }
 
         #[cfg(feature = "xnnpack")]
-        let plan = if self.use_xnnpack {
+        let mut plan = if self.use_xnnpack {
             Plan::build_with_xnnpack(&self.graph, &input_sizes, &self.inputs)?
         } else {
             Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), &self.inputs)?
         };
         #[cfg(not(feature = "xnnpack"))]
-        let plan = {
+        let mut plan = {
             let _ = self.use_xnnpack;
             Plan::build_full(&self.graph, &input_sizes, &HashMap::new(), &self.inputs)?
         };
+
+        // Move all initializers (graph weights + folded constants) into shared storage.
+        for (k, v) in plan.initializers.drain() {
+            self.initializers.insert(k, v);
+        }
 
         let idx = self.plan_cache.len();
         self.plan_cache.push(plan);
@@ -214,22 +220,11 @@ impl InferenceEngine {
         Ok(())
     }
 
-    /// Switch self.inputs to use the plan at the given cache index.
     fn switch_to_plan(&mut self, idx: usize) {
-        // Preserve user input tensors
-        let saved_inputs: Vec<(String, Tensor)> = self
-            .input_names
-            .iter()
-            .filter_map(|n| self.inputs.remove_entry(n))
-            .collect();
-
-        self.inputs.clear();
-        Self::load_plan_values(&mut self.inputs, &self.plan_cache[idx]);
-
-        for (name, tensor) in saved_inputs {
-            self.inputs.insert(name, tensor);
+        self.intermediates.clear();
+        for (k, v) in &self.plan_cache[idx].tensor_pool {
+            self.intermediates.insert(k.clone(), v.clone());
         }
-
         self.current_plan = Some(idx);
     }
 
@@ -237,15 +232,12 @@ impl InferenceEngine {
         &mut self.plan_cache[self.current_plan.unwrap()]
     }
 
-    /// Run inference using inputs already written into the engine via
-    /// [`input_floats_mut`](Self::input_floats_mut). No input tensors are
-    /// allocated or copied — the engine executes directly on its internal
-    /// buffers.
+    /// Run inference using inputs already written via [`input_floats_mut`](Self::input_floats_mut).
     pub fn run_planned(&mut self) -> Result<&HashMap<String, Tensor>> {
         self.ensure_plan()?;
         let output_names = std::mem::take(&mut self.current_plan_mut().output_names);
         let mut outputs = std::mem::take(&mut self.outputs);
-        let result = self.run_for_inner(&output_names, &mut outputs);
+        let result = self.execute_plan(&output_names, &mut outputs);
         self.current_plan_mut().output_names = output_names;
         self.outputs = outputs;
         result?;
@@ -269,10 +261,10 @@ impl InferenceEngine {
             self.inputs.insert(k, v);
         }
         self.ensure_plan()?;
-        self.run_for_inner(output_names, outputs)
+        self.execute_plan(output_names, outputs)
     }
 
-    fn run_for_inner(
+    fn execute_plan(
         &mut self,
         output_names: &[String],
         outputs: &mut HashMap<String, Tensor>,
@@ -288,36 +280,46 @@ impl InferenceEngine {
                     }
                     let _span = tracing::trace_span!("op", output = %output).entered();
                     let (key, mut out) = self
-                        .inputs
+                        .intermediates
                         .remove_entry(output.as_str())
                         .unwrap_or_else(|| (output.clone(), Tensor::default()));
-                    layer.execute(&self.inputs, &mut out)?;
-                    self.inputs.insert(key, out);
+                    let values = Values {
+                        intermediates: &self.intermediates,
+                        inputs: &self.inputs,
+                        initializers: &self.initializers,
+                    };
+                    layer.execute(&values, &mut out)?;
+                    self.intermediates.insert(key, out);
                 }
                 PlanNode::Loop(loop_layer) => {
-                    loop_layer.execute(&mut self.inputs)?;
+                    loop_layer.execute(&mut self.intermediates, &self.inputs, &self.initializers)?;
                 }
                 PlanNode::Split(split_layer) => {
-                    split_layer.execute(&mut self.inputs)?;
+                    split_layer.execute(&mut self.intermediates, &self.inputs, &self.initializers)?;
                 }
                 PlanNode::If(if_layer) => {
-                    if_layer.execute(&mut self.inputs)?;
+                    if_layer.execute(&mut self.intermediates, &self.inputs, &self.initializers)?;
                 }
                 PlanNode::TopK(topk_layer) => {
-                    topk_layer.execute(&mut self.inputs)?;
+                    topk_layer.execute(&mut self.intermediates, &self.inputs, &self.initializers)?;
                 }
                 PlanNode::Scan(scan_layer) => {
-                    scan_layer.execute(&mut self.inputs)?;
+                    scan_layer.execute(&mut self.intermediates, &self.inputs, &self.initializers)?;
                 }
                 #[cfg(feature = "xnnpack")]
                 PlanNode::XnnpackSubgraph(sg) => {
-                    sg.execute(&mut self.inputs)?;
+                    sg.execute(&mut self.intermediates, &self.inputs, &self.initializers)?;
                 }
             }
         }
 
         for name in output_names {
-            if let Some(src) = self.inputs.get(name) {
+            let src = self
+                .intermediates
+                .get(name)
+                .or_else(|| self.inputs.get(name))
+                .or_else(|| self.initializers.get(name));
+            if let Some(src) = src {
                 let dst = outputs.entry(name.clone()).or_default();
                 dst.copy_from(src);
             }
@@ -339,7 +341,10 @@ impl InferenceEngine {
     }
 
     pub fn value(&self, name: &str) -> Option<&Tensor> {
-        self.inputs.get(name)
+        self.inputs
+            .get(name)
+            .or_else(|| self.initializers.get(name))
+            .or_else(|| self.intermediates.get(name))
     }
 
     /// Returns a mutable slice to the f32 data of an input tensor, reusing

@@ -4,7 +4,6 @@ use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
-use crate::get_tensor;
 
 pub struct TopK {
     pub inputs: Vec<String>,
@@ -27,9 +26,17 @@ impl TopK {
         }
     }
 
-    pub fn execute(&mut self, values: &mut HashMap<String, Tensor>) -> Result<()> {
-        let input = get_tensor(values, &self.inputs[0])?;
-        let k_tensor = get_tensor(values, &self.inputs[1])?;
+    pub fn execute(
+        &mut self,
+        values: &mut HashMap<String, Tensor>,
+        inputs: &HashMap<String, Tensor>,
+        initializers: &HashMap<String, Tensor>,
+    ) -> Result<()> {
+        let lookup = |name: &str| -> Option<&Tensor> {
+            values.get(name).or_else(|| inputs.get(name)).or_else(|| initializers.get(name))
+        };
+        let input = lookup(&self.inputs[0]).ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
+        let k_tensor = lookup(&self.inputs[1]).ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[1]))?;
         let k = k_tensor.i64_at(0).context("in TopK layer: reading k")? as usize;
 
         let rank = input.dims.len() as i64;

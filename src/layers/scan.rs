@@ -7,7 +7,7 @@ use crate::DType;
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
-use crate::get_tensor;
+use crate::Values;
 use crate::layers::Plan;
 use crate::layers::PlanNode;
 use crate::onnx_ir::Graph;
@@ -65,7 +65,7 @@ impl Scan {
         }
     }
 
-    fn init(&mut self, outer_values: &HashMap<String, Tensor>) -> Result<()> {
+    fn init(&mut self, outer_values: &HashMap<String, Tensor>, inputs: &HashMap<String, Tensor>, initializers: &HashMap<String, Tensor>) -> Result<()> {
         let num_state = self.inputs.len() - self.num_scan_inputs;
         let num_scan_out = self.body.outputs.len() - num_state;
 
@@ -108,17 +108,17 @@ impl Scan {
         // Type hints
         let mut type_hints: HashMap<String, DType> = HashMap::new();
         for (j, name) in self.state_in_names.iter().enumerate() {
-            if let Some(src) = outer_values.get(&self.inputs[j]) {
+            if let Some(src) = outer_values.get(&self.inputs[j]).or_else(|| inputs.get(&self.inputs[j])).or_else(|| initializers.get(&self.inputs[j])) {
                 type_hints.insert(name.clone(), src.dtype());
             }
         }
         for (j, name) in self.scan_in_names.iter().enumerate() {
-            if let Some(src) = outer_values.get(&self.inputs[num_state + j]) {
+            if let Some(src) = outer_values.get(&self.inputs[num_state + j]).or_else(|| inputs.get(&self.inputs[num_state + j])).or_else(|| initializers.get(&self.inputs[num_state + j])) {
                 type_hints.insert(name.clone(), src.dtype());
             }
         }
         for name in &self.outer_refs {
-            if let Some(t) = outer_values.get(name) {
+            if let Some(t) = outer_values.get(name).or_else(|| inputs.get(name)).or_else(|| initializers.get(name)) {
                 type_hints.insert(name.clone(), t.dtype());
             }
         }
@@ -127,12 +127,12 @@ impl Scan {
         let num_state = self.state_in_names.len();
         let mut shape_hints: HashMap<String, Dims> = HashMap::new();
         for (j, name) in self.state_in_names.iter().enumerate() {
-            if let Some(src) = outer_values.get(&self.inputs[j]) {
+            if let Some(src) = outer_values.get(&self.inputs[j]).or_else(|| inputs.get(&self.inputs[j])).or_else(|| initializers.get(&self.inputs[j])) {
                 shape_hints.insert(name.clone(), src.dims.clone());
             }
         }
         for (j, name) in self.scan_in_names.iter().enumerate() {
-            if let Some(src) = outer_values.get(&self.inputs[num_state + j]) {
+            if let Some(src) = outer_values.get(&self.inputs[num_state + j]).or_else(|| inputs.get(&self.inputs[num_state + j])).or_else(|| initializers.get(&self.inputs[num_state + j])) {
                 if src.dims.len() > 1 {
                     let sliced: Dims = src.dims[1..].iter().copied().collect();
                     shape_hints.insert(name.clone(), sliced);
@@ -149,7 +149,7 @@ impl Scan {
             self.values.insert(k, v);
         }
         for name in &self.outer_refs {
-            if let Some(t) = outer_values.get(name) {
+            if let Some(t) = outer_values.get(name).or_else(|| inputs.get(name)).or_else(|| initializers.get(name)) {
                 self.values.insert(name.clone(), t.clone());
             }
         }
@@ -176,27 +176,27 @@ impl Scan {
         Ok(())
     }
 
-    pub fn execute(&mut self, outer_values: &mut HashMap<String, Tensor>) -> Result<()> {
+    pub fn execute(&mut self, outer_values: &mut HashMap<String, Tensor>, inputs: &HashMap<String, Tensor>, initializers: &HashMap<String, Tensor>) -> Result<()> {
         if self.plan.is_none() {
-            self.init(outer_values)?;
+            self.init(outer_values, inputs, initializers)?;
         }
 
         let num_state = self.state_in_names.len();
 
         let seq_len = if self.num_scan_inputs > 0 {
-            let scan_in = get_tensor(outer_values, &self.inputs[num_state])?;
+            let scan_in = outer_values.get(&self.inputs[num_state]).or_else(|| inputs.get(&self.inputs[num_state])).or_else(|| initializers.get(&self.inputs[num_state])).ok_or_else(|| anyhow::anyhow!("Tensor not found"))?;
             scan_in.dims[0]
         } else {
             anyhow::bail!("Scan requires at least one scan input");
         };
 
         for (j, _name) in self.state_in_names.iter().enumerate() {
-            let src = get_tensor(outer_values, &self.inputs[j])?;
+            let src = outer_values.get(&self.inputs[j]).or_else(|| inputs.get(&self.inputs[j])).or_else(|| initializers.get(&self.inputs[j])).ok_or_else(|| anyhow::anyhow!("Tensor not found"))?;
             self.state[j].copy_from(src);
         }
 
         for name in &self.outer_refs {
-            if let Some(outer) = outer_values.get(name) {
+            if let Some(outer) = outer_values.get(name).or_else(|| inputs.get(name)).or_else(|| initializers.get(name)) {
                 if let Some(body) = self.values.get_mut(name) {
                     body.copy_from(outer);
                 }
@@ -219,7 +219,7 @@ impl Scan {
         }
         let mut scan_inputs: Vec<ScanInputInfo> = Vec::with_capacity(self.num_scan_inputs);
         for j in 0..self.num_scan_inputs {
-            let t = get_tensor(outer_values, &self.inputs[num_state + j])?;
+            let t = outer_values.get(&self.inputs[num_state + j]).or_else(|| inputs.get(&self.inputs[num_state + j])).or_else(|| initializers.get(&self.inputs[num_state + j])).ok_or_else(|| anyhow::anyhow!("Tensor not found"))?;
             let slice_dims: Dims = t.dims[1..].iter().copied().collect();
             let slice_size: usize = slice_dims.iter().product();
             let reverse = self.scan_input_directions.get(j).copied().unwrap_or(0) != 0;
@@ -299,17 +299,19 @@ impl Scan {
                         let (key, mut out) = values
                             .remove_entry(output.as_str())
                             .unwrap_or_else(|| (output.clone(), Tensor::default()));
-                        let result = layer.execute(values, &mut out);
+                        let empty = HashMap::new();
+                        let vals = Values { intermediates: values, inputs: &empty, initializers: &empty };
+                        let result = layer.execute(&vals, &mut out);
                         values.insert(key, out);
                         result?;
                     }
-                    PlanNode::Loop(loop_layer) => loop_layer.execute(values)?,
-                    PlanNode::Split(split_layer) => split_layer.execute(values)?,
-                    PlanNode::If(if_layer) => if_layer.execute(values)?,
-                    PlanNode::TopK(topk_layer) => topk_layer.execute(values)?,
-                    PlanNode::Scan(scan_layer) => scan_layer.execute(values)?,
+                    PlanNode::Loop(loop_layer) => loop_layer.execute(values, &HashMap::new(), &HashMap::new())?,
+                    PlanNode::Split(split_layer) => split_layer.execute(values, &HashMap::new(), &HashMap::new())?,
+                    PlanNode::If(if_layer) => if_layer.execute(values, &HashMap::new(), &HashMap::new())?,
+                    PlanNode::TopK(topk_layer) => topk_layer.execute(values, &HashMap::new(), &HashMap::new())?,
+                    PlanNode::Scan(scan_layer) => scan_layer.execute(values, &HashMap::new(), &HashMap::new())?,
                     #[cfg(feature = "xnnpack")]
-                    PlanNode::XnnpackSubgraph(sg) => sg.execute(values)?,
+                    PlanNode::XnnpackSubgraph(sg) => sg.execute(values, &HashMap::new(), &HashMap::new())?,
                 }
             }
 

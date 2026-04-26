@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 
 use anyhow::Context;
 
@@ -7,6 +6,7 @@ use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
 use crate::layers::matmul::MatMul;
+use crate::Values;
 
 #[derive(Debug)]
 pub struct QLinearMatMul {
@@ -31,7 +31,7 @@ impl QLinearMatMul {
 }
 
 impl Layer for QLinearMatMul {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let a_quant = get_tensor(values, &self.inputs[0])?;
         let a_scale = get_tensor(values, &self.inputs[1])?
             .floats()

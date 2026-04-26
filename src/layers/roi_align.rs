@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 
 use anyhow::Context;
 
@@ -7,6 +6,7 @@ use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
+use crate::Values;
 
 #[derive(Debug)]
 pub struct RoiAlign {
@@ -68,7 +68,7 @@ fn bilinear_interpolate(data: &[f32], h: usize, w: usize, y: f32, x: f32) -> f32
 }
 
 impl Layer for RoiAlign {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let x = get_tensor(values, &self.inputs[0])?;
         let rois = get_tensor(values, &self.inputs[1])?;
         let batch_indices = get_tensor(values, &self.inputs[2])?;

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 
 use anyhow::Context;
 
@@ -8,6 +7,7 @@ use crate::Tensor;
 use crate::broadcast_shape_into;
 use crate::get_tensor;
 use crate::layers::Layer;
+use crate::Values;
 
 #[derive(Debug)]
 pub struct MatMulPrecomp {
@@ -89,7 +89,7 @@ impl MatMul {
     /// differences in quantized pipelines.
     pub fn execute_naive(
         &mut self,
-        values: &HashMap<String, Tensor>,
+        values: &Values,
         output: &mut Tensor,
     ) -> Result<()> {
         let a = get_tensor(values, &self.inputs[0])?;
@@ -139,7 +139,7 @@ impl MatMul {
 }
 
 impl Layer for MatMul {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let a = get_tensor(values, &self.inputs[0])?;
         let b = get_tensor(values, &self.inputs[1])?;
 

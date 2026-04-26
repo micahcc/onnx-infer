@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 
 use anyhow::Context;
 
@@ -7,6 +6,7 @@ use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
+use crate::Values;
 
 fn read_i64_into(t: &Tensor, buf: &mut [i64; 8]) -> anyhow::Result<usize> {
     let len = t.numel();
@@ -61,7 +61,7 @@ impl Slice {
 }
 
 impl Layer for Slice {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
         let rank = input.dims.len();
         let mut starts = [0i64; 8];

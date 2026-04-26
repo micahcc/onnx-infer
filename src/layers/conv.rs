@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 
 use anyhow::Context;
 
@@ -8,6 +7,7 @@ use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
+use crate::Values;
 
 #[derive(Debug, Clone, Copy)]
 pub enum AutoPad {
@@ -257,7 +257,7 @@ impl Conv {
     /// Always operates in NCHW layout.
     pub fn execute_naive(
         &mut self,
-        values: &HashMap<String, Tensor>,
+        values: &Values,
         output: &mut Tensor,
     ) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
@@ -322,7 +322,7 @@ impl Conv {
 }
 
 impl Layer for Conv {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
         let weight = get_tensor(values, &self.inputs[1])?;
 

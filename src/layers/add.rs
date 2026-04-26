@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 
 use crate::Result;
 use crate::Tensor;
 use crate::get_tensor;
 use crate::layers::Layer;
+use crate::Values;
 
 #[derive(Debug)]
 pub struct Add {
@@ -23,7 +23,7 @@ impl Add {
 }
 
 impl Layer for Add {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let a = get_tensor(values, &self.inputs[0])?;
         let b = get_tensor(values, &self.inputs[1])?;
         crate::layers::binary_op(a, b, output, self.legacy_broadcast, self.axis, |a, b| a + b)

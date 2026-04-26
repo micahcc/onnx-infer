@@ -4,7 +4,33 @@ use crate::Dims;
 use crate::Result;
 use crate::Tensor;
 
-pub fn get_tensor<'a>(values: &'a HashMap<String, Tensor>, name: &str) -> Result<&'a Tensor> {
+/// A read-only view over multiple tensor maps: intermediates, inputs, and initializers.
+/// Layers look up tensors through this without needing to know which map holds them.
+pub struct Values<'a> {
+    pub intermediates: &'a HashMap<String, Tensor>,
+    pub inputs: &'a HashMap<String, Tensor>,
+    pub initializers: &'a HashMap<String, Tensor>,
+}
+
+impl<'a> Values<'a> {
+    pub fn get(&self, name: &str) -> Option<&'a Tensor> {
+        self.intermediates
+            .get(name)
+            .or_else(|| self.inputs.get(name))
+            .or_else(|| self.initializers.get(name))
+    }
+}
+
+pub fn get_tensor<'a>(values: &Values<'a>, name: &str) -> Result<&'a Tensor> {
+    values
+        .get(name)
+        .ok_or_else(|| anyhow::anyhow!("Tensor '{name}' not found"))
+}
+
+pub fn get_tensor_map<'a>(
+    values: &'a HashMap<String, Tensor>,
+    name: &str,
+) -> Result<&'a Tensor> {
     values
         .get(name)
         .ok_or_else(|| anyhow::anyhow!("Tensor '{name}' not found"))
