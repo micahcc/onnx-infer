@@ -5,7 +5,7 @@ edition = "2024"
 description = "Pure Rust ONNX inference engine for computer vision models"
 license = "BSD-3-Clause"
 repository = "https://github.com/micahcc/onnx-infer"
-exclude = ["fixtures/"]
+exclude = ["fixtures/", "tags"]
 
 [features]
 cli = ["dep:clap", "dep:image", "dep:prost-reflect", "dep:serde_json"]
