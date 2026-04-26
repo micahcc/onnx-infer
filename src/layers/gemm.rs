@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-
 use anyhow::Context;
 
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::broadcast_index;
 use crate::broadcast_shape_into;
 use crate::get_tensor;
@@ -82,7 +81,7 @@ impl Gemm {
 }
 
 impl Layer for Gemm {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let a = get_tensor(values, &self.inputs[0])?;
         let b = get_tensor(values, &self.inputs[1])?;
         let c_tensor = if self.inputs.len() > 2 && !self.inputs[2].is_empty() {

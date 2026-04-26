@@ -5,6 +5,7 @@ use anyhow::Context;
 use crate::Layout;
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::get_tensor;
 use crate::layers::Layer;
 use crate::layers::global_avg_pool::GlobalAvgPool;
@@ -31,7 +32,7 @@ impl QLinearGlobalAvgPool {
 }
 
 impl Layer for QLinearGlobalAvgPool {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let x_quant = get_tensor(values, &self.inputs[0])?;
         let x_scale = get_tensor(values, &self.inputs[1])?
             .floats()
@@ -59,7 +60,11 @@ impl Layer for QLinearGlobalAvgPool {
             x_buf,
         );
 
-        self.inner.execute(&self.tmp_values, &mut self.gap_output)?;
+        let inner_vals = Values {
+            intermediates: &self.tmp_values,
+            constants: crate::Constants::empty(),
+        };
+        self.inner.execute(&inner_vals, &mut self.gap_output)?;
 
         let numel = self.gap_output.numel();
         output.set_dims(&self.gap_output.dims);

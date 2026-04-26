@@ -704,6 +704,138 @@ fn test_mnist12_input_floats_mut() {
     }
 }
 
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_mnist12_xnnpack_batch2() {
+    let _t = setup_tracing("mnist12_xnnpack_batch2");
+    let base = fixture("mnist-12");
+    let (model_bytes, inputs) = load_model_and_inputs(&base, "mnist-12.onnx", 0);
+
+    let mut engine = InferenceEngine::new(
+        &model_bytes,
+        InferenceOptions {
+            xnnpack: true,
+            ..Default::default()
+        },
+    )
+    .expect("load model");
+
+    let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
+    let graph = model.graph.as_ref().expect("model has no graph");
+    let input_name = graph.input[0].name.clone();
+    let output_name = graph.output[0].name.clone();
+
+    // Get the single-sample input [1, 1, 28, 28]
+    let single_input = inputs.get(&input_name).expect("missing input");
+    let single_data = single_input.floats().expect("float input");
+    assert_eq!(single_input.dims.as_slice(), &[1, 1, 28, 28]);
+
+    // Run batch=2 directly (no batch=1 first): duplicate the same input
+    let mut batch2_data = Vec::with_capacity(single_data.len() * 2);
+    batch2_data.extend_from_slice(single_data);
+    batch2_data.extend_from_slice(single_data);
+
+    let dst = engine
+        .input_floats_mut(&input_name, crate::dims![2, 1, 28, 28])
+        .expect("input_floats_mut batch=2");
+    dst.copy_from_slice(&batch2_data);
+    let outputs = engine.run_planned().expect("run_planned batch=2");
+    let out = &outputs[&output_name];
+    let batch2_output = out.floats().expect("float output");
+
+    // Output should be [2, 10] = 20 elements
+    assert_eq!(
+        batch2_output.len(),
+        20,
+        "expected 20 outputs for batch=2, got {}",
+        batch2_output.len()
+    );
+
+    // Check no NaN
+    for (i, v) in batch2_output.iter().enumerate() {
+        assert!(!v.is_nan(), "batch=2 output[{i}] is NaN");
+    }
+
+    // Both samples are identical, so outputs should match
+    for i in 0..10 {
+        assert_relative_eq!(
+            batch2_output[i],
+            batch2_output[10 + i],
+            max_relative = 1e-3,
+            epsilon = 1e-5
+        );
+    }
+}
+
+#[cfg(feature = "xnnpack")]
+#[test]
+fn test_mnist12_xnnpack_batch_sizes() {
+    let _t = setup_tracing("mnist12_xnnpack_batch_sizes");
+    let base = fixture("mnist-12");
+    let (model_bytes, inputs) = load_model_and_inputs(&base, "mnist-12.onnx", 0);
+
+    let mut engine = InferenceEngine::new(
+        &model_bytes,
+        InferenceOptions {
+            xnnpack: true,
+            ..Default::default()
+        },
+    )
+    .expect("load model");
+
+    let model = ModelProto::decode(&model_bytes[..]).expect("decode model proto");
+    let graph = model.graph.as_ref().expect("model has no graph");
+    let input_name = graph.input[0].name.clone();
+    let output_name = graph.output[0].name.clone();
+
+    let single_input = inputs.get(&input_name).expect("missing input");
+    let single_data = single_input.floats().expect("float input");
+    let num_classes = 10;
+
+    // Run with increasing then decreasing batch sizes: 1, 2, 4, 2, 1, 3
+    for &batch_size in &[1usize, 2, 4, 2, 1, 3] {
+        let mut batch_data = Vec::with_capacity(single_data.len() * batch_size);
+        for _ in 0..batch_size {
+            batch_data.extend_from_slice(single_data);
+        }
+
+        let dst = engine
+            .input_floats_mut(&input_name, crate::dims![batch_size, 1, 28, 28])
+            .expect("input_floats_mut");
+        dst.copy_from_slice(&batch_data);
+        let outputs = engine.run_planned().unwrap_or_else(|e| {
+            panic!("run_planned failed for batch={batch_size}: {e}");
+        });
+        let out = &outputs[&output_name];
+        let out_data = out.floats().expect("float output");
+
+        assert_eq!(
+            out_data.len(),
+            num_classes * batch_size,
+            "batch={batch_size}: expected {} outputs, got {}",
+            num_classes * batch_size,
+            out_data.len()
+        );
+
+        // Check no NaN
+        for (i, v) in out_data.iter().enumerate() {
+            assert!(!v.is_nan(), "batch={batch_size} output[{i}] is NaN");
+        }
+
+        // All samples are identical, so each batch item should match the first
+        for b in 1..batch_size {
+            for c in 0..num_classes {
+                assert_relative_eq!(
+                    out_data[c],
+                    out_data[b * num_classes + c],
+                    max_relative = 1e-3,
+                    epsilon = 1e-5
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn test_mnist12_int8_set_0() {
     let _t = setup_tracing("mnist12_int8_set_0");

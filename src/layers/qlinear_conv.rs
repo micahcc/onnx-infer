@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-
 use anyhow::Context;
 
 use crate::Layout;
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::get_tensor;
 use crate::layers::Layer;
 use crate::layers::conv::Conv;
@@ -86,7 +85,7 @@ fn im2col_i16_nhwc(
 }
 
 impl Layer for QLinearConv {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         assert!(
             self.inner.nhwc,
             "QLinearConv::execute requires NHWC input layout"

@@ -3,12 +3,12 @@ use std::collections::HashSet;
 
 use anyhow::Context;
 
+use crate::Constants;
 use crate::DType;
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
 use crate::dims;
-use crate::get_tensor;
 use crate::layers::Plan;
 use crate::layers::PlanNode;
 use crate::onnx_ir::Graph;
@@ -60,7 +60,11 @@ impl Loop {
         }
     }
 
-    fn init(&mut self, outer_values: &HashMap<String, Tensor>) -> Result<()> {
+    fn init(
+        &mut self,
+        outer_values: &HashMap<String, Tensor>,
+        constants: &Constants,
+    ) -> Result<()> {
         let num_carried = self.inputs.len() - 2;
         let num_scan = self.body.outputs.len() - 1 - num_carried;
 
@@ -101,23 +105,35 @@ impl Loop {
         }
         self.outer_refs = outer_ref_set.into_iter().collect();
 
+        let lookup = |name: &str| -> Option<&Tensor> {
+            outer_values.get(name).or_else(|| constants.get(name))
+        };
+
         // First pass: build type_hints from actual values and determine carried output types
         let mut type_hints: HashMap<String, DType> = HashMap::new();
         type_hints.insert(self.iter_name.clone(), DType::Int64);
         type_hints.insert(self.cond_name.clone(), DType::Float);
         for (j, name) in self.carried_in_names.iter().enumerate() {
-            if let Some(src) = outer_values.get(&self.inputs[j + 2]) {
+            if let Some(src) = lookup(&self.inputs[j + 2]) {
                 type_hints.insert(name.clone(), src.dtype());
             }
         }
         for name in &self.outer_refs {
-            if let Some(t) = outer_values.get(name) {
+            if let Some(t) = lookup(name) {
                 type_hints.insert(name.clone(), t.dtype());
             }
         }
 
+        // Seed body initializers into values
+        for (k, v) in &self.body.initializers {
+            if !self.values.contains_key(k) {
+                self.values.insert(k.clone(), v.clone());
+            }
+        }
+
         // Build plan to determine steady-state types via type inference
-        let probe = Plan::build_with_types(&self.body, &HashMap::new(), &type_hints)?;
+        let probe =
+            Plan::build_with_types(&self.body, &HashMap::new(), &type_hints, &mut self.values)?;
 
         // Determine steady-state carried types from output inference
         let mut needs_rebuild = false;
@@ -140,23 +156,14 @@ impl Loop {
 
         // Rebuild with corrected types if any carried input/output types differed
         let plan = if needs_rebuild {
-            Plan::build_with_types(&self.body, &HashMap::new(), &type_hints)?
+            Plan::build_with_types(&self.body, &HashMap::new(), &type_hints, &mut self.values)?
         } else {
             probe
         };
 
-        // Move initializers and tensor_pool into persistent values
-        let mut plan = plan;
-        for (k, v) in std::mem::take(&mut plan.initializers) {
-            self.values.insert(k, v);
-        }
-        for (k, v) in std::mem::take(&mut plan.tensor_pool) {
-            self.values.insert(k, v);
-        }
-
         // Copy outer references
         for name in &self.outer_refs {
-            if let Some(t) = outer_values.get(name) {
+            if let Some(t) = outer_values.get(name).or_else(|| constants.get(name)) {
                 self.values.insert(name.clone(), t.clone());
             }
         }
@@ -172,7 +179,10 @@ impl Loop {
         }
         for (j, name) in self.carried_in_names.iter().enumerate() {
             if !self.values.contains_key(name) {
-                if let Some(src) = outer_values.get(&self.inputs[j + 2]) {
+                if let Some(src) = outer_values
+                    .get(&self.inputs[j + 2])
+                    .or_else(|| constants.get(&self.inputs[j + 2]))
+                {
                     let mut t = src.clone();
                     // Cast to steady-state type if needed
                     if t.dtype() != self.carried_types[j] && self.carried_types[j] == DType::Float {
@@ -199,12 +209,19 @@ impl Loop {
         Ok(())
     }
 
-    pub fn execute(&mut self, outer_values: &mut HashMap<String, Tensor>) -> Result<()> {
+    pub fn execute(
+        &mut self,
+        outer_values: &mut HashMap<String, Tensor>,
+        constants: &Constants,
+    ) -> Result<()> {
         if self.plan.is_none() {
-            self.init(outer_values)?;
+            self.init(outer_values, constants)?;
         }
 
-        let trip_tensor = get_tensor(outer_values, &self.inputs[0])?;
+        let trip_tensor = outer_values
+            .get(&self.inputs[0])
+            .or_else(|| constants.get(&self.inputs[0]))
+            .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
         let trip_count = trip_tensor
             .i64_at(0)
             .context("in Loop layer: reading trip count")? as usize;
@@ -212,7 +229,11 @@ impl Loop {
 
         // Copy initial carried state, casting to steady-state type
         for j in 0..num_carried {
-            let src = get_tensor(outer_values, &self.inputs[j + 2])?;
+            let name = &self.inputs[j + 2];
+            let src = outer_values
+                .get(name)
+                .or_else(|| constants.get(name))
+                .ok_or_else(|| anyhow::anyhow!("Tensor '{name}' not found"))?;
             if src.dtype() != self.carried_types[j] && self.carried_types[j] == DType::Float {
                 self.carried[j]
                     .copy_cast_f32(src)
@@ -224,7 +245,7 @@ impl Loop {
 
         // Update outer references
         for name in &self.outer_refs {
-            if let Some(outer) = outer_values.get(name) {
+            if let Some(outer) = outer_values.get(name).or_else(|| constants.get(name)) {
                 if let Some(body) = self.values.get_mut(name) {
                     body.copy_from(outer);
                 }
@@ -259,6 +280,7 @@ impl Loop {
             ..
         } = self;
         let plan = plan.as_mut().unwrap();
+        let empty_constants = Constants::empty();
 
         let mut actual_iters = 0usize;
         for i in 0..trip_count {
@@ -297,28 +319,32 @@ impl Loop {
                         let (key, mut out) = values
                             .remove_entry(output.as_str())
                             .unwrap_or_else(|| (output.clone(), Tensor::default()));
-                        let result = layer.execute(values, &mut out);
+                        let vals = crate::Values {
+                            intermediates: values,
+                            constants: empty_constants.clone(),
+                        };
+                        let result = layer.execute(&vals, &mut out);
                         values.insert(key, out);
                         result?;
                     }
                     PlanNode::Loop(loop_layer) => {
-                        loop_layer.execute(values)?;
+                        loop_layer.execute(values, &empty_constants)?;
                     }
                     PlanNode::Split(split_layer) => {
-                        split_layer.execute(values)?;
+                        split_layer.execute(values, &empty_constants)?;
                     }
                     PlanNode::If(if_layer) => {
-                        if_layer.execute(values)?;
+                        if_layer.execute(values, &empty_constants)?;
                     }
                     PlanNode::TopK(topk_layer) => {
-                        topk_layer.execute(values)?;
+                        topk_layer.execute(values, &empty_constants)?;
                     }
                     PlanNode::Scan(scan_layer) => {
-                        scan_layer.execute(values)?;
+                        scan_layer.execute(values, &empty_constants)?;
                     }
                     #[cfg(feature = "xnnpack")]
                     PlanNode::XnnpackSubgraph(sg) => {
-                        sg.execute(values)?;
+                        sg.execute(values, &empty_constants)?;
                     }
                 }
             }

@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-
 use anyhow::Context;
 
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::broadcast_index;
 use crate::broadcast_shape_into;
 use crate::get_tensor;
@@ -22,7 +21,7 @@ impl Expand {
 }
 
 impl Layer for Expand {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
         let shape_tensor = get_tensor(values, &self.inputs[1])?;
 

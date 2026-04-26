@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 
+use crate::Constants;
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
-use crate::get_tensor;
 
 pub struct Split {
     pub inputs: Vec<String>,
@@ -35,8 +35,15 @@ impl Split {
         }
     }
 
-    pub fn execute(&mut self, values: &mut HashMap<String, Tensor>) -> Result<()> {
-        let input = get_tensor(values, &self.inputs[0])?;
+    pub fn execute(
+        &mut self,
+        values: &mut HashMap<String, Tensor>,
+        constants: &Constants,
+    ) -> Result<()> {
+        let input = values
+            .get(&self.inputs[0])
+            .or_else(|| constants.get(&self.inputs[0]))
+            .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
         let rank = input.dims.len() as i64;
         let axis = if self.axis < 0 {
             (rank + self.axis) as usize
@@ -85,7 +92,10 @@ impl Split {
 
             match dtype {
                 DType::Float => {
-                    let in_t = values.get(&self.inputs[0]).unwrap();
+                    let in_t = values
+                        .get(&self.inputs[0])
+                        .or_else(|| constants.get(&self.inputs[0]))
+                        .unwrap();
                     let in_data = in_t.floats().context("in Split layer")?;
                     let buf = out.as_mut_f32(numel);
                     let mut idx = 0;
@@ -99,7 +109,10 @@ impl Split {
                     }
                 }
                 DType::Int64 => {
-                    let in_t = values.get(&self.inputs[0]).unwrap();
+                    let in_t = values
+                        .get(&self.inputs[0])
+                        .or_else(|| constants.get(&self.inputs[0]))
+                        .unwrap();
                     let in_data = in_t.ints().context("in Split layer")?;
                     let buf = out.as_mut_i64(numel);
                     let mut idx = 0;

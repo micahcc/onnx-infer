@@ -1,9 +1,8 @@
-use std::collections::HashMap;
-
 use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::get_tensor;
 use crate::layers::Layer;
 
@@ -27,7 +26,7 @@ impl Nms {
 }
 
 impl Layer for Nms {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let boxes = get_tensor(values, &self.inputs[0])?;
         let scores = get_tensor(values, &self.inputs[1])?;
         let max_output = if self.inputs.len() > 2 && !self.inputs[2].is_empty() {

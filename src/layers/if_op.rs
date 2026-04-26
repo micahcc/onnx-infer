@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 
+use crate::Constants;
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
-use crate::get_tensor;
 use crate::layers::plan::execute_node;
 use crate::onnx_ir::Graph;
 
@@ -33,8 +33,15 @@ impl If {
         }
     }
 
-    pub fn execute(&mut self, values: &mut HashMap<String, Tensor>) -> Result<()> {
-        let cond = get_tensor(values, &self.inputs[0])?;
+    pub fn execute(
+        &mut self,
+        values: &mut HashMap<String, Tensor>,
+        constants: &Constants,
+    ) -> Result<()> {
+        let cond = values
+            .get(&self.inputs[0])
+            .or_else(|| constants.get(&self.inputs[0]))
+            .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
         let is_true = match cond.dtype() {
             DType::Float => {
                 cond.floats()

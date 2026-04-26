@@ -1,9 +1,8 @@
-use std::collections::HashMap;
-
 use anyhow::Context;
 
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::get_tensor;
 use crate::layers::Layer;
 
@@ -13,7 +12,7 @@ pub struct And {
 }
 
 impl Layer for And {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let a = get_tensor(values, &self.inputs[0])?;
         let b = get_tensor(values, &self.inputs[1])?;
         let a_data = a.ints().context("in And layer")?;

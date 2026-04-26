@@ -85,8 +85,6 @@ pub mod where_op;
 #[cfg(feature = "xnnpack")]
 pub mod xnnpack_subgraph;
 
-use std::collections::HashMap;
-
 pub use op_type::OpType;
 pub use plan::Plan;
 pub use plan::PlanNode;
@@ -95,11 +93,12 @@ pub use plan::execute_node;
 
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::broadcast_index;
 use crate::broadcast_shape_into;
 
 pub trait Layer: Send + std::fmt::Debug {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()>;
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()>;
 }
 
 pub fn dequantize_into(data: &[f32], scale: f32, zero_point: f32, out: &mut [f32]) {

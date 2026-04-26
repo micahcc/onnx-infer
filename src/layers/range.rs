@@ -1,11 +1,11 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 use anyhow::Context;
 
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
+use crate::Values;
 use crate::get_tensor;
 use crate::layers::Layer;
 
@@ -21,7 +21,7 @@ impl Range {
 }
 
 impl Layer for Range {
-    fn execute(&mut self, values: &HashMap<String, Tensor>, output: &mut Tensor) -> Result<()> {
+    fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let start = get_tensor(values, &self.inputs[0])?;
         let limit = get_tensor(values, &self.inputs[1])?;
         let delta = get_tensor(values, &self.inputs[2])?;
