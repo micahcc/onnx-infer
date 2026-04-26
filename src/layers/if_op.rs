@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 
+use crate::Constants;
 use crate::DType;
 use crate::Result;
 use crate::Tensor;
@@ -35,13 +36,11 @@ impl If {
     pub fn execute(
         &mut self,
         values: &mut HashMap<String, Tensor>,
-        inputs: &HashMap<String, Tensor>,
-        initializers: &HashMap<String, Tensor>,
+        constants: &Constants,
     ) -> Result<()> {
         let cond = values
             .get(&self.inputs[0])
-            .or_else(|| inputs.get(&self.inputs[0]))
-            .or_else(|| initializers.get(&self.inputs[0]))
+            .or_else(|| constants.get(&self.inputs[0]))
             .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
         let is_true = match cond.dtype() {
             DType::Float => {

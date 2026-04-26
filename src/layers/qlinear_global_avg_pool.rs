@@ -60,11 +60,9 @@ impl Layer for QLinearGlobalAvgPool {
             x_buf,
         );
 
-        let empty = std::collections::HashMap::new();
         let inner_vals = Values {
             intermediates: &self.tmp_values,
-            inputs: &empty,
-            initializers: &empty,
+            constants: crate::Constants::empty(),
         };
         self.inner.execute(&inner_vals, &mut self.gap_output)?;
 

@@ -3,6 +3,7 @@ use std::collections::HashSet;
 
 use anyhow::Context;
 
+use crate::Constants;
 use crate::DType;
 use crate::Dims;
 use crate::Result;
@@ -62,8 +63,7 @@ impl Loop {
     fn init(
         &mut self,
         outer_values: &HashMap<String, Tensor>,
-        inputs: &HashMap<String, Tensor>,
-        initializers: &HashMap<String, Tensor>,
+        constants: &Constants,
     ) -> Result<()> {
         let num_carried = self.inputs.len() - 2;
         let num_scan = self.body.outputs.len() - 1 - num_carried;
@@ -106,10 +106,7 @@ impl Loop {
         self.outer_refs = outer_ref_set.into_iter().collect();
 
         let lookup = |name: &str| -> Option<&Tensor> {
-            outer_values
-                .get(name)
-                .or_else(|| inputs.get(name))
-                .or_else(|| initializers.get(name))
+            outer_values.get(name).or_else(|| constants.get(name))
         };
 
         // First pass: build type_hints from actual values and determine carried output types
@@ -165,14 +162,8 @@ impl Loop {
         };
 
         // Copy outer references
-        let lookup = |name: &str| -> Option<&Tensor> {
-            outer_values
-                .get(name)
-                .or_else(|| inputs.get(name))
-                .or_else(|| initializers.get(name))
-        };
         for name in &self.outer_refs {
-            if let Some(t) = lookup(name) {
+            if let Some(t) = outer_values.get(name).or_else(|| constants.get(name)) {
                 self.values.insert(name.clone(), t.clone());
             }
         }
@@ -190,8 +181,7 @@ impl Loop {
             if !self.values.contains_key(name) {
                 if let Some(src) = outer_values
                     .get(&self.inputs[j + 2])
-                    .or_else(|| inputs.get(&self.inputs[j + 2]))
-                    .or_else(|| initializers.get(&self.inputs[j + 2]))
+                    .or_else(|| constants.get(&self.inputs[j + 2]))
                 {
                     let mut t = src.clone();
                     // Cast to steady-state type if needed
@@ -222,17 +212,15 @@ impl Loop {
     pub fn execute(
         &mut self,
         outer_values: &mut HashMap<String, Tensor>,
-        inputs: &HashMap<String, Tensor>,
-        initializers: &HashMap<String, Tensor>,
+        constants: &Constants,
     ) -> Result<()> {
         if self.plan.is_none() {
-            self.init(outer_values, inputs, initializers)?;
+            self.init(outer_values, constants)?;
         }
 
         let trip_tensor = outer_values
             .get(&self.inputs[0])
-            .or_else(|| inputs.get(&self.inputs[0]))
-            .or_else(|| initializers.get(&self.inputs[0]))
+            .or_else(|| constants.get(&self.inputs[0]))
             .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
         let trip_count = trip_tensor
             .i64_at(0)
@@ -244,8 +232,7 @@ impl Loop {
             let name = &self.inputs[j + 2];
             let src = outer_values
                 .get(name)
-                .or_else(|| inputs.get(name))
-                .or_else(|| initializers.get(name))
+                .or_else(|| constants.get(name))
                 .ok_or_else(|| anyhow::anyhow!("Tensor '{name}' not found"))?;
             if src.dtype() != self.carried_types[j] && self.carried_types[j] == DType::Float {
                 self.carried[j]
@@ -258,11 +245,7 @@ impl Loop {
 
         // Update outer references
         for name in &self.outer_refs {
-            if let Some(outer) = outer_values
-                .get(name)
-                .or_else(|| inputs.get(name))
-                .or_else(|| initializers.get(name))
-            {
+            if let Some(outer) = outer_values.get(name).or_else(|| constants.get(name)) {
                 if let Some(body) = self.values.get_mut(name) {
                     body.copy_from(outer);
                 }
@@ -297,6 +280,7 @@ impl Loop {
             ..
         } = self;
         let plan = plan.as_mut().unwrap();
+        let empty_constants = Constants::empty();
 
         let mut actual_iters = 0usize;
         for i in 0..trip_count {
@@ -335,34 +319,32 @@ impl Loop {
                         let (key, mut out) = values
                             .remove_entry(output.as_str())
                             .unwrap_or_else(|| (output.clone(), Tensor::default()));
-                        let empty = HashMap::new();
                         let vals = crate::Values {
                             intermediates: values,
-                            inputs: &empty,
-                            initializers: &empty,
+                            constants: empty_constants.clone(),
                         };
                         let result = layer.execute(&vals, &mut out);
                         values.insert(key, out);
                         result?;
                     }
                     PlanNode::Loop(loop_layer) => {
-                        loop_layer.execute(values, &HashMap::new(), &HashMap::new())?;
+                        loop_layer.execute(values, &empty_constants)?;
                     }
                     PlanNode::Split(split_layer) => {
-                        split_layer.execute(values, &HashMap::new(), &HashMap::new())?;
+                        split_layer.execute(values, &empty_constants)?;
                     }
                     PlanNode::If(if_layer) => {
-                        if_layer.execute(values, &HashMap::new(), &HashMap::new())?;
+                        if_layer.execute(values, &empty_constants)?;
                     }
                     PlanNode::TopK(topk_layer) => {
-                        topk_layer.execute(values, &HashMap::new(), &HashMap::new())?;
+                        topk_layer.execute(values, &empty_constants)?;
                     }
                     PlanNode::Scan(scan_layer) => {
-                        scan_layer.execute(values, &HashMap::new(), &HashMap::new())?;
+                        scan_layer.execute(values, &empty_constants)?;
                     }
                     #[cfg(feature = "xnnpack")]
                     PlanNode::XnnpackSubgraph(sg) => {
-                        sg.execute(values, &HashMap::new(), &HashMap::new())?;
+                        sg.execute(values, &empty_constants)?;
                     }
                 }
             }

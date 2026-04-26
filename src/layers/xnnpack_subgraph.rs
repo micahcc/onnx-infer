@@ -282,12 +282,12 @@ impl SubgraphBuilder {
         &mut self,
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
-        initializers: &HashMap<String, Tensor>,
+        constants: &crate::Constants,
     ) -> Result<()> {
         match cap.op {
-            OpType::Conv => self.add_conv(cap, shape_map, initializers),
+            OpType::Conv => self.add_conv(cap, shape_map, constants),
             OpType::Relu => self.add_relu(cap, shape_map),
-            OpType::Clip => self.add_clip(cap, shape_map, initializers),
+            OpType::Clip => self.add_clip(cap, shape_map, constants),
             OpType::Sigmoid => {
                 self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_sigmoid, None)
             }
@@ -325,8 +325,8 @@ impl SubgraphBuilder {
             OpType::AveragePool => self.add_average_pool(cap, shape_map),
             OpType::GlobalAveragePool => self.add_global_avg_pool(cap, shape_map),
             OpType::Softmax => self.add_softmax(cap, shape_map),
-            OpType::Gemm => self.add_gemm(cap, shape_map, initializers),
-            OpType::MatMul => self.add_matmul(cap, shape_map, initializers),
+            OpType::Gemm => self.add_gemm(cap, shape_map, constants),
+            OpType::MatMul => self.add_matmul(cap, shape_map, constants),
             OpType::Flatten => self.add_flatten(cap, shape_map),
             OpType::Reshape => self.add_reshape(cap, shape_map),
             OpType::Concat => self.add_concat(cap, shape_map),
@@ -340,7 +340,7 @@ impl SubgraphBuilder {
             OpType::Cast => self.add_cast(cap, shape_map),
             OpType::ReduceMin => self.add_reduce_min(cap, shape_map),
             OpType::Softplus => self.add_softplus(cap, shape_map),
-            OpType::BatchNormalization2d => self.add_batchnorm(cap, shape_map, initializers),
+            OpType::BatchNormalization2d => self.add_batchnorm(cap, shape_map, constants),
             _ => anyhow::bail!("XNNPACK: unsupported op {:?}", cap.op),
         }
     }
@@ -353,14 +353,14 @@ impl SubgraphBuilder {
         &mut self,
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
-        initializers: &HashMap<String, Tensor>,
+        constants: &crate::Constants,
     ) -> Result<()> {
         let node = &cap.node;
         let input_name = &cap.inputs[0];
         let weight_name = &cap.inputs[1];
         let output_name = &cap.outputs[0];
 
-        let weight = initializers.get(weight_name).ok_or_else(|| {
+        let weight = constants.get(weight_name).ok_or_else(|| {
             anyhow::anyhow!("XNNPACK Conv: weight {weight_name} not found in initializers")
         })?;
         let w_shape = &weight.dims;
@@ -426,7 +426,7 @@ impl SubgraphBuilder {
         // Bias
         let bias_id = if cap.inputs.len() > 2 && !cap.inputs[2].is_empty() {
             let bias_name = &cap.inputs[2];
-            if let Some(bias_tensor) = initializers.get(bias_name) {
+            if let Some(bias_tensor) = constants.get(bias_name) {
                 self.define_static_value(
                     &format!("{bias_name}__xnn"),
                     &[c_out],
@@ -712,10 +712,10 @@ impl SubgraphBuilder {
         &mut self,
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
-        initializers: &HashMap<String, Tensor>,
+        constants: &crate::Constants,
     ) -> Result<()> {
         let min_val = if cap.inputs.len() > 1 && !cap.inputs[1].is_empty() {
-            initializers
+            constants
                 .get(&cap.inputs[1])
                 .and_then(|t| t.floats().ok().map(|f| f[0]))
                 .unwrap_or(f32::NEG_INFINITY)
@@ -723,7 +723,7 @@ impl SubgraphBuilder {
             cap.node.attrs.get_float("min").unwrap_or(f32::NEG_INFINITY)
         };
         let max_val = if cap.inputs.len() > 2 && !cap.inputs[2].is_empty() {
-            initializers
+            constants
                 .get(&cap.inputs[2])
                 .and_then(|t| t.floats().ok().map(|f| f[0]))
                 .unwrap_or(f32::INFINITY)
@@ -838,26 +838,18 @@ impl SubgraphBuilder {
         &mut self,
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
-        initializers: &HashMap<String, Tensor>,
+        constants: &crate::Constants,
     ) -> Result<()> {
         let input_name = &cap.inputs[0];
         let output_name = &cap.outputs[0];
         let shape = shape_map.get(input_name).cloned().unwrap_or_default();
         let epsilon = cap.node.attrs.get_float("epsilon").unwrap_or(1e-5);
 
-        // Get BN parameters from initializers
-        let gamma = initializers
-            .get(&cap.inputs[1])
-            .context("BN: missing gamma")?;
-        let beta = initializers
-            .get(&cap.inputs[2])
-            .context("BN: missing beta")?;
-        let mean = initializers
-            .get(&cap.inputs[3])
-            .context("BN: missing mean")?;
-        let var = initializers
-            .get(&cap.inputs[4])
-            .context("BN: missing var")?;
+        // Get BN parameters from constants
+        let gamma = constants.get(&cap.inputs[1]).context("BN: missing gamma")?;
+        let beta = constants.get(&cap.inputs[2]).context("BN: missing beta")?;
+        let mean = constants.get(&cap.inputs[3]).context("BN: missing mean")?;
+        let var = constants.get(&cap.inputs[4]).context("BN: missing var")?;
 
         let gamma_f = gamma.floats()?;
         let beta_f = beta.floats()?;
@@ -994,7 +986,7 @@ impl SubgraphBuilder {
         &mut self,
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
-        initializers: &HashMap<String, Tensor>,
+        constants: &crate::Constants,
     ) -> Result<()> {
         let node = &cap.node;
         let trans_b = node.attrs.get_int("transB").unwrap_or(0) != 0;
@@ -1002,7 +994,7 @@ impl SubgraphBuilder {
         let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
 
         let weight_name = &cap.inputs[1];
-        let weight = initializers.get(weight_name).ok_or_else(|| {
+        let weight = constants.get(weight_name).ok_or_else(|| {
             anyhow::anyhow!("XNNPACK Gemm: weight {weight_name} not in initializers")
         })?;
         let w_data = weight.floats().context("XNNPACK Gemm weight")?.to_vec();
@@ -1012,7 +1004,7 @@ impl SubgraphBuilder {
 
         let bias_id = if cap.inputs.len() > 2 && !cap.inputs[2].is_empty() {
             let bias_name = &cap.inputs[2];
-            if let Some(bias_tensor) = initializers.get(bias_name) {
+            if let Some(bias_tensor) = constants.get(bias_name) {
                 self.define_static_value(
                     &format!("{bias_name}__xnn"),
                     &bias_tensor.dims.iter().copied().collect::<Vec<_>>(),
@@ -1056,7 +1048,7 @@ impl SubgraphBuilder {
         &mut self,
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
-        initializers: &HashMap<String, Tensor>,
+        constants: &crate::Constants,
     ) -> Result<()> {
         let a_name = &cap.inputs[0];
         let b_name = &cap.inputs[1];
@@ -1064,9 +1056,9 @@ impl SubgraphBuilder {
         let b_shape = shape_map.get(b_name).cloned().unwrap_or_default();
 
         // 2D static B → fully_connected
-        if a_shape.len() == 2 && b_shape.len() == 2 && initializers.contains_key(b_name) {
+        if a_shape.len() == 2 && b_shape.len() == 2 && constants.get(b_name).is_some() {
             let input_id = self.get_or_define_value(a_name, shape_map)?;
-            let weight = initializers.get(b_name).unwrap();
+            let weight = constants.get(b_name).unwrap();
             let filter_id = self.define_static_value(
                 &format!("{b_name}__xnn"),
                 &b_shape,
@@ -1422,10 +1414,10 @@ fn compute_padding(
 pub fn propagate_shapes(
     ops: &[CapturedOp],
     shape_map: &mut HashMap<String, Vec<usize>>,
-    initializers: &HashMap<String, Tensor>,
+    constants: &crate::Constants,
 ) {
     for op in ops {
-        let shapes = infer_op_output_shapes(op, shape_map, initializers);
+        let shapes = infer_op_output_shapes(op, shape_map, constants);
         for (name, shape) in shapes {
             // Only fill in missing shapes — don't overwrite shapes that are
             // already correct from layout-aware op_type.rs inference.
@@ -1437,7 +1429,7 @@ pub fn propagate_shapes(
 fn infer_op_output_shapes(
     op: &CapturedOp,
     shape_map: &HashMap<String, Vec<usize>>,
-    initializers: &HashMap<String, Tensor>,
+    constants: &crate::Constants,
 ) -> Vec<(String, Vec<usize>)> {
     let get =
         |idx: usize| -> Option<&Vec<usize>> { op.inputs.get(idx).and_then(|n| shape_map.get(n)) };
@@ -1460,7 +1452,7 @@ fn infer_op_output_shapes(
         OpType::Conv => {
             // Input is NHWC: [N, H, W, C_in] (graph_opt inserted transposes)
             if let (Some(x), Some(w_name)) = (get(0), op.inputs.get(1)) {
-                if let Some(w) = initializers.get(w_name.as_str()) {
+                if let Some(w) = constants.get(w_name.as_str()) {
                     if x.len() == 4 && w.dims.len() == 4 {
                         let n = x[0];
                         let h_in = x[1];
@@ -1633,7 +1625,7 @@ fn infer_op_output_shapes(
         OpType::Reshape => {
             // Output shape comes from the shape input (initializer or constant-folded)
             if let Some(shape_name) = op.inputs.get(1) {
-                if let Some(t) = initializers.get(shape_name.as_str()) {
+                if let Some(t) = constants.get(shape_name.as_str()) {
                     if let Ok(vals) = t.ints() {
                         let in_shape = get(0);
                         let total: usize = in_shape.map(|s| s.iter().product()).unwrap_or(0);
@@ -1900,15 +1892,14 @@ impl XnnpackSubgraph {
     pub fn execute(
         &mut self,
         values: &mut HashMap<String, Tensor>,
-        inputs: &HashMap<String, Tensor>,
-        initializers: &HashMap<String, Tensor>,
+        constants: &crate::Constants,
     ) -> Result<()> {
         let _span = tracing::trace_span!("xnnpack_subgraph").entered();
 
-        self.ensure_compiled(values, inputs, initializers)?;
+        self.ensure_compiled(values, constants)?;
 
         if self.compile_failed {
-            return self.execute_fallback(values, initializers);
+            return self.execute_fallback(values, constants);
         }
 
         let compiled = self.compiled.as_ref().unwrap();
@@ -1916,12 +1907,12 @@ impl XnnpackSubgraph {
         // On shape mismatch, recompile with the new shapes.
         let mut needs_recompile = false;
         for (i, name) in compiled.input_names.iter().enumerate() {
-            if let Some(tensor) = inputs.get(name).or_else(|| values.get(name)) {
+            if let Some(tensor) = constants.inputs.get(name).or_else(|| values.get(name)) {
                 if tensor.dtype() != crate::DType::Float {
                     tracing::debug!("XNNPACK: dtype mismatch for '{name}'");
                     self.compiled = None;
                     self.compile_failed = true;
-                    return self.execute_fallback(values, initializers);
+                    return self.execute_fallback(values, constants);
                 }
                 let runtime_shape: Vec<usize> = tensor.dims.to_vec();
                 if runtime_shape != compiled.input_shapes[i] {
@@ -1954,7 +1945,7 @@ impl XnnpackSubgraph {
             for op in &self.ops {
                 for name in &op.inputs {
                     if !name.is_empty() && !produced.contains(name.as_str()) {
-                        if let Some(t) = inputs.get(name).or_else(|| values.get(name)) {
+                        if let Some(t) = constants.inputs.get(name).or_else(|| values.get(name)) {
                             if !t.dims.is_empty() {
                                 self.shape_hints.insert(name.clone(), t.dims.to_vec());
                             }
@@ -1962,9 +1953,9 @@ impl XnnpackSubgraph {
                     }
                 }
             }
-            self.ensure_compiled(values, inputs, initializers)?;
+            self.ensure_compiled(values, constants)?;
             if self.compile_failed {
-                return self.execute_fallback(values, initializers);
+                return self.execute_fallback(values, constants);
             }
         }
 
@@ -1978,13 +1969,13 @@ impl XnnpackSubgraph {
         let num_external = compiled.input_names.len() + compiled.output_names.len();
         let mut external_values = Vec::with_capacity(num_external);
 
-        // Ensure all external inputs are in values (may come from inputs or initializers).
+        // Ensure all external inputs are in values (may come from constants).
         // Always prefer fresh user inputs over stale intermediates.
         for name in &compiled.input_names {
-            if let Some(t) = inputs.get(name) {
+            if let Some(t) = constants.inputs.get(name) {
                 values.insert(name.clone(), t.clone());
             } else if !values.contains_key(name) {
-                if let Some(t) = initializers.get(name) {
+                if let Some(t) = constants.get(name) {
                     values.insert(name.clone(), t.clone());
                 }
             }
@@ -2024,7 +2015,7 @@ impl XnnpackSubgraph {
                 tracing::debug!("XNNPACK: reshape failed: {:?}", status);
                 self.compiled = None;
                 self.compile_failed = true;
-                return self.execute_fallback(values, initializers);
+                return self.execute_fallback(values, constants);
             }
             compiled.is_setup = true;
         }
@@ -2040,7 +2031,7 @@ impl XnnpackSubgraph {
             tracing::debug!("XNNPACK: setup failed: {:?}", status);
             self.compiled = None;
             self.compile_failed = true;
-            return self.execute_fallback(values, initializers);
+            return self.execute_fallback(values, constants);
         }
 
         let status = unsafe { xnn_invoke_runtime(compiled.runtime) };
@@ -2048,7 +2039,7 @@ impl XnnpackSubgraph {
             tracing::debug!("XNNPACK: invoke failed: {:?}", status);
             self.compiled = None;
             self.compile_failed = true;
-            return self.execute_fallback(values, initializers);
+            return self.execute_fallback(values, constants);
         }
 
         // Truncate padding from input tensors (restore original length)
@@ -2075,8 +2066,7 @@ impl XnnpackSubgraph {
     fn ensure_compiled(
         &mut self,
         values: &HashMap<String, Tensor>,
-        inputs: &HashMap<String, Tensor>,
-        initializers: &HashMap<String, Tensor>,
+        constants: &crate::Constants,
     ) -> Result<()> {
         if self.compiled.is_some() || self.compile_failed {
             return Ok(());
@@ -2099,7 +2089,7 @@ impl XnnpackSubgraph {
             .filter(|(k, _)| !produced.contains(k.as_str()))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        for (name, tensor) in initializers {
+        for (name, tensor) in constants.initializers.iter().chain(constants.folded.iter()) {
             if !shape_map.contains_key(name) && !tensor.dims.is_empty() {
                 shape_map.insert(name.clone(), tensor.dims.to_vec());
             }
@@ -2109,9 +2099,9 @@ impl XnnpackSubgraph {
             for name in &op.inputs {
                 if !name.is_empty()
                     && !produced.contains(name.as_str())
-                    && !initializers.contains_key(name)
+                    && constants.get(name).is_none()
                 {
-                    if let Some(t) = inputs.get(name).or_else(|| values.get(name)) {
+                    if let Some(t) = constants.inputs.get(name).or_else(|| values.get(name)) {
                         if !t.dims.is_empty() {
                             shape_map.insert(name.clone(), t.dims.to_vec());
                         }
@@ -2126,9 +2116,9 @@ impl XnnpackSubgraph {
                 for inp in &op.inputs {
                     if !inp.is_empty()
                         && !produced.contains(inp.as_str())
-                        && !initializers.contains_key(inp)
+                        && constants.get(inp).is_none()
                     {
-                        if let Some(t) = inputs.get(inp).or_else(|| values.get(inp)) {
+                        if let Some(t) = constants.inputs.get(inp).or_else(|| values.get(inp)) {
                             if t.dtype() != crate::DType::Float {
                                 tracing::debug!(
                                     "XNNPACK: non-float input '{inp}' dtype={:?}",
@@ -2144,13 +2134,13 @@ impl XnnpackSubgraph {
         }
 
         // Fill in any missing shapes (e.g. for Reshape outputs not in hints)
-        propagate_shapes(&self.ops, &mut shape_map, initializers);
+        propagate_shapes(&self.ops, &mut shape_map, constants);
 
         // Verify all shapes are known
         let mut missing_shape = false;
         for op in &self.ops {
             for name in op.inputs.iter().chain(op.outputs.iter()) {
-                if name.is_empty() || initializers.contains_key(name) {
+                if name.is_empty() || constants.get(name).is_some() {
                     continue;
                 }
                 match shape_map.get(name) {
@@ -2168,7 +2158,7 @@ impl XnnpackSubgraph {
             return Ok(());
         }
 
-        match compile_subgraph(&self.ops, &self.required_outputs, &shape_map, initializers) {
+        match compile_subgraph(&self.ops, &self.required_outputs, &shape_map, constants) {
             Ok(compiled) => {
                 tracing::debug!(
                     "XNNPACK: compiled subgraph: {} inputs, {} outputs, {} ops",
@@ -2190,11 +2180,17 @@ impl XnnpackSubgraph {
     fn execute_fallback(
         &mut self,
         values: &mut HashMap<String, Tensor>,
-        initializers: &HashMap<String, Tensor>,
+        constants: &crate::Constants,
     ) -> Result<()> {
         // Run each captured op on CPU via the normal plan execution path.
-        // Load subgraph-local initializers into values so ops can find them.
-        for (k, v) in initializers {
+        // Load constants into values so ops can find them.
+        for (k, v) in constants.folded.iter() {
+            values.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        for (k, v) in constants.initializers {
+            values.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        for (k, v) in constants.inputs {
             values.entry(k.clone()).or_insert_with(|| v.clone());
         }
         for op in &self.ops {
@@ -2217,11 +2213,10 @@ fn compile_subgraph(
     ops: &[CapturedOp],
     required_outputs: &[String],
     shape_map: &HashMap<String, Vec<usize>>,
-    initializers: &HashMap<String, Tensor>,
+    constants: &crate::Constants,
 ) -> Result<CompiledSubgraph> {
     // Identify external inputs (consumed but not produced, not initializers)
     let mut produced: HashSet<String> = HashSet::new();
-    let init_names: HashSet<&str> = initializers.keys().map(|s| s.as_str()).collect();
     for op in ops {
         for out in &op.outputs {
             produced.insert(out.clone());
@@ -2230,7 +2225,7 @@ fn compile_subgraph(
     let mut external_input_set: HashSet<String> = HashSet::new();
     for op in ops {
         for inp in &op.inputs {
-            if !inp.is_empty() && !produced.contains(inp) && !init_names.contains(inp.as_str()) {
+            if !inp.is_empty() && !produced.contains(inp) && constants.get(inp).is_none() {
                 external_input_set.insert(inp.clone());
             }
         }
@@ -2281,7 +2276,7 @@ fn compile_subgraph(
     for op in ops {
         for inp in &op.inputs {
             if !inp.is_empty() && !builder.value_ids.contains_key(inp) && !produced.contains(inp) {
-                if let Some(tensor) = initializers.get(inp) {
+                if let Some(tensor) = constants.get(inp) {
                     if tensor.dtype() == crate::DType::Float {
                         let shape: Vec<usize> = tensor.dims.iter().copied().collect();
                         let data = tensor.floats().context("XNNPACK initializer")?.to_vec();
@@ -2294,7 +2289,7 @@ fn compile_subgraph(
 
     // Add all ops
     for op in ops {
-        builder.add_op(op, shape_map, initializers)?;
+        builder.add_op(op, shape_map, constants)?;
     }
 
     // Create runtime

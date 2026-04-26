@@ -65,6 +65,7 @@ pub mod onnx {
 }
 
 pub mod blas;
+pub mod constants;
 pub mod dtype;
 pub mod graph_opt;
 pub mod inference_engine;
@@ -73,8 +74,10 @@ pub mod layers;
 pub mod onnx_ir;
 pub mod tensor_data;
 pub mod utils;
+pub mod values;
 #[cfg(feature = "xnnpack")]
 pub mod xnnpack_ffi;
+pub use constants::Constants;
 pub use dtype::DType;
 pub use dtype::ONNX_DOUBLE;
 pub use dtype::ONNX_FLOAT;
@@ -92,12 +95,12 @@ pub use tensor_data::Layout;
 pub use tensor_data::ShapeLayout;
 pub use tensor_data::Tensor;
 pub use tensor_data::TensorData;
-pub use utils::Values;
 pub use utils::broadcast_index;
 pub use utils::broadcast_shape;
 pub use utils::broadcast_shape_into;
-pub use utils::get_tensor;
 pub use utils::get_tensor_map;
+pub use values::Values;
+pub use values::get_tensor;
 
 #[cfg(test)]
 mod tests;

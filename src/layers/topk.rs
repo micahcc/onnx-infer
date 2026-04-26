@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 
+use crate::Constants;
 use crate::Result;
 use crate::Tensor;
 
@@ -29,15 +30,10 @@ impl TopK {
     pub fn execute(
         &mut self,
         values: &mut HashMap<String, Tensor>,
-        inputs: &HashMap<String, Tensor>,
-        initializers: &HashMap<String, Tensor>,
+        constants: &Constants,
     ) -> Result<()> {
-        let lookup = |name: &str| -> Option<&Tensor> {
-            values
-                .get(name)
-                .or_else(|| inputs.get(name))
-                .or_else(|| initializers.get(name))
-        };
+        let lookup =
+            |name: &str| -> Option<&Tensor> { values.get(name).or_else(|| constants.get(name)) };
         let input = lookup(&self.inputs[0])
             .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
         let k_tensor = lookup(&self.inputs[1])

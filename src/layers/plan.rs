@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::Context;
 
@@ -115,6 +116,11 @@ pub struct Plan {
     pub output_names: Vec<String>,
     pub shape_map: HashMap<String, ShapeLayout>,
     pub type_map: HashMap<String, DType>,
+    /// Constants folded during plan building. These may depend on input
+    /// values/shapes and are specific to this plan, so they live here
+    /// rather than in the shared initializers map. Wrapped in Arc so
+    /// execution can cheaply hold a reference while mutating the plan.
+    pub folded: Arc<HashMap<String, Tensor>>,
 }
 
 impl Plan {
@@ -236,6 +242,7 @@ impl Plan {
         }
 
         let mut known_values: HashMap<String, Tensor> = HashMap::new();
+        let mut folded: HashMap<String, Tensor> = HashMap::new();
         for (name, tensor) in input_values {
             known_values.insert(name.clone(), tensor.clone());
         }
@@ -294,17 +301,14 @@ impl Plan {
                 &shape_map,
             ) {
                 if let Some(out_name) = out_name {
-                    // Set layout based on op type (constant-folded tensors default to NCHW)
                     tensor.layout = infer_output_layout(op, node, &shape_map, &layout_only);
                     shape_map.insert(
                         out_name.clone(),
                         ShapeLayout::new(tensor.dims.clone(), tensor.layout),
                     );
-                    initializers.insert(out_name.clone(), tensor.clone());
+                    folded.insert(out_name.clone(), tensor.clone());
                     known_values.insert(out_name.clone(), tensor);
                 }
-                // Skip adding to plan — output is already in initializers
-                // and will be available at runtime via the values map.
                 continue;
             }
             if let Some(shape) =
@@ -366,7 +370,7 @@ impl Plan {
                 }
             }
 
-            // Try to fold Loop ops when all inputs are known
+            // Try to fold Loop ops when all inputs are known and none are tainted
             if op == OpType::Loop {
                 let all_inputs_known = node.inputs.iter().all(|n| {
                     n.is_empty() || known_values.contains_key(n) || initializers.contains_key(n)
@@ -393,9 +397,9 @@ impl Plan {
                             }
                         }
                         if let Ok(()) =
-                            loop_layer.execute(&mut temp_values, &HashMap::new(), &HashMap::new())
+                            loop_layer.execute(&mut temp_values, &crate::Constants::empty())
                         {
-                            let mut folded = true;
+                            let mut loop_folded = true;
                             for out_name in &node.outputs {
                                 if !out_name.is_empty() {
                                     if let Some(t) = temp_values.remove(out_name) {
@@ -403,14 +407,14 @@ impl Plan {
                                             out_name.clone(),
                                             ShapeLayout::new(t.dims.clone(), t.layout),
                                         );
-                                        initializers.insert(out_name.clone(), t.clone());
+                                        folded.insert(out_name.clone(), t.clone());
                                         known_values.insert(out_name.clone(), t);
                                     } else {
-                                        folded = false;
+                                        loop_folded = false;
                                     }
                                 }
                             }
-                            if folded {
+                            if loop_folded {
                                 continue;
                             }
                         }
@@ -485,6 +489,7 @@ impl Plan {
             output_names,
             shape_map,
             type_map,
+            folded: Arc::new(folded),
         })
     }
 }
@@ -537,11 +542,9 @@ fn try_propagate_value(
     let plan_node = build_node(op, node, input_names.to_vec(), shape_map).ok()?;
     if let PlanNode::Single { mut layer, .. } = plan_node {
         let mut output = Tensor::default();
-        let empty = HashMap::new();
         let vals = crate::Values {
             intermediates: &temp_values,
-            inputs: &empty,
-            initializers: &empty,
+            constants: crate::Constants::empty(),
         };
         layer.execute(&vals, &mut output).ok()?;
         Some(output)
@@ -1170,7 +1173,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
             _ => anyhow::bail!("Loop: no body graph"),
         };
         let mut loop_layer = loop_op::Loop::new(node.inputs.clone(), node.outputs.clone(), body);
-        return loop_layer.execute(values, &HashMap::new(), &HashMap::new());
+        return loop_layer.execute(values, &crate::Constants::empty());
     }
 
     if op == OpType::Split {
@@ -1178,7 +1181,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
         let split_sizes = node.attrs.get_ints("split").unwrap_or_default();
         let mut split_layer =
             split::Split::new(node.inputs.clone(), node.outputs.clone(), axis, split_sizes);
-        return split_layer.execute(values, &HashMap::new(), &HashMap::new());
+        return split_layer.execute(values, &crate::Constants::empty());
     }
 
     if op == OpType::If {
@@ -1196,7 +1199,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
             then_branch,
             else_branch,
         );
-        return if_layer.execute(values, &HashMap::new(), &HashMap::new());
+        return if_layer.execute(values, &crate::Constants::empty());
     }
 
     if op == OpType::TopK {
@@ -1204,7 +1207,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
         let largest = node.attrs.get_int("largest").unwrap_or(1) != 0;
         let mut topk_layer =
             topk::TopK::new(node.inputs.clone(), node.outputs.clone(), axis, largest);
-        return topk_layer.execute(values, &HashMap::new(), &HashMap::new());
+        return topk_layer.execute(values, &crate::Constants::empty());
     }
 
     if op == OpType::Scan {
@@ -1229,7 +1232,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
             scan_input_directions,
             scan_output_directions,
         );
-        return scan_layer.execute(values, &HashMap::new(), &HashMap::new());
+        return scan_layer.execute(values, &crate::Constants::empty());
     }
 
     if node.outputs.is_empty() || node.outputs[0].is_empty() {
@@ -1269,23 +1272,19 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
     match &mut plan_node {
         PlanNode::Single { output, layer } => {
             let mut out = values.remove(output.as_str()).unwrap_or_default();
-            let empty = HashMap::new();
             let vals = crate::Values {
                 intermediates: values,
-                inputs: &empty,
-                initializers: &empty,
+                constants: crate::Constants::empty(),
             };
             let result = layer.execute(&vals, &mut out);
             values.insert(output.clone(), out);
             result
         }
-        PlanNode::Loop(loop_layer) => loop_layer.execute(values, &HashMap::new(), &HashMap::new()),
-        PlanNode::Split(split_layer) => {
-            split_layer.execute(values, &HashMap::new(), &HashMap::new())
-        }
-        PlanNode::If(if_layer) => if_layer.execute(values, &HashMap::new(), &HashMap::new()),
-        PlanNode::TopK(topk_layer) => topk_layer.execute(values, &HashMap::new(), &HashMap::new()),
-        PlanNode::Scan(scan_layer) => scan_layer.execute(values, &HashMap::new(), &HashMap::new()),
+        PlanNode::Loop(loop_layer) => loop_layer.execute(values, &crate::Constants::empty()),
+        PlanNode::Split(split_layer) => split_layer.execute(values, &crate::Constants::empty()),
+        PlanNode::If(if_layer) => if_layer.execute(values, &crate::Constants::empty()),
+        PlanNode::TopK(topk_layer) => topk_layer.execute(values, &crate::Constants::empty()),
+        PlanNode::Scan(scan_layer) => scan_layer.execute(values, &crate::Constants::empty()),
         #[cfg(feature = "xnnpack")]
         PlanNode::XnnpackSubgraph(_) => {
             anyhow::bail!("XnnpackSubgraph cannot be executed via execute_node")

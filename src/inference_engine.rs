@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use anyhow::Context;
 use prost::Message;
 
+use crate::Constants;
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
@@ -202,7 +203,7 @@ impl InferenceEngine {
             Plan::build_with_xnnpack(
                 &self.graph,
                 &input_sizes,
-                &HashMap::new(),
+                &self.inputs,
                 &mut self.initializers,
             )?
         } else {
@@ -280,6 +281,11 @@ impl InferenceEngine {
         let _span = tracing::trace_span!("inference").entered();
 
         let plan_idx = self.current_plan.unwrap();
+        let constants = Constants {
+            inputs: &self.inputs,
+            folded: self.plan_cache[plan_idx].folded.clone(),
+            initializers: &self.initializers,
+        };
         let plan = &mut self.plan_cache[plan_idx];
         for node in &mut plan.nodes {
             match node {
@@ -294,56 +300,35 @@ impl InferenceEngine {
                         .unwrap_or_else(|| (output.clone(), Tensor::default()));
                     let values = Values {
                         intermediates: &self.intermediates,
-                        inputs: &self.inputs,
-                        initializers: &self.initializers,
+                        constants: constants.clone(),
                     };
                     layer.execute(&values, &mut out)?;
                     self.intermediates.insert(key, out);
                 }
                 PlanNode::Loop(loop_layer) => {
-                    loop_layer.execute(
-                        &mut self.intermediates,
-                        &self.inputs,
-                        &self.initializers,
-                    )?;
+                    loop_layer.execute(&mut self.intermediates, &constants)?;
                 }
                 PlanNode::Split(split_layer) => {
-                    split_layer.execute(
-                        &mut self.intermediates,
-                        &self.inputs,
-                        &self.initializers,
-                    )?;
+                    split_layer.execute(&mut self.intermediates, &constants)?;
                 }
                 PlanNode::If(if_layer) => {
-                    if_layer.execute(&mut self.intermediates, &self.inputs, &self.initializers)?;
+                    if_layer.execute(&mut self.intermediates, &constants)?;
                 }
                 PlanNode::TopK(topk_layer) => {
-                    topk_layer.execute(
-                        &mut self.intermediates,
-                        &self.inputs,
-                        &self.initializers,
-                    )?;
+                    topk_layer.execute(&mut self.intermediates, &constants)?;
                 }
                 PlanNode::Scan(scan_layer) => {
-                    scan_layer.execute(
-                        &mut self.intermediates,
-                        &self.inputs,
-                        &self.initializers,
-                    )?;
+                    scan_layer.execute(&mut self.intermediates, &constants)?;
                 }
                 #[cfg(feature = "xnnpack")]
                 PlanNode::XnnpackSubgraph(sg) => {
-                    sg.execute(&mut self.intermediates, &self.inputs, &self.initializers)?;
+                    sg.execute(&mut self.intermediates, &constants)?;
                 }
             }
         }
 
         for name in output_names {
-            let src = self
-                .intermediates
-                .get(name)
-                .or_else(|| self.inputs.get(name))
-                .or_else(|| self.initializers.get(name));
+            let src = self.intermediates.get(name).or_else(|| constants.get(name));
             if let Some(src) = src {
                 let dst = outputs.entry(name.clone()).or_default();
                 dst.copy_from(src);
