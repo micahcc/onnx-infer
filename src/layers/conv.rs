@@ -368,9 +368,7 @@ impl Layer for Conv {
         let gemm_k = p.c_in_per_group * kh * kw;
         let gemm_n = spatial_out;
 
-        if !self.nhwc {
-            return self.execute_naive(values, output);
-        }
+        assert!(self.nhwc, "Conv::execute requires NHWC input layout");
 
         // NHWC path: im2col from NHWC input, GEMM to temp buffer, scatter to NHWC output
         let group_gemm_size = p.c_out_per_group * spatial_out;
