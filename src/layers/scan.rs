@@ -155,7 +155,7 @@ impl Scan {
             }
         }
 
-        let plan = Plan::build_with_types(&self.body, &shape_hints, &type_hints, &mut self.values)?;
+        let plan = Plan::build_with_types(&self.body, &shape_hints, &type_hints, &self.values)?;
         for name in &self.outer_refs {
             if let Some(t) = outer_values.get(name).or_else(|| constants.get(name)) {
                 self.values.insert(name.clone(), t.clone());

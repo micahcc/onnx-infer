@@ -132,8 +132,7 @@ impl Loop {
         }
 
         // Build plan to determine steady-state types via type inference
-        let probe =
-            Plan::build_with_types(&self.body, &HashMap::new(), &type_hints, &mut self.values)?;
+        let probe = Plan::build_with_types(&self.body, &HashMap::new(), &type_hints, &self.values)?;
 
         // Determine steady-state carried types from output inference
         let mut needs_rebuild = false;
@@ -156,7 +155,7 @@ impl Loop {
 
         // Rebuild with corrected types if any carried input/output types differed
         let plan = if needs_rebuild {
-            Plan::build_with_types(&self.body, &HashMap::new(), &type_hints, &mut self.values)?
+            Plan::build_with_types(&self.body, &HashMap::new(), &type_hints, &self.values)?
         } else {
             probe
         };

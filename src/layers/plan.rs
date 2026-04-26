@@ -129,13 +129,7 @@ impl Plan {
         input_sizes: &HashMap<String, Dims>,
         initializers: &HashMap<String, Tensor>,
     ) -> Result<Self> {
-        Self::build_full(
-            graph,
-            input_sizes,
-            &HashMap::new(),
-            &HashMap::new(),
-            initializers,
-        )
+        Self::build_full(graph, input_sizes, &HashMap::new(), initializers)
     }
 
     pub fn build_with_types(
@@ -144,54 +138,31 @@ impl Plan {
         type_hints: &HashMap<String, DType>,
         initializers: &HashMap<String, Tensor>,
     ) -> Result<Self> {
-        Self::build_full(
-            graph,
-            input_sizes,
-            type_hints,
-            &HashMap::new(),
-            initializers,
-        )
+        Self::build_full(graph, input_sizes, type_hints, initializers)
     }
 
     #[cfg(feature = "xnnpack")]
     pub fn build_with_xnnpack(
         graph: &Graph,
         input_sizes: &HashMap<String, Dims>,
-        input_values: &HashMap<String, Tensor>,
         initializers: &HashMap<String, Tensor>,
     ) -> Result<Self> {
-        Self::build_full_inner(
-            graph,
-            input_sizes,
-            &HashMap::new(),
-            input_values,
-            true,
-            initializers,
-        )
+        Self::build_full_inner(graph, input_sizes, &HashMap::new(), true, initializers)
     }
 
     pub fn build_full(
         graph: &Graph,
         input_sizes: &HashMap<String, Dims>,
         type_hints: &HashMap<String, DType>,
-        input_values: &HashMap<String, Tensor>,
         initializers: &HashMap<String, Tensor>,
     ) -> Result<Self> {
-        Self::build_full_inner(
-            graph,
-            input_sizes,
-            type_hints,
-            input_values,
-            false,
-            initializers,
-        )
+        Self::build_full_inner(graph, input_sizes, type_hints, false, initializers)
     }
 
     fn build_full_inner(
         graph: &Graph,
         input_sizes: &HashMap<String, Dims>,
         type_hints: &HashMap<String, DType>,
-        input_values: &HashMap<String, Tensor>,
         #[allow(unused)] enable_xnnpack: bool,
         initializers: &HashMap<String, Tensor>,
     ) -> Result<Self> {
@@ -243,9 +214,6 @@ impl Plan {
 
         let mut known_values: HashMap<String, Tensor> = HashMap::new();
         let mut folded: HashMap<String, Tensor> = HashMap::new();
-        for (name, tensor) in input_values {
-            known_values.insert(name.clone(), tensor.clone());
-        }
 
         let mut nodes = Vec::new();
         #[cfg(feature = "xnnpack")]
@@ -503,12 +471,12 @@ fn try_propagate_value(
     shape_map: &HashMap<String, ShapeLayout>,
 ) -> Option<Tensor> {
     if op == OpType::Shape {
+        // Only fold Shape if the input is a known constant (initializer or previously folded).
+        // Shape of runtime tensors must be computed at runtime because shape inference
+        // can be inaccurate for dynamic dimensions (e.g. spatial dims in detection models).
         let name = input_names.first().filter(|s| !s.is_empty())?;
-        let sl = shape_map.get(name)?;
-        if sl.dims.contains(&0) {
-            return None;
-        }
-        let dims: Vec<i64> = sl.dims.iter().map(|&d| d as i64).collect();
+        let tensor = known_values.get(name).or_else(|| initializers.get(name))?;
+        let dims: Vec<i64> = tensor.dims.iter().map(|&d| d as i64).collect();
         return Some(Tensor::new_i64(dims![dims.len()], dims));
     }
 

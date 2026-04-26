@@ -195,13 +195,12 @@ impl InferenceEngine {
 
         #[cfg(feature = "xnnpack")]
         let plan = if self.use_xnnpack {
-            Plan::build_with_xnnpack(&self.graph, &input_sizes, &self.inputs, &self.initializers)?
+            Plan::build_with_xnnpack(&self.graph, &input_sizes, &self.initializers)?
         } else {
             Plan::build_full(
                 &self.graph,
                 &input_sizes,
                 &HashMap::new(),
-                &self.inputs,
                 &self.initializers,
             )?
         };
@@ -212,7 +211,6 @@ impl InferenceEngine {
                 &self.graph,
                 &input_sizes,
                 &HashMap::new(),
-                &self.inputs,
                 &self.initializers,
             )?
         };
