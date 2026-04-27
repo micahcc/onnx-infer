@@ -21,6 +21,7 @@ use crate::Result;
 use crate::Tensor;
 use crate::layers::OpType;
 use crate::onnx_ir::Node;
+use crate::onnx_ir::NodeOp;
 use crate::xnnpack_ffi::*;
 
 // ---------------------------------------------------------------------------
@@ -338,7 +339,7 @@ impl SubgraphBuilder {
             OpType::Resize => self.add_resize(cap, shape_map),
             OpType::Round => self.add_round(cap, shape_map),
             OpType::Cast => self.add_cast(cap, shape_map),
-            OpType::ReduceMin => self.add_reduce_min(cap, shape_map),
+            OpType::ReduceMin => self.add_reduce_min(cap, shape_map, constants),
             OpType::Softplus => self.add_softplus(cap, shape_map),
             OpType::BatchNormalization2d => self.add_batchnorm(cap, shape_map, constants),
             _ => anyhow::bail!("XNNPACK: unsupported op {:?}", cap.op),
@@ -369,17 +370,23 @@ impl SubgraphBuilder {
         let kh = w_shape[2];
         let kw = w_shape[3];
 
-        let group = node.attrs.get_int("group").unwrap_or(1) as usize;
-        let strides_attr = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-        let pads_attr = node
-            .attrs
-            .get_ints("pads")
-            .unwrap_or_else(|| vec![0, 0, 0, 0]);
-        let dilations_attr = node
-            .attrs
-            .get_ints("dilations")
-            .unwrap_or_else(|| vec![1, 1]);
-        let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
+        let (group, strides_attr, pads_attr, dilations_attr, auto_pad) = match &node.op {
+            NodeOp::Conv {
+                group,
+                strides,
+                pads,
+                dilations,
+                auto_pad,
+                ..
+            } => (
+                *group as usize,
+                strides.clone(),
+                pads.clone(),
+                dilations.clone(),
+                auto_pad.clone(),
+            ),
+            _ => (1, vec![1, 1], vec![0, 0, 0, 0], vec![1, 1], String::new()),
+        };
 
         let stride = Stride2D {
             h: strides_attr[0] as u32,
@@ -505,14 +512,21 @@ impl SubgraphBuilder {
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
-        let node = &cap.node;
-        let ks_attr = node.attrs.get_ints("kernel_shape").unwrap_or_default();
-        let strides_attr = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-        let pads_attr = node
-            .attrs
-            .get_ints("pads")
-            .unwrap_or_else(|| vec![0, 0, 0, 0]);
-        let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
+        let (ks_attr, strides_attr, pads_attr, auto_pad) = match &cap.node.op {
+            NodeOp::MaxPool {
+                kernel_shape,
+                strides,
+                pads,
+                auto_pad,
+                ..
+            } => (
+                kernel_shape.clone(),
+                strides.clone(),
+                pads.clone(),
+                auto_pad.clone(),
+            ),
+            _ => (vec![], vec![1, 1], vec![0, 0, 0, 0], String::new()),
+        };
 
         let kh = ks_attr[0] as usize;
         let kw = ks_attr[1] as usize;
@@ -568,14 +582,21 @@ impl SubgraphBuilder {
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
-        let node = &cap.node;
-        let ks_attr = node.attrs.get_ints("kernel_shape").unwrap_or_default();
-        let strides_attr = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-        let pads_attr = node
-            .attrs
-            .get_ints("pads")
-            .unwrap_or_else(|| vec![0, 0, 0, 0]);
-        let auto_pad = node.attrs.get_string("auto_pad").unwrap_or_default();
+        let (ks_attr, strides_attr, pads_attr, auto_pad) = match &cap.node.op {
+            NodeOp::AveragePool {
+                kernel_shape,
+                strides,
+                pads,
+                auto_pad,
+                ..
+            } => (
+                kernel_shape.clone(),
+                strides.clone(),
+                pads.clone(),
+                auto_pad.clone(),
+            ),
+            _ => (vec![], vec![1, 1], vec![0, 0, 0, 0], String::new()),
+        };
 
         let kh = ks_attr[0] as usize;
         let kw = ks_attr[1] as usize;
@@ -720,7 +741,7 @@ impl SubgraphBuilder {
                 .and_then(|t| t.floats().ok().map(|f| f[0]))
                 .unwrap_or(f32::NEG_INFINITY)
         } else {
-            cap.node.attrs.get_float("min").unwrap_or(f32::NEG_INFINITY)
+            f32::NEG_INFINITY
         };
         let max_val = if cap.inputs.len() > 2 && !cap.inputs[2].is_empty() {
             constants
@@ -728,7 +749,7 @@ impl SubgraphBuilder {
                 .and_then(|t| t.floats().ok().map(|f| f[0]))
                 .unwrap_or(f32::INFINITY)
         } else {
-            cap.node.attrs.get_float("max").unwrap_or(f32::INFINITY)
+            f32::INFINITY
         };
         let params = xnn_unary_params {
             clamp: xnn_unary_params__bindgen_ty_1 {
@@ -749,7 +770,10 @@ impl SubgraphBuilder {
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
-        let alpha = cap.node.attrs.get_float("alpha").unwrap_or(0.01);
+        let alpha = match &cap.node.op {
+            NodeOp::LeakyRelu { alpha } => *alpha,
+            _ => 0.01,
+        };
         let params = xnn_unary_params {
             leaky_relu: xnn_unary_params__bindgen_ty_3 {
                 negative_slope: alpha,
@@ -843,7 +867,10 @@ impl SubgraphBuilder {
         let input_name = &cap.inputs[0];
         let output_name = &cap.outputs[0];
         let shape = shape_map.get(input_name).cloned().unwrap_or_default();
-        let epsilon = cap.node.attrs.get_float("epsilon").unwrap_or(1e-5);
+        let epsilon = match &cap.node.op {
+            NodeOp::BatchNormalization2d { epsilon } => *epsilon,
+            _ => 1e-5,
+        };
 
         // Get BN parameters from constants
         let gamma = constants.get(&cap.inputs[1]).context("BN: missing gamma")?;
@@ -988,8 +1015,10 @@ impl SubgraphBuilder {
         shape_map: &HashMap<String, Vec<usize>>,
         constants: &crate::Constants,
     ) -> Result<()> {
-        let node = &cap.node;
-        let trans_b = node.attrs.get_int("transB").unwrap_or(0) != 0;
+        let trans_b = match &cap.node.op {
+            NodeOp::Gemm { trans_b, .. } => *trans_b,
+            _ => false,
+        };
 
         let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
 
@@ -1104,7 +1133,10 @@ impl SubgraphBuilder {
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
         let in_shape = shape_map.get(&cap.inputs[0]).cloned().unwrap_or_default();
-        let axis = cap.node.attrs.get_int("axis").unwrap_or(1) as usize;
+        let axis = match &cap.node.op {
+            NodeOp::Flatten { axis } => *axis as usize,
+            _ => 1,
+        };
         let outer: usize = in_shape[..axis].iter().product();
         let inner: usize = in_shape[axis..].iter().product();
         let new_shape = [outer, inner];
@@ -1152,7 +1184,10 @@ impl SubgraphBuilder {
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
-        let raw_axis = cap.node.attrs.get_int("axis").unwrap_or(0);
+        let raw_axis = match &cap.node.op {
+            NodeOp::Concat { axis } => *axis,
+            _ => 0,
+        };
         let out_shape = shape_map.get(&cap.outputs[0]).cloned().unwrap_or_default();
         let ndim = out_shape.len() as i64;
         let axis = if raw_axis < 0 {
@@ -1188,7 +1223,7 @@ impl SubgraphBuilder {
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
         let in_shape = shape_map.get(&cap.inputs[0]).cloned().unwrap_or_default();
-        let perm: Vec<usize> = if let Some(p) = cap.node.attrs.get_ints("perm") {
+        let perm: Vec<usize> = if let Some(p) = cap.node.op.perm() {
             p.iter().map(|&v| v as usize).collect()
         } else {
             (0..in_shape.len()).rev().collect()
@@ -1261,6 +1296,18 @@ impl SubgraphBuilder {
         shape_map: &HashMap<String, Vec<usize>>,
         constants: &crate::Constants,
     ) -> Result<()> {
+        // XNNPACK static_slice doesn't support strides — bail if steps != 1.
+        if let Some(steps) = cap
+            .inputs
+            .get(4)
+            .and_then(|n| constants.get(n))
+            .and_then(|t| t.ints().ok())
+        {
+            if steps.iter().any(|&s| s != 1) {
+                anyhow::bail!("XNNPACK Slice: non-unit steps not supported");
+            }
+        }
+
         let in_shape = shape_map.get(&cap.inputs[0]).cloned().unwrap_or_default();
         let out_shape = shape_map.get(&cap.outputs[0]).cloned().unwrap_or_default();
         if in_shape.is_empty() || out_shape.is_empty() {
@@ -1268,13 +1315,9 @@ impl SubgraphBuilder {
         }
         let ndim = in_shape.len();
 
-        // Compute start offsets from attributes (opset 9) or constant inputs (opset 10+)
+        // Compute start offsets from constant inputs (attributes normalized to inputs)
         let mut offsets = vec![0usize; ndim];
-        let starts_attr = cap.node.attrs.get_ints("starts");
-        let axes_attr = cap.node.attrs.get_ints("axes");
-        let (starts, axes) = if let Some(s) = starts_attr {
-            (Some(s), axes_attr)
-        } else {
+        let (starts, axes) = {
             let s = cap
                 .inputs
                 .get(1)
@@ -1360,10 +1403,20 @@ impl SubgraphBuilder {
         &mut self,
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
+        constants: &crate::Constants,
     ) -> Result<()> {
         let in_shape = shape_map.get(&cap.inputs[0]).cloned().unwrap_or_default();
-        let raw_axes = cap.node.attrs.get_ints("axes").unwrap_or_default();
-        let keepdims = cap.node.attrs.get_int("keepdims").unwrap_or(1) != 0;
+        let keepdims = match &cap.node.op {
+            NodeOp::ReduceMin { keepdims } => *keepdims,
+            _ => true,
+        };
+        // Axes come from constant input (normalized from attrs for opset < 18)
+        let raw_axes: Vec<i64> = cap
+            .inputs
+            .get(1)
+            .and_then(|n| constants.get(n))
+            .and_then(|t| t.ints().ok().map(|v| v.to_vec()))
+            .unwrap_or_default();
         let ndim = in_shape.len() as i64;
         let axes: Vec<usize> = raw_axes
             .iter()
@@ -1481,8 +1534,7 @@ fn infer_op_output_shapes(
     match op.op {
         OpType::Transpose | OpType::LayoutTranspose => {
             if let Some(x) = get(0) {
-                let perm = op.node.attrs.get_ints("perm");
-                let out = if let Some(p) = perm {
+                let out = if let Some(p) = op.node.op.perm() {
                     p.iter().map(|&i| x[i as usize]).collect()
                 } else {
                     x.iter().rev().copied().collect()
@@ -1502,22 +1554,21 @@ fn infer_op_output_shapes(
                         let c_out = w.dims[0]; // weights are still OIHW
                         let kh = w.dims[2];
                         let kw = w.dims[3];
-                        let strides = op
-                            .node
-                            .attrs
-                            .get_ints("strides")
-                            .unwrap_or_else(|| vec![1, 1]);
-                        let dilations = op
-                            .node
-                            .attrs
-                            .get_ints("dilations")
-                            .unwrap_or_else(|| vec![1, 1]);
-                        let pads = op
-                            .node
-                            .attrs
-                            .get_ints("pads")
-                            .unwrap_or_else(|| vec![0, 0, 0, 0]);
-                        let auto_pad = op.node.attrs.get_string("auto_pad").unwrap_or_default();
+                        let (strides, dilations, pads, auto_pad) = match &op.node.op {
+                            NodeOp::Conv {
+                                strides,
+                                dilations,
+                                pads,
+                                auto_pad,
+                                ..
+                            } => (
+                                strides.clone(),
+                                dilations.clone(),
+                                pads.clone(),
+                                auto_pad.clone(),
+                            ),
+                            _ => (vec![1, 1], vec![1, 1], vec![0, 0, 0, 0], String::new()),
+                        };
 
                         let h_out = compute_spatial_out(
                             h_in,
@@ -1546,18 +1597,33 @@ fn infer_op_output_shapes(
             // Input is NHWC: [N, H, W, C] (graph_opt inserted transposes)
             if let Some(x) = get(0) {
                 if x.len() == 4 {
-                    let ks = op.node.attrs.get_ints("kernel_shape").unwrap_or_default();
-                    let strides = op
-                        .node
-                        .attrs
-                        .get_ints("strides")
-                        .unwrap_or_else(|| vec![1, 1]);
-                    let pads = op
-                        .node
-                        .attrs
-                        .get_ints("pads")
-                        .unwrap_or_else(|| vec![0, 0, 0, 0]);
-                    let auto_pad = op.node.attrs.get_string("auto_pad").unwrap_or_default();
+                    let (ks, strides, pads, auto_pad) = match &op.node.op {
+                        NodeOp::MaxPool {
+                            kernel_shape,
+                            strides,
+                            pads,
+                            auto_pad,
+                            ..
+                        } => (
+                            kernel_shape.clone(),
+                            strides.clone(),
+                            pads.clone(),
+                            auto_pad.clone(),
+                        ),
+                        NodeOp::AveragePool {
+                            kernel_shape,
+                            strides,
+                            pads,
+                            auto_pad,
+                            ..
+                        } => (
+                            kernel_shape.clone(),
+                            strides.clone(),
+                            pads.clone(),
+                            auto_pad.clone(),
+                        ),
+                        _ => (vec![], vec![1, 1], vec![0, 0, 0, 0], String::new()),
+                    };
                     if ks.len() >= 2 {
                         let h_out = compute_spatial_out(
                             x[1],
@@ -1640,7 +1706,10 @@ fn infer_op_output_shapes(
         OpType::Gemm => {
             if let (Some(a), Some(b)) = (get(0), get(1)) {
                 if a.len() == 2 && b.len() == 2 {
-                    let trans_b = op.node.attrs.get_int("transB").unwrap_or(0) != 0;
+                    let trans_b = match &op.node.op {
+                        NodeOp::Gemm { trans_b, .. } => *trans_b,
+                        _ => false,
+                    };
                     let n = if trans_b { b[0] } else { b[1] };
                     result.push((op.outputs[0].clone(), vec![a[0], n]));
                 }
@@ -1657,7 +1726,10 @@ fn infer_op_output_shapes(
 
         OpType::Flatten => {
             if let Some(x) = get(0) {
-                let axis = op.node.attrs.get_int("axis").unwrap_or(1) as usize;
+                let axis = match &op.node.op {
+                    NodeOp::Flatten { axis } => *axis as usize,
+                    _ => 1,
+                };
                 let outer: usize = x[..axis].iter().product();
                 let inner: usize = x[axis..].iter().product();
                 result.push((op.outputs[0].clone(), vec![outer, inner]));
@@ -1719,16 +1791,9 @@ fn infer_op_output_shapes(
         OpType::Slice => {
             if let Some(x) = get(0) {
                 let ndim = x.len();
-                // Try attribute-based (opset 9) first, then input-based (opset 10+)
-                let starts_attr = op.node.attrs.get_ints("starts");
-                let ends_attr = op.node.attrs.get_ints("ends");
-                let axes_attr = op.node.attrs.get_ints("axes");
-
-                let (starts, ends, axes) = if let (Some(s), Some(e)) = (starts_attr, ends_attr) {
-                    let a = axes_attr;
-                    (Some(s), Some(e), a)
-                } else {
-                    // Input-based: inputs[1]=starts, inputs[2]=ends, inputs[3]=axes
+                // Input-based: inputs[1]=starts, inputs[2]=ends, inputs[3]=axes
+                // (attributes normalized to inputs for all opsets)
+                let (starts, ends, axes) = {
                     let s = op
                         .inputs
                         .get(1)
@@ -1791,7 +1856,10 @@ fn infer_op_output_shapes(
         }
 
         OpType::Concat => {
-            let raw_axis = op.node.attrs.get_int("axis").unwrap_or(0);
+            let raw_axis = match &op.node.op {
+                NodeOp::Concat { axis } => *axis,
+                _ => 0,
+            };
             if let Some(first) = get(0) {
                 let ndim = first.len() as i64;
                 let axis = (if raw_axis < 0 {
@@ -1811,7 +1879,13 @@ fn infer_op_output_shapes(
 
         OpType::Unsqueeze => {
             if let Some(x) = get(0) {
-                let axes = op.node.attrs.get_ints("axes").unwrap_or_default();
+                // Axes come from constant input (normalized from attrs)
+                let axes: Vec<i64> = op
+                    .inputs
+                    .get(1)
+                    .and_then(|n| constants.get(n))
+                    .and_then(|t| t.ints().ok().map(|v| v.to_vec()))
+                    .unwrap_or_default();
                 let out_len = x.len() + axes.len();
                 let mut out = vec![0usize; out_len];
                 let axes_set: HashSet<usize> = axes
@@ -1839,7 +1913,13 @@ fn infer_op_output_shapes(
 
         OpType::Squeeze => {
             if let Some(x) = get(0) {
-                let axes = op.node.attrs.get_ints("axes").unwrap_or_default();
+                // Axes come from constant input (normalized from attrs)
+                let axes: Vec<i64> = op
+                    .inputs
+                    .get(1)
+                    .and_then(|n| constants.get(n))
+                    .and_then(|t| t.ints().ok().map(|v| v.to_vec()))
+                    .unwrap_or_default();
                 let out: Vec<usize> = if axes.is_empty() {
                     x.iter().copied().filter(|&d| d != 1).collect()
                 } else {
@@ -1866,8 +1946,17 @@ fn infer_op_output_shapes(
 
         OpType::ReduceMin => {
             if let Some(x) = get(0) {
-                let axes = op.node.attrs.get_ints("axes").unwrap_or_default();
-                let keepdims = op.node.attrs.get_int("keepdims").unwrap_or(1) != 0;
+                // Axes come from constant input (normalized from attrs for opset < 18)
+                let axes: Vec<i64> = op
+                    .inputs
+                    .get(1)
+                    .and_then(|n| constants.get(n))
+                    .and_then(|t| t.ints().ok().map(|v| v.to_vec()))
+                    .unwrap_or_default();
+                let keepdims = match &op.node.op {
+                    NodeOp::ReduceMin { keepdims } => *keepdims,
+                    _ => true,
+                };
                 let ndim = x.len() as i64;
                 let axes_set: HashSet<usize> = axes
                     .iter()

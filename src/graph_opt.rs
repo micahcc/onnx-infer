@@ -5,10 +5,9 @@ use std::fmt::Write as FmtWrite;
 use crate::Tensor;
 use crate::dims;
 use crate::layers::OpType;
-use crate::onnx_ir::Attr;
-use crate::onnx_ir::Attrs;
 use crate::onnx_ir::Graph;
 use crate::onnx_ir::Node;
+use crate::onnx_ir::NodeOp;
 
 const NCHW_TO_NHWC: [i64; 4] = [0, 2, 3, 1];
 const NHWC_TO_NCHW: [i64; 4] = [0, 3, 1, 2];
@@ -26,10 +25,10 @@ fn is_inverse_transpose(perm: &[i64]) -> bool {
 }
 
 fn get_transpose_perm(node: &Node) -> Option<Vec<i64>> {
-    if !matches!(node.op_type, OpType::Transpose | OpType::LayoutTranspose) {
+    if !matches!(node.op_type(), OpType::Transpose | OpType::LayoutTranspose) {
         return None;
     }
-    node.attrs.get_ints("perm")
+    node.op.perm().map(|p| p.to_vec())
 }
 
 fn are_inverse_perms(a: &[i64], b: &[i64]) -> bool {
@@ -47,6 +46,7 @@ fn requires_nhwc(op: OpType) -> bool {
             | OpType::GlobalAveragePool
             | OpType::Resize
             | OpType::Upsample
+            | OpType::Softmax
             | OpType::QLinearConv
             | OpType::QLinearGlobalAveragePool
     )
@@ -105,14 +105,13 @@ fn is_layout_agnostic(op: OpType) -> bool {
 /// that explicitly changes the data layout (NCHW↔NHWC). Unlike regular Transpose,
 /// this carries layout semantics: the output layout differs from the input layout.
 fn make_layout_transpose_node(name: &str, input: &str, output: &str, perm: &[i64; 4]) -> Node {
-    let mut attrs_map = HashMap::new();
-    attrs_map.insert("perm".to_string(), Attr::Ints(perm.to_vec()));
     Node {
-        op_type: OpType::LayoutTranspose,
+        op: NodeOp::LayoutTranspose {
+            perm: perm.to_vec(),
+        },
         name: name.to_string(),
         inputs: vec![input.to_string()],
         outputs: vec![output.to_string()],
-        attrs: Attrs(attrs_map),
     }
 }
 
@@ -157,7 +156,7 @@ pub fn optimize(graph: &mut Graph) {
     fold_batchnorm_into_conv(graph);
     let ndim_map = infer_ndims(graph);
     promote_batchnorm_2d(graph, &ndim_map);
-    insert_layout_transposes(graph, &mut counter);
+    insert_layout_transposes(graph, &ndim_map, &mut counter);
 
     // Run transpose elimination passes iteratively until no more changes.
     for _ in 0..200 {
@@ -203,7 +202,7 @@ fn infer_ndims(graph: &Graph) -> HashMap<String, usize> {
     for node in &graph.nodes {
         let input0_ndim = node.inputs.first().and_then(|n| ndims.get(n)).copied();
 
-        let out_ndim: Option<usize> = match node.op_type {
+        let out_ndim: Option<usize> = match node.op_type() {
             // Ops that preserve ndim from input 0
             OpType::Conv
             | OpType::BatchNormalization
@@ -273,14 +272,8 @@ fn infer_ndims(graph: &Graph) -> HashMap<String, usize> {
 
             OpType::Flatten | OpType::Gemm => Some(2),
 
-            OpType::Squeeze => input0_ndim.map(|nd| {
-                let axes_count = node.attrs.get_ints("axes").map(|a| a.len()).unwrap_or(1);
-                nd.saturating_sub(axes_count)
-            }),
-            OpType::Unsqueeze => input0_ndim.map(|nd| {
-                let axes_count = node.attrs.get_ints("axes").map(|a| a.len()).unwrap_or(1);
-                nd + axes_count
-            }),
+            OpType::Squeeze => input0_ndim.map(|nd| nd.saturating_sub(1)),
+            OpType::Unsqueeze => input0_ndim.map(|nd| nd + 1),
 
             _ => None,
         };
@@ -302,26 +295,49 @@ fn infer_ndims(graph: &Graph) -> HashMap<String, usize> {
 /// treat them as spatial ops without a runtime ndim check.
 fn promote_batchnorm_2d(graph: &mut Graph, ndim_map: &HashMap<String, usize>) {
     for node in &mut graph.nodes {
-        if node.op_type != OpType::BatchNormalization {
+        if node.op_type() != OpType::BatchNormalization {
             continue;
         }
         let ndim = node.inputs.first().and_then(|n| ndim_map.get(n)).copied();
         if ndim == Some(4) {
-            node.op_type = OpType::BatchNormalization2d;
+            if let NodeOp::BatchNormalization { epsilon } = node.op {
+                node.op = NodeOp::BatchNormalization2d { epsilon };
+            }
         }
     }
 }
 
-fn insert_layout_transposes(graph: &mut Graph, counter: &mut usize) {
+fn insert_layout_transposes(
+    graph: &mut Graph,
+    ndim_map: &HashMap<String, usize>,
+    counter: &mut usize,
+) {
     let mut new_nodes = Vec::with_capacity(graph.nodes.len() * 2);
 
     for node in graph.nodes.drain(..) {
-        if !requires_nhwc(node.op_type) {
+        let input_ndim = node.inputs.first().and_then(|n| ndim_map.get(n)).copied();
+        // Softmax only needs NHWC layout when operating on 4D spatial tensors.
+        let dominated = if node.op_type() == OpType::Softmax {
+            input_ndim == Some(4)
+        } else {
+            requires_nhwc(node.op_type())
+        };
+        if !dominated {
             new_nodes.push(node);
             continue;
         }
 
         let mut modified = node;
+
+        // Remap Softmax axis from NCHW to NHWC (e.g. axis 1 → axis 3 for 4D).
+        if let NodeOp::Softmax { axis, coerce_2d } = &modified.op {
+            let nchw_axis = if *axis < 0 { *axis + 4 } else { *axis };
+            let nhwc_axis = NCHW_TO_NHWC[nchw_axis as usize];
+            modified.op = NodeOp::Softmax {
+                axis: nhwc_axis,
+                coerce_2d: *coerce_2d,
+            };
+        }
 
         // Transpose data input 0 NCHW→NHWC. Weights/params are handled by layers.
         if let Some(orig_input) = modified.inputs.first().filter(|s| !s.is_empty()) {
@@ -370,7 +386,7 @@ fn eliminate_inverse_transposes(graph: &mut Graph) -> bool {
 
     for (i, node) in graph.nodes.iter().enumerate() {
         // Only cancel LayoutTranspose pairs — regular Transposes are part of model computation
-        if node.op_type != OpType::LayoutTranspose {
+        if node.op_type() != OpType::LayoutTranspose {
             continue;
         }
         let Some(perm) = get_transpose_perm(node) else {
@@ -384,7 +400,7 @@ fn eliminate_inverse_transposes(graph: &mut Graph) -> bool {
             continue;
         };
         let producer = &graph.nodes[producer_idx];
-        if producer.op_type != OpType::LayoutTranspose {
+        if producer.op_type() != OpType::LayoutTranspose {
             continue;
         }
         let Some(prod_perm) = get_transpose_perm(producer) else {
@@ -452,7 +468,7 @@ fn match_all_inputs_transposed(
         }
         let &prod_idx = producer_map.get(input_name.as_str())?;
         let prod = &nodes[prod_idx];
-        if prod.op_type != OpType::LayoutTranspose {
+        if prod.op_type() != OpType::LayoutTranspose {
             return None;
         }
         let p = get_transpose_perm(prod)?;
@@ -483,7 +499,7 @@ fn push_transposes_through_layout_agnostic(graph: &mut Graph, counter: &mut usiz
 
     for node in graph.nodes.iter() {
         // layers that care about layout can't be pushed through
-        if !is_layout_agnostic(node.op_type) || node.inputs.is_empty() {
+        if !is_layout_agnostic(node.op_type()) || node.inputs.is_empty() {
             new_nodes.push(node.clone());
             continue;
         }
@@ -534,7 +550,7 @@ fn fold_batchnorm_into_conv(graph: &mut Graph) {
         .nodes
         .iter()
         .enumerate()
-        .filter(|(_, n)| n.op_type == OpType::BatchNormalization)
+        .filter(|(_, n)| n.op_type() == OpType::BatchNormalization)
         .map(|(i, _)| i)
         .collect();
 
@@ -547,7 +563,7 @@ fn fold_batchnorm_into_conv(graph: &mut Graph) {
         let Some(&conv_idx) = producer_map.get(bn_input) else {
             continue;
         };
-        if graph.nodes[conv_idx].op_type != OpType::Conv {
+        if graph.nodes[conv_idx].op_type() != OpType::Conv {
             continue;
         }
         // Conv output must only feed into this BN
@@ -565,7 +581,12 @@ fn fold_batchnorm_into_conv(graph: &mut Graph) {
         let beta_name = &bn.inputs[2];
         let mean_name = &bn.inputs[3];
         let var_name = &bn.inputs[4];
-        let epsilon = bn.attrs.get_float("epsilon").unwrap_or(1e-5);
+        let epsilon = match &bn.op {
+            NodeOp::BatchNormalization { epsilon } | NodeOp::BatchNormalization2d { epsilon } => {
+                *epsilon
+            }
+            _ => 1e-5,
+        };
 
         let (Some(weight), Some(gamma), Some(beta), Some(mean), Some(var)) = (
             graph.initializers.get(weight_name),
@@ -669,35 +690,28 @@ fn fold_batchnorm_into_conv(graph: &mut Graph) {
 fn collect_subgraph_references(nodes: &[Node]) -> HashSet<String> {
     let mut refs = HashSet::new();
     for node in nodes {
-        for attr in node.attrs.0.values() {
-            if let Attr::Graph(g) = attr {
-                // Any tensor name used as input in the sub-graph that isn't produced
-                // within the sub-graph is a reference to the outer graph.
-                let inner_outputs: HashSet<&str> = g
-                    .nodes
-                    .iter()
-                    .flat_map(|n| n.outputs.iter())
-                    .map(|s| s.as_str())
-                    .collect();
-                let inner_inits: HashSet<&str> =
-                    g.initializers.keys().map(|s| s.as_str()).collect();
-                let inner_inputs: HashSet<&str> =
-                    g.inputs.iter().map(|i| i.name.as_str()).collect();
-                for inner_node in &g.nodes {
-                    for input in &inner_node.inputs {
-                        if !input.is_empty()
-                            && !inner_outputs.contains(input.as_str())
-                            && !inner_inits.contains(input.as_str())
-                            && !inner_inputs.contains(input.as_str())
-                        {
-                            refs.insert(input.clone());
-                        }
+        for g in node.op.subgraphs() {
+            let inner_outputs: HashSet<&str> = g
+                .nodes
+                .iter()
+                .flat_map(|n| n.outputs.iter())
+                .map(|s| s.as_str())
+                .collect();
+            let inner_inits: HashSet<&str> = g.initializers.keys().map(|s| s.as_str()).collect();
+            let inner_inputs: HashSet<&str> = g.inputs.iter().map(|i| i.name.as_str()).collect();
+            for inner_node in &g.nodes {
+                for input in &inner_node.inputs {
+                    if !input.is_empty()
+                        && !inner_outputs.contains(input.as_str())
+                        && !inner_inits.contains(input.as_str())
+                        && !inner_inputs.contains(input.as_str())
+                    {
+                        refs.insert(input.clone());
                     }
                 }
-                // Recurse into nested sub-graphs
-                let nested = collect_subgraph_references(&g.nodes);
-                refs.extend(nested);
             }
+            let nested = collect_subgraph_references(&g.nodes);
+            refs.extend(nested);
         }
     }
     refs
@@ -785,23 +799,26 @@ pub fn dump(graph: &Graph) -> String {
         let inputs_str = node.inputs.join(", ");
 
         let mut extra = String::new();
-        if matches!(node.op_type, OpType::Transpose | OpType::LayoutTranspose) {
-            if let Some(perm) = node.attrs.get_ints("perm") {
-                let prefix = if node.op_type == OpType::LayoutTranspose {
+        if matches!(node.op_type(), OpType::Transpose | OpType::LayoutTranspose) {
+            if let Some(perm) = node.op.perm() {
+                let prefix = if node.op_type() == OpType::LayoutTranspose {
                     "LAYOUT "
                 } else {
                     ""
                 };
-                if is_nchw_to_nhwc(&perm) {
+                if is_nchw_to_nhwc(perm) {
                     extra = format!(" [{prefix}NCHW→NHWC]");
-                } else if is_nhwc_to_nchw(&perm) {
+                } else if is_nhwc_to_nchw(perm) {
                     extra = format!(" [{prefix}NHWC→NCHW]");
                 } else {
                     extra = format!(" perm={perm:?}");
                 }
             }
-        } else if node.op_type == OpType::Conv {
-            let group = node.attrs.get_int("group").unwrap_or(1);
+        } else if node.op_type() == OpType::Conv {
+            let group = match &node.op {
+                NodeOp::Conv { group, .. } => *group,
+                _ => 1,
+            };
             if group > 1 {
                 write!(extra, " group={group}").unwrap();
             }
@@ -810,7 +827,7 @@ pub fn dump(graph: &Graph) -> String {
         writeln!(
             out,
             "{i:4}: {outputs_str} = {:?}({inputs_str}){extra}",
-            node.op_type
+            node.op_type()
         )
         .unwrap();
     }
@@ -819,7 +836,7 @@ pub fn dump(graph: &Graph) -> String {
     let transpose_count = graph
         .nodes
         .iter()
-        .filter(|n| n.op_type == OpType::Transpose)
+        .filter(|n| n.op_type() == OpType::Transpose)
         .count();
     let nhwc_transposes = graph
         .nodes
@@ -848,26 +865,35 @@ mod tests {
     use crate::onnx_ir::ValueInfo;
 
     fn make_simple_node(op: OpType, inputs: &[&str], outputs: &[&str]) -> Node {
+        let node_op = match op {
+            OpType::Relu => NodeOp::Relu,
+            OpType::Add => NodeOp::Add {
+                legacy_broadcast: false,
+                axis: 0,
+            },
+            _ => panic!("make_simple_node: unhandled op {op:?}"),
+        };
         Node {
-            op_type: op,
+            op: node_op,
             name: format!("{op:?}_{}", outputs[0]),
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
             outputs: outputs.iter().map(|s| s.to_string()).collect(),
-            attrs: Attrs(HashMap::new()),
         }
     }
 
     fn make_conv_node(input: &str, weight: &str, bias: &str, output: &str) -> Node {
-        let mut attrs = HashMap::new();
-        attrs.insert("kernel_shape".to_string(), Attr::Ints(vec![3, 3]));
-        attrs.insert("strides".to_string(), Attr::Ints(vec![1, 1]));
-        attrs.insert("pads".to_string(), Attr::Ints(vec![1, 1, 1, 1]));
         Node {
-            op_type: OpType::Conv,
+            op: NodeOp::Conv {
+                kernel_shape: vec![3, 3],
+                strides: vec![1, 1],
+                pads: vec![1, 1, 1, 1],
+                dilations: vec![1, 1],
+                group: 1,
+                auto_pad: String::new(),
+            },
             name: format!("conv_{output}"),
             inputs: vec![input.to_string(), weight.to_string(), bias.to_string()],
             outputs: vec![output.to_string()],
-            attrs: Attrs(attrs),
         }
     }
 
@@ -876,10 +902,8 @@ mod tests {
         let beta_name = format!("{output}_beta");
         let mean_name = format!("{output}_mean");
         let var_name = format!("{output}_var");
-        let mut attrs = HashMap::new();
-        attrs.insert("epsilon".to_string(), Attr::Float(1e-5));
         let node = Node {
-            op_type: OpType::BatchNormalization,
+            op: NodeOp::BatchNormalization { epsilon: 1e-5 },
             name: format!("bn_{output}"),
             inputs: vec![
                 input.to_string(),
@@ -889,7 +913,6 @@ mod tests {
                 var_name.clone(),
             ],
             outputs: vec![output.to_string()],
-            attrs: Attrs(attrs),
         };
 
         let mut inits = HashMap::new();
@@ -969,7 +992,7 @@ mod tests {
         let transpose_count = graph
             .nodes
             .iter()
-            .filter(|n| n.op_type == OpType::LayoutTranspose)
+            .filter(|n| n.op_type() == OpType::LayoutTranspose)
             .count();
         // We expect: 1 NCHW→NHWC at input, 1 NHWC→NCHW at output (pushed past Relu)
         assert_eq!(
@@ -1009,7 +1032,7 @@ mod tests {
         let transpose_count = graph
             .nodes
             .iter()
-            .filter(|n| n.op_type == OpType::LayoutTranspose)
+            .filter(|n| n.op_type() == OpType::LayoutTranspose)
             .count();
         // We expect: 1 NCHW→NHWC at entry, Conv, Relu, Conv, 1 NHWC→NCHW at exit
         // The pair in the middle should have been eliminated
@@ -1045,7 +1068,7 @@ mod tests {
         let bn_count = graph
             .nodes
             .iter()
-            .filter(|n| n.op_type == OpType::BatchNormalization)
+            .filter(|n| n.op_type() == OpType::BatchNormalization)
             .count();
         assert_eq!(bn_count, 0, "BatchNorm should be folded into Conv");
 
@@ -1053,7 +1076,7 @@ mod tests {
         let conv = graph
             .nodes
             .iter()
-            .find(|n| n.op_type == OpType::Conv)
+            .find(|n| n.op_type() == OpType::Conv)
             .expect("Conv should still exist");
         // Conv output may be rewired through transposes, that's ok
         assert!(!conv.outputs[0].is_empty());
@@ -1092,7 +1115,7 @@ mod tests {
         let transpose_count = graph
             .nodes
             .iter()
-            .filter(|n| n.op_type == OpType::Transpose)
+            .filter(|n| n.op_type() == OpType::Transpose)
             .count();
         // Best case: 2 at input (NCHW→NHWC), 1 at output (NHWC→NCHW)
         // The two intermediate pairs cancel, leaving 3
