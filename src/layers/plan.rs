@@ -93,9 +93,9 @@ use crate::layers::transpose;
 use crate::layers::unary_ops;
 use crate::layers::unsqueeze;
 use crate::layers::where_op;
-use crate::onnx_ir::Attr;
 use crate::onnx_ir::Graph;
 use crate::onnx_ir::Node;
+use crate::onnx_ir::NodeOp;
 
 pub enum PlanNode {
     Single {
@@ -220,7 +220,7 @@ impl Plan {
         let mut node_meta: Vec<Option<(OpType, Vec<String>, Node)>> = Vec::new();
         let mut cast_counter = 0usize;
         for node in &graph.nodes {
-            let op = node.op_type;
+            let op = node.op_type();
 
             let expected = op.expected_input_dtypes();
             let mut modified_inputs = node.inputs.clone();
@@ -280,7 +280,7 @@ impl Plan {
                 continue;
             }
             if let Some(shape) =
-                op.infer_output_shape(node, &node.inputs, &shape_map, &known_values)
+                op.infer_output_shape(node, &node.inputs, &shape_map, &known_values, initializers)
             {
                 if let Some(out_name) = out_name {
                     let out_layout = infer_output_layout(op, node, &shape_map, &layout_only);
@@ -311,14 +311,22 @@ impl Plan {
                     .and_then(|n| shape_map.get(n))
                     .cloned()
                 {
-                    let axis_attr = node.attrs.get_int("axis").unwrap_or(0);
+                    let axis_attr = match &node.op {
+                        NodeOp::Split { axis } => *axis,
+                        _ => 0,
+                    };
                     let rank = in_sl.dims.len() as i64;
                     let axis = if axis_attr < 0 {
                         (rank + axis_attr) as usize
                     } else {
                         axis_attr as usize
                     };
-                    let split_sizes = node.attrs.get_ints("split");
+                    let split_sizes: Option<Vec<i64>> = node
+                        .inputs
+                        .get(1)
+                        .filter(|s| !s.is_empty())
+                        .and_then(|name| known_values.get(name).or_else(|| initializers.get(name)))
+                        .and_then(|t| t.ints().ok().map(|s| s.to_vec()));
                     let num_outputs = node.outputs.len();
                     for (i, out_name) in node.outputs.iter().enumerate() {
                         if out_name.is_empty() {
@@ -345,13 +353,13 @@ impl Plan {
                 });
 
                 if all_inputs_known {
-                    let plan_node = build_node_with_opset(
+                    let plan_node = build_node_with_initializers(
                         op,
                         node,
                         modified_inputs.clone(),
                         &shape_map,
                         &layout_only,
-                        graph.opset_version,
+                        initializers,
                     )?;
                     if let PlanNode::Loop(mut loop_layer) = plan_node {
                         let mut temp_values: HashMap<String, Tensor> = HashMap::new();
@@ -392,13 +400,13 @@ impl Plan {
 
             #[cfg(feature = "xnnpack")]
             node_meta.push(Some((op, modified_inputs.clone(), node.clone())));
-            nodes.push(build_node_with_opset(
+            nodes.push(build_node_with_initializers(
                 op,
                 node,
                 modified_inputs,
                 &shape_map,
                 &layout_only,
-                graph.opset_version,
+                initializers,
             )?);
         }
 
@@ -410,7 +418,6 @@ impl Plan {
                 node_meta,
                 &mut shape_map,
                 &type_map,
-                graph.opset_version,
                 &output_names,
             )?;
         }
@@ -481,8 +488,8 @@ fn try_propagate_value(
     }
 
     if op == OpType::Constant {
-        return match node.attrs.get("value") {
-            Some(Attr::Tensor(t)) => Some(t.clone()),
+        return match &node.op {
+            NodeOp::Constant { value } => Some(value.clone()),
             _ => None,
         };
     }
@@ -527,20 +534,27 @@ pub fn build_node(
     inputs: Vec<String>,
     shape_map: &HashMap<String, ShapeLayout>,
 ) -> Result<PlanNode> {
-    build_node_with_opset(op, node, inputs, shape_map, &HashMap::new(), 0)
+    build_node_with_initializers(
+        op,
+        node,
+        inputs,
+        shape_map,
+        &HashMap::new(),
+        &HashMap::new(),
+    )
 }
 
-pub fn build_node_with_opset(
+pub fn build_node_with_initializers(
     op: OpType,
     node: &Node,
     inputs: Vec<String>,
     shape_map: &HashMap<String, ShapeLayout>,
     layout_only: &HashMap<String, Layout>,
-    opset_version: i64,
+    initializers: &HashMap<String, Tensor>,
 ) -> Result<PlanNode> {
     if op == OpType::Loop {
-        let body = match node.attrs.get("body") {
-            Some(Attr::Graph(g)) => (**g).clone(),
+        let body = match &node.op {
+            NodeOp::Loop { body } => (**body).clone(),
             _ => anyhow::bail!("Loop: no body graph"),
         };
         return Ok(PlanNode::Loop(Box::new(loop_op::Loop::new(
@@ -551,65 +565,68 @@ pub fn build_node_with_opset(
     }
 
     if op == OpType::Split {
-        let axis = node.attrs.get_int("axis").unwrap_or(0);
-        let split_sizes = node.attrs.get_ints("split").unwrap_or_default();
+        let NodeOp::Split { axis } = &node.op else {
+            unreachable!()
+        };
+        let split_sizes: Vec<i64> = inputs
+            .get(1)
+            .filter(|s| !s.is_empty())
+            .and_then(|name| initializers.get(name))
+            .and_then(|t| t.ints().ok().map(|s| s.to_vec()))
+            .unwrap_or_default();
         return Ok(PlanNode::Split(Box::new(split::Split::new(
             inputs,
             node.outputs.clone(),
-            axis,
+            *axis,
             split_sizes,
         ))));
     }
 
     if op == OpType::If {
-        let then_branch = match node.attrs.get("then_branch") {
-            Some(Attr::Graph(g)) => (**g).clone(),
-            _ => anyhow::bail!("If: no then_branch"),
-        };
-        let else_branch = match node.attrs.get("else_branch") {
-            Some(Attr::Graph(g)) => (**g).clone(),
-            _ => anyhow::bail!("If: no else_branch"),
+        let NodeOp::If {
+            then_branch,
+            else_branch,
+        } = &node.op
+        else {
+            anyhow::bail!("If: expected NodeOp::If");
         };
         return Ok(PlanNode::If(Box::new(if_op::If::new(
             inputs,
             node.outputs.clone(),
-            then_branch,
-            else_branch,
+            (**then_branch).clone(),
+            (**else_branch).clone(),
         ))));
     }
 
     if op == OpType::TopK {
-        let axis = node.attrs.get_int("axis").unwrap_or(-1);
-        let largest = node.attrs.get_int("largest").unwrap_or(1) != 0;
+        let NodeOp::TopK { axis, largest } = &node.op else {
+            unreachable!()
+        };
         return Ok(PlanNode::TopK(Box::new(topk::TopK::new(
             inputs,
             node.outputs.clone(),
-            axis,
-            largest,
+            *axis,
+            *largest,
         ))));
     }
 
     if op == OpType::Scan {
-        let body = match node.attrs.get("body") {
-            Some(Attr::Graph(g)) => (**g).clone(),
-            _ => anyhow::bail!("Scan: no body graph"),
-        };
-        let num_scan_inputs = node.attrs.get_int("num_scan_inputs").unwrap_or(0) as usize;
-        let scan_input_directions = node
-            .attrs
-            .get_ints("scan_input_directions")
-            .unwrap_or_default();
-        let scan_output_directions = node
-            .attrs
-            .get_ints("scan_output_directions")
-            .unwrap_or_default();
-        return Ok(PlanNode::Scan(Box::new(scan::Scan::new(
-            inputs,
-            node.outputs.clone(),
+        let NodeOp::Scan {
             body,
             num_scan_inputs,
             scan_input_directions,
             scan_output_directions,
+        } = &node.op
+        else {
+            anyhow::bail!("Scan: expected NodeOp::Scan");
+        };
+        return Ok(PlanNode::Scan(Box::new(scan::Scan::new(
+            inputs,
+            node.outputs.clone(),
+            (**body).clone(),
+            *num_scan_inputs as usize,
+            scan_input_directions.clone(),
+            scan_output_directions.clone(),
         ))));
     }
 
@@ -645,37 +662,50 @@ pub fn build_node_with_opset(
 
     let layer: Box<dyn Layer> = match op {
         OpType::Relu => Box::new(relu::Relu::new(inputs)),
-        OpType::LeakyRelu => Box::new(leaky_relu::LeakyRelu::new(
-            inputs,
-            node.attrs.get_float("alpha").unwrap_or(0.01),
-        )),
-        OpType::Clip => Box::new(clip::Clip::new(
-            inputs,
-            node.attrs.get_float("min").unwrap_or(f32::NEG_INFINITY),
-            node.attrs.get_float("max").unwrap_or(f32::INFINITY),
-        )),
-        OpType::BatchNormalization => Box::new(batch_norm::BatchNorm::new(
-            inputs,
-            node.attrs.get_float("epsilon").unwrap_or(1e-5),
-            input_shapes[0],
-            false,
-        )),
-        OpType::BatchNormalization2d => Box::new(batch_norm::BatchNorm::new(
-            inputs,
-            node.attrs.get_float("epsilon").unwrap_or(1e-5),
-            input_shapes[0],
-            true,
-        )),
+        OpType::LeakyRelu => {
+            let NodeOp::LeakyRelu { alpha } = &node.op else {
+                unreachable!()
+            };
+            Box::new(leaky_relu::LeakyRelu::new(inputs, *alpha))
+        }
+        OpType::Clip => Box::new(clip::Clip::new(inputs, f32::NEG_INFINITY, f32::INFINITY)),
+        OpType::BatchNormalization => {
+            let NodeOp::BatchNormalization { epsilon } = &node.op else {
+                unreachable!()
+            };
+            Box::new(batch_norm::BatchNorm::new(
+                inputs,
+                *epsilon,
+                input_shapes[0],
+                false,
+            ))
+        }
+        OpType::BatchNormalization2d => {
+            let NodeOp::BatchNormalization2d { epsilon } = &node.op else {
+                unreachable!()
+            };
+            Box::new(batch_norm::BatchNorm::new(
+                inputs,
+                *epsilon,
+                input_shapes[0],
+                true,
+            ))
+        }
         OpType::Sigmoid => Box::new(sigmoid::Sigmoid::new(inputs)),
         OpType::Exp => Box::new(exp::Exp::new(inputs)),
         OpType::Log => Box::new(log::Log::new(inputs)),
-        OpType::Lrn => Box::new(lrn::Lrn::new(
-            inputs,
-            node.attrs.get_int("size").unwrap_or(1) as usize,
-            node.attrs.get_float("alpha").unwrap_or(0.0001),
-            node.attrs.get_float("beta").unwrap_or(0.75),
-            node.attrs.get_float("bias").unwrap_or(1.0),
-        )),
+        OpType::Lrn => {
+            let NodeOp::Lrn {
+                size,
+                alpha,
+                beta,
+                bias,
+            } = &node.op
+            else {
+                unreachable!()
+            };
+            Box::new(lrn::Lrn::new(inputs, *size as usize, *alpha, *beta, *bias))
+        }
         OpType::Tanh => Box::new(tanh::Tanh::new(inputs)),
         OpType::Expand => Box::new(expand::Expand::new(inputs)),
         OpType::Less => Box::new(less::Less::new(inputs)),
@@ -690,26 +720,40 @@ pub fn build_node_with_opset(
         OpType::Range => Box::new(range::Range::new(inputs)),
         OpType::Floor => Box::new(floor::Floor::new(inputs)),
         OpType::Sqrt => Box::new(sqrt::Sqrt::new(inputs)),
-        OpType::ScatterElements => Box::new(scatter_elements::ScatterElements::new(
-            inputs,
-            node.attrs.get_int("axis").unwrap_or(0),
-            input_shapes[0],
-            input_shapes[1],
-        )),
+        OpType::ScatterElements => {
+            let NodeOp::ScatterElements { axis } = &node.op else {
+                unreachable!()
+            };
+            Box::new(scatter_elements::ScatterElements::new(
+                inputs,
+                *axis,
+                input_shapes[0],
+                input_shapes[1],
+            ))
+        }
         OpType::RoiAlign => {
-            let mode = node
-                .attrs
-                .get_string("mode")
-                .unwrap_or_else(|| "avg".to_string());
-            let oh = node.attrs.get_int("output_height").unwrap_or(1) as usize;
-            let ow = node.attrs.get_int("output_width").unwrap_or(1) as usize;
-            let sr = node.attrs.get_int("sampling_ratio").unwrap_or(0) as usize;
-            let ss = node.attrs.get_float("spatial_scale").unwrap_or(1.0);
-            Box::new(roi_align::RoiAlign::new(inputs, mode, oh, ow, sr, ss))
+            let NodeOp::RoiAlign {
+                mode,
+                output_height,
+                output_width,
+                sampling_ratio,
+                spatial_scale,
+            } = &node.op
+            else {
+                unreachable!()
+            };
+            Box::new(roi_align::RoiAlign::new(
+                inputs,
+                mode.clone(),
+                *output_height as usize,
+                *output_width as usize,
+                *sampling_ratio as usize,
+                *spatial_scale,
+            ))
         }
         OpType::ConstantOfShape => {
-            let (fill_f32, fill_i64, dtype) = match node.attrs.get("value") {
-                Some(Attr::Tensor(t)) => match t.dtype() {
+            let (fill_f32, fill_i64, dtype) = match &node.op {
+                NodeOp::ConstantOfShape { value: Some(t) } => match t.dtype() {
                     DType::Int64 => (
                         0.0,
                         t.ints().unwrap_or(&[]).first().copied().unwrap_or(0),
@@ -730,78 +774,86 @@ pub fn build_node_with_opset(
         OpType::Ceil => Box::new(ceil::Ceil::new(inputs)),
         OpType::Round => Box::new(round::Round::new(inputs)),
         OpType::Softmax => {
-            // Softmax default axis changed in opset 13: was 1, now -1
-            // For opset < 13, softmax coerces input to 2D before applying
-            let default_axis = if opset_version >= 13 { -1 } else { 1 };
-            let coerce_2d = opset_version < 13;
+            let NodeOp::Softmax { axis, coerce_2d } = &node.op else {
+                unreachable!()
+            };
             Box::new(softmax::Softmax::new(
                 inputs,
-                node.attrs.get_int("axis").unwrap_or(default_axis),
-                coerce_2d,
+                *axis,
+                *coerce_2d,
                 input_shapes[0],
             ))
         }
         OpType::Softplus => Box::new(softplus::Softplus::new(inputs)),
         OpType::Add => {
-            let lb = node.attrs.get_int("broadcast").unwrap_or(0) != 0;
-            let axis = node.attrs.get_int("axis").unwrap_or(0) as usize;
-            Box::new(add::Add::new(inputs, lb, axis))
+            let NodeOp::Add {
+                legacy_broadcast,
+                axis,
+            } = &node.op
+            else {
+                unreachable!()
+            };
+            Box::new(add::Add::new(inputs, *legacy_broadcast, *axis as usize))
         }
-        OpType::Sub => {
-            let lb = node.attrs.get_int("broadcast").unwrap_or(0) != 0;
-            let axis = node.attrs.get_int("axis").unwrap_or(0) as usize;
-            Box::new(sub::Sub::new(inputs, lb, axis))
-        }
+        OpType::Sub => Box::new(sub::Sub::new(inputs, false, 0)),
         OpType::Mul => {
-            let lb = node.attrs.get_int("broadcast").unwrap_or(0) != 0;
-            let axis = node.attrs.get_int("axis").unwrap_or(0) as usize;
-            Box::new(mul::Mul::new(inputs, lb, axis))
+            let NodeOp::Mul {
+                legacy_broadcast,
+                axis,
+            } = &node.op
+            else {
+                unreachable!()
+            };
+            Box::new(mul::Mul::new(inputs, *legacy_broadcast, *axis as usize))
         }
         OpType::Div => {
-            let lb = node.attrs.get_int("broadcast").unwrap_or(0) != 0;
-            let axis = node.attrs.get_int("axis").unwrap_or(0) as usize;
-            Box::new(div::Div::new(inputs, lb, axis))
+            let NodeOp::Div {
+                legacy_broadcast,
+                axis,
+            } = &node.op
+            else {
+                unreachable!()
+            };
+            Box::new(div::Div::new(inputs, *legacy_broadcast, *axis as usize))
         }
         OpType::Conv => {
-            let ks = node.attrs.get_ints("kernel_shape").unwrap_or_default();
-            let st = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-            let pa = node
-                .attrs
-                .get_ints("pads")
-                .unwrap_or_else(|| vec![0, 0, 0, 0]);
-            let di = node
-                .attrs
-                .get_ints("dilations")
-                .unwrap_or_else(|| vec![1, 1]);
-            let gr = node.attrs.get_int("group").unwrap_or(1) as usize;
-            let ap = node.attrs.get_string("auto_pad").unwrap_or_default();
+            let NodeOp::Conv {
+                kernel_shape,
+                strides,
+                pads,
+                dilations,
+                group,
+                auto_pad,
+            } = &node.op
+            else {
+                unreachable!()
+            };
             let nhwc = input_layout(0) == Layout::NHWC;
             Box::new(conv::Conv::new(
                 inputs,
-                ks,
-                st,
-                pa,
-                di,
-                gr,
-                ap,
+                kernel_shape.clone(),
+                strides.clone(),
+                pads.clone(),
+                dilations.clone(),
+                *group as usize,
+                auto_pad.clone(),
                 input_shapes[0],
                 input_shapes[1],
                 nhwc,
             ))
         }
         OpType::ConvTranspose => {
-            let st = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-            let pa = node
-                .attrs
-                .get_ints("pads")
-                .unwrap_or_else(|| vec![0, 0, 0, 0]);
-            let di = node
-                .attrs
-                .get_ints("dilations")
-                .unwrap_or_else(|| vec![1, 1]);
-            let gr = node.attrs.get_int("group").unwrap_or(1);
+            let NodeOp::ConvTranspose {
+                strides,
+                pads,
+                dilations,
+                group,
+            } = &node.op
+            else {
+                unreachable!()
+            };
             Box::new(conv_transpose::ConvTranspose::new(
-                inputs, &st, &pa, &di, gr,
+                inputs, strides, pads, dilations, *group,
             ))
         }
         OpType::MatMul => Box::new(matmul::MatMul::new(
@@ -809,51 +861,66 @@ pub fn build_node_with_opset(
             input_shapes[0],
             input_shapes[1],
         )),
-        OpType::Gemm => Box::new(gemm::Gemm::new(
-            inputs,
-            node.attrs.get_float("alpha").unwrap_or(1.0),
-            node.attrs.get_float("beta").unwrap_or(1.0),
-            node.attrs.get_int("transA").unwrap_or(0) != 0,
-            node.attrs.get_int("transB").unwrap_or(0) != 0,
-            input_shapes[0],
-            input_shapes[1],
-        )),
+        OpType::Gemm => {
+            let NodeOp::Gemm {
+                alpha,
+                beta,
+                trans_a,
+                trans_b,
+            } = &node.op
+            else {
+                unreachable!()
+            };
+            Box::new(gemm::Gemm::new(
+                inputs,
+                *alpha,
+                *beta,
+                *trans_a,
+                *trans_b,
+                input_shapes[0],
+                input_shapes[1],
+            ))
+        }
         OpType::MaxPool => {
-            let ks = node.attrs.get_ints("kernel_shape").unwrap_or_default();
-            let st = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-            let pa = node
-                .attrs
-                .get_ints("pads")
-                .unwrap_or_else(|| vec![0, 0, 0, 0]);
-            let ap = node.attrs.get_string("auto_pad").unwrap_or_default();
+            let NodeOp::MaxPool {
+                kernel_shape,
+                strides,
+                pads,
+                auto_pad,
+            } = &node.op
+            else {
+                unreachable!()
+            };
             let nhwc = input_layout(0) == Layout::NHWC;
             Box::new(maxpool::MaxPool::new(
                 inputs,
-                ks,
-                st,
-                pa,
-                ap,
+                kernel_shape.clone(),
+                strides.clone(),
+                pads.clone(),
+                auto_pad.clone(),
                 input_shapes[0],
                 nhwc,
             )?)
         }
         OpType::AveragePool => {
-            let ks = node.attrs.get_ints("kernel_shape").unwrap_or_default();
-            let st = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-            let pa = node
-                .attrs
-                .get_ints("pads")
-                .unwrap_or_else(|| vec![0, 0, 0, 0]);
-            let ap = node.attrs.get_string("auto_pad").unwrap_or_default();
-            let cip = node.attrs.get_int("count_include_pad").unwrap_or(0);
+            let NodeOp::AveragePool {
+                kernel_shape,
+                strides,
+                pads,
+                auto_pad,
+                count_include_pad,
+            } = &node.op
+            else {
+                unreachable!()
+            };
             let nhwc = input_layout(0) == Layout::NHWC;
             Box::new(average_pool::AveragePool::new(
                 inputs,
-                ks,
-                st,
-                pa,
-                ap,
-                cip,
+                kernel_shape.clone(),
+                strides.clone(),
+                pads.clone(),
+                auto_pad.clone(),
+                *count_include_pad,
                 input_shapes[0],
                 nhwc,
             )?)
@@ -866,134 +933,140 @@ pub fn build_node_with_opset(
                 nhwc,
             ))
         }
-        OpType::Flatten => Box::new(flatten::Flatten::new(
-            inputs,
-            node.attrs.get_int("axis").unwrap_or(1) as usize,
-            input_shapes[0],
-        )),
+        OpType::Flatten => {
+            let NodeOp::Flatten { axis } = &node.op else {
+                unreachable!()
+            };
+            Box::new(flatten::Flatten::new(
+                inputs,
+                *axis as usize,
+                input_shapes[0],
+            ))
+        }
         OpType::Shape => Box::new(shape_op::Shape::new(inputs)),
-        OpType::Gather => Box::new(gather::Gather::new(
-            inputs,
-            node.attrs.get_int("axis").unwrap_or(0),
-            input_shapes[0],
-            input_shapes[1],
-        )),
-        OpType::Unsqueeze => Box::new(unsqueeze::Unsqueeze::new(
-            inputs,
-            node.attrs.get_ints("axes").unwrap_or_default(),
-        )),
-        OpType::Concat => Box::new(concat::Concat::new(
-            inputs,
-            node.attrs.get_int("axis").unwrap_or(0),
-            &input_shapes,
-        )),
+        OpType::Gather => {
+            let NodeOp::Gather { axis } = &node.op else {
+                unreachable!()
+            };
+            Box::new(gather::Gather::new(
+                inputs,
+                *axis,
+                input_shapes[0],
+                input_shapes[1],
+            ))
+        }
+        OpType::Unsqueeze => Box::new(unsqueeze::Unsqueeze::new(inputs, vec![])),
+        OpType::Concat => {
+            let NodeOp::Concat { axis } = &node.op else {
+                unreachable!()
+            };
+            Box::new(concat::Concat::new(inputs, *axis, &input_shapes))
+        }
         OpType::Identity => Box::new(identity::Identity::new(inputs)),
-        OpType::Cast => Box::new(cast::Cast::new(
-            inputs,
-            node.attrs.get_int("to").unwrap_or(1),
-        )),
+        OpType::Cast => {
+            let NodeOp::Cast { to } = &node.op else {
+                unreachable!()
+            };
+            Box::new(cast::Cast::new(inputs, *to))
+        }
         OpType::Transpose | OpType::LayoutTranspose => {
             let perm = node
-                .attrs
-                .get_ints("perm")
+                .op
+                .perm()
                 .map(|p| p.iter().map(|&v| v as usize).collect());
             Box::new(transpose::Transpose::new(inputs, perm, input_shapes[0]))
         }
-        OpType::Squeeze => Box::new(squeeze::Squeeze::new(
-            inputs,
-            node.attrs.get_ints("axes").unwrap_or_default(),
-        )),
-        OpType::Slice => {
-            if let Some(attr_starts) = node.attrs.get_ints("starts") {
-                let attr_ends = node.attrs.get_ints("ends").unwrap_or_default();
-                let attr_axes = node.attrs.get_ints("axes");
-                Box::new(slice::Slice::new_v1(
-                    inputs,
-                    attr_starts,
-                    attr_ends,
-                    attr_axes,
-                ))
-            } else {
-                Box::new(slice::Slice::new(inputs))
-            }
-        }
+        OpType::Squeeze => Box::new(squeeze::Squeeze::new(inputs, vec![])),
+        OpType::Slice => Box::new(slice::Slice::new(inputs)),
         OpType::Tile => Box::new(tile::Tile::new(inputs)),
         OpType::Resize => {
-            let mode = node
-                .attrs
-                .get_string("mode")
-                .unwrap_or_else(|| "nearest".to_string());
-            let ct = node
-                .attrs
-                .get_string("coordinate_transformation_mode")
-                .unwrap_or_default();
-            let nm = node.attrs.get_string("nearest_mode").unwrap_or_default();
+            let NodeOp::Resize {
+                mode,
+                coordinate_transformation_mode,
+                nearest_mode,
+            } = &node.op
+            else {
+                unreachable!()
+            };
             let nhwc = input_layout(0) == Layout::NHWC;
-            Box::new(resize::Resize::new(inputs, &mode, &ct, &nm, nhwc))
+            Box::new(resize::Resize::new(
+                inputs,
+                mode,
+                coordinate_transformation_mode,
+                nearest_mode,
+                nhwc,
+            ))
         }
         OpType::Upsample => {
-            let mode = node
-                .attrs
-                .get_string("mode")
-                .unwrap_or_else(|| "nearest".to_string());
+            let NodeOp::Upsample { mode } = &node.op else {
+                unreachable!()
+            };
             let nm = if mode == "nearest" { "floor" } else { "" };
             let resize_inputs = vec![inputs[0].clone(), String::new(), inputs[1].clone()];
             let nhwc = input_layout(0) == Layout::NHWC;
             Box::new(resize::Resize::new(
                 resize_inputs,
-                &mode,
+                mode,
                 "asymmetric",
                 nm,
                 nhwc,
             ))
         }
-        OpType::Reshape => Box::new(reshape::Reshape::new(inputs, node.attrs.get_ints("shape"))),
+        OpType::Reshape => Box::new(reshape::Reshape::new(inputs, None)),
         OpType::Constant => {
-            let tensor = match node.attrs.get("value") {
-                Some(Attr::Tensor(t)) => t.clone(),
-                _ => anyhow::bail!("Constant has no value"),
+            let NodeOp::Constant { value } = &node.op else {
+                anyhow::bail!("Constant has no value");
             };
-            Box::new(constant::Constant::new(tensor))
+            Box::new(constant::Constant::new(value.clone()))
         }
-        OpType::ReduceMin => Box::new(reduce_min::ReduceMin::new(
-            inputs,
-            node.attrs.get_int("keepdims").unwrap_or(1) != 0,
-            node.attrs.get_ints("axes"),
-            input_shapes[0],
-        )),
+        OpType::ReduceMin => {
+            let NodeOp::ReduceMin { keepdims } = &node.op else {
+                unreachable!()
+            };
+            Box::new(reduce_min::ReduceMin::new(
+                inputs,
+                *keepdims,
+                None,
+                input_shapes[0],
+            ))
+        }
         OpType::NonMaxSuppression => Box::new(nms::Nms::new(inputs)),
         OpType::QuantizeLinear => Box::new(quantize_linear::QuantizeLinear::new(inputs)),
-        OpType::DequantizeLinear => Box::new(dequantize_linear::DequantizeLinear::new(
-            inputs,
-            node.attrs.get_int("axis").unwrap_or(1),
-            input_shapes[0],
-        )),
+        OpType::DequantizeLinear => {
+            let NodeOp::DequantizeLinear { axis } = &node.op else {
+                unreachable!()
+            };
+            Box::new(dequantize_linear::DequantizeLinear::new(
+                inputs,
+                *axis,
+                input_shapes[0],
+            ))
+        }
         OpType::QLinearConv => {
+            let NodeOp::QLinearConv {
+                kernel_shape,
+                strides,
+                pads,
+                dilations,
+                group,
+                auto_pad,
+            } = &node.op
+            else {
+                unreachable!()
+            };
             let has_bias = inputs.len() > 8 && !inputs[8].is_empty();
             let mut conv_inputs = vec!["__qconv_x__".to_string(), "__qconv_w__".to_string()];
             if has_bias {
                 conv_inputs.push("__qconv_b__".to_string());
             }
-            let ks = node.attrs.get_ints("kernel_shape").unwrap_or_default();
-            let st = node.attrs.get_ints("strides").unwrap_or_else(|| vec![1, 1]);
-            let pa = node
-                .attrs
-                .get_ints("pads")
-                .unwrap_or_else(|| vec![0, 0, 0, 0]);
-            let di = node
-                .attrs
-                .get_ints("dilations")
-                .unwrap_or_else(|| vec![1, 1]);
-            let gr = node.attrs.get_int("group").unwrap_or(1) as usize;
-            let ap = node.attrs.get_string("auto_pad").unwrap_or_default();
             let inner = conv::Conv::new(
                 conv_inputs,
-                ks,
-                st,
-                pa,
-                di,
-                gr,
-                ap,
+                kernel_shape.clone(),
+                strides.clone(),
+                pads.clone(),
+                dilations.clone(),
+                *group as usize,
+                auto_pad.clone(),
                 input_shapes[0],
                 input_shapes[3],
                 input_layout(0) == Layout::NHWC,
@@ -1020,65 +1093,107 @@ pub fn build_node_with_opset(
             ))
         }
         OpType::Abs => Box::new(abs::Abs::new(inputs)),
-        OpType::ArgMax => Box::new(argmax::ArgMax::new(
-            inputs,
-            node.attrs.get_int("axis").unwrap_or(0),
-            node.attrs.get_int("keepdims").unwrap_or(1) != 0,
-            node.attrs.get_int("select_last_index").unwrap_or(0) != 0,
-        )),
-        OpType::CategoryMapper => {
-            let cats_strings = match node.attrs.get("cats_strings") {
-                Some(Attr::Strings(v)) => v.clone(),
-                _ => vec![],
+        OpType::ArgMax => {
+            let NodeOp::ArgMax {
+                axis,
+                keepdims,
+                select_last_index,
+            } = &node.op
+            else {
+                unreachable!()
             };
-            let cats_int64s = match node.attrs.get("cats_int64s") {
-                Some(Attr::Ints(v)) => v.clone(),
-                _ => vec![],
-            };
-            let default_int64 = node.attrs.get_int("default_int64").unwrap_or(-1);
-            Box::new(category_mapper::CategoryMapper::new(
+            Box::new(argmax::ArgMax::new(
                 inputs,
+                *axis,
+                *keepdims,
+                *select_last_index,
+            ))
+        }
+        OpType::CategoryMapper => {
+            let NodeOp::CategoryMapper {
                 cats_strings,
                 cats_int64s,
                 default_int64,
+            } = &node.op
+            else {
+                unreachable!()
+            };
+            Box::new(category_mapper::CategoryMapper::new(
+                inputs,
+                cats_strings.clone(),
+                cats_int64s.clone(),
+                *default_int64,
             ))
         }
         OpType::Compress => {
-            let axis = node.attrs.get_int("axis");
-            Box::new(compress::Compress::new(inputs, axis))
+            let NodeOp::Compress { axis } = &node.op else {
+                unreachable!()
+            };
+            Box::new(compress::Compress::new(inputs, *axis))
         }
         OpType::Dropout => Box::new(dropout::Dropout::new(inputs)),
-        OpType::Hardmax => Box::new(hardmax::Hardmax::new(
-            inputs,
-            node.attrs.get_int("axis").unwrap_or(-1),
-        )),
+        OpType::Hardmax => {
+            let NodeOp::Hardmax { axis } = &node.op else {
+                unreachable!()
+            };
+            Box::new(hardmax::Hardmax::new(inputs, *axis))
+        }
         OpType::Lstm => {
-            let hs = node.attrs.get_int("hidden_size").unwrap_or(1) as usize;
-            let dir_str = node.attrs.get_string("direction").unwrap_or_default();
-            let direction = match dir_str.as_str() {
+            let NodeOp::Lstm {
+                hidden_size,
+                direction,
+            } = &node.op
+            else {
+                unreachable!()
+            };
+            let dir = match direction.as_str() {
                 "reverse" => lstm::LstmDirection::Reverse,
                 "bidirectional" => lstm::LstmDirection::Bidirectional,
                 _ => lstm::LstmDirection::Forward,
             };
-            Box::new(lstm::Lstm::new(inputs, node.outputs.clone(), hs, direction))
+            Box::new(lstm::Lstm::new(
+                inputs,
+                node.outputs.clone(),
+                *hidden_size as usize,
+                dir,
+            ))
         }
-        OpType::ReduceMax => Box::new(reduce_max::ReduceMax::new(
-            inputs,
-            node.attrs.get_int("keepdims").unwrap_or(1) != 0,
-            node.attrs.get_ints("axes"),
-        )),
-        OpType::ReduceMean => Box::new(reduce_mean::ReduceMean::new(
-            inputs,
-            node.attrs.get_int("keepdims").unwrap_or(1) != 0,
-            node.attrs.get_ints("axes"),
-            node.attrs.get_int("noop_with_empty_axes").unwrap_or(0) != 0,
-        )),
-        OpType::ReduceSum => Box::new(reduce_sum::ReduceSum::new(
-            inputs,
-            node.attrs.get_int("keepdims").unwrap_or(1) != 0,
-            node.attrs.get_ints("axes"),
-            node.attrs.get_int("noop_with_empty_axes").unwrap_or(0) != 0,
-        )),
+        OpType::ReduceMax => {
+            let NodeOp::ReduceMax { keepdims } = &node.op else {
+                unreachable!()
+            };
+            Box::new(reduce_max::ReduceMax::new(inputs, *keepdims, None))
+        }
+        OpType::ReduceMean => {
+            let NodeOp::ReduceMean {
+                keepdims,
+                noop_with_empty_axes,
+            } = &node.op
+            else {
+                unreachable!()
+            };
+            Box::new(reduce_mean::ReduceMean::new(
+                inputs,
+                *keepdims,
+                None,
+                *noop_with_empty_axes,
+            ))
+        }
+        OpType::ReduceSum => {
+            let NodeOp::ReduceSum {
+                keepdims,
+                noop_with_empty_axes,
+            } = &node.op
+            else {
+                unreachable!()
+            };
+            Box::new(reduce_sum::ReduceSum::new(
+                inputs,
+                *keepdims,
+                None,
+                *noop_with_empty_axes,
+            ))
+        }
         OpType::Sum => Box::new(sum::Sum::new(inputs)),
         OpType::Where => Box::new(where_op::Where::new(inputs)),
         // Unary ops
@@ -1100,28 +1215,36 @@ pub fn build_node_with_opset(
         OpType::Softsign => Box::new(unary_ops::Softsign::new(inputs)),
         OpType::IsNaN => Box::new(unary_ops::IsNaN::new(inputs)),
         OpType::IsInf => Box::new(unary_ops::IsInf::new(inputs)),
-        OpType::Elu => Box::new(unary_ops::Elu::new(
-            inputs,
-            node.attrs.get_float("alpha").unwrap_or(1.0),
-        )),
-        OpType::Celu => Box::new(unary_ops::Celu::new(
-            inputs,
-            node.attrs.get_float("alpha").unwrap_or(1.0),
-        )),
-        OpType::Selu => Box::new(unary_ops::Selu::new(
-            inputs,
-            node.attrs.get_float("alpha").unwrap_or(1.673_263_2),
-            node.attrs.get_float("gamma").unwrap_or(1.050_701),
-        )),
-        OpType::HardSigmoid => Box::new(unary_ops::HardSigmoid::new(
-            inputs,
-            node.attrs.get_float("alpha").unwrap_or(0.2),
-            node.attrs.get_float("beta").unwrap_or(0.5),
-        )),
-        OpType::ThresholdedRelu => Box::new(unary_ops::ThresholdedRelu::new(
-            inputs,
-            node.attrs.get_float("alpha").unwrap_or(1.0),
-        )),
+        OpType::Elu => {
+            let NodeOp::Elu { alpha } = &node.op else {
+                unreachable!()
+            };
+            Box::new(unary_ops::Elu::new(inputs, *alpha))
+        }
+        OpType::Celu => {
+            let NodeOp::Celu { alpha } = &node.op else {
+                unreachable!()
+            };
+            Box::new(unary_ops::Celu::new(inputs, *alpha))
+        }
+        OpType::Selu => {
+            let NodeOp::Selu { alpha, gamma } = &node.op else {
+                unreachable!()
+            };
+            Box::new(unary_ops::Selu::new(inputs, *alpha, *gamma))
+        }
+        OpType::HardSigmoid => {
+            let NodeOp::HardSigmoid { alpha, beta } = &node.op else {
+                unreachable!()
+            };
+            Box::new(unary_ops::HardSigmoid::new(inputs, *alpha, *beta))
+        }
+        OpType::ThresholdedRelu => {
+            let NodeOp::ThresholdedRelu { alpha } = &node.op else {
+                unreachable!()
+            };
+            Box::new(unary_ops::ThresholdedRelu::new(inputs, *alpha))
+        }
         OpType::Loop | OpType::Split | OpType::If | OpType::TopK | OpType::Scan => {
             unreachable!()
         }
@@ -1131,13 +1254,13 @@ pub fn build_node_with_opset(
 }
 
 pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result<()> {
-    let op = node.op_type;
+    let op = node.op_type();
 
     let _span = tracing::trace_span!("op", op = %op, name = %node.name).entered();
 
     if op == OpType::Loop {
-        let body = match node.attrs.get("body") {
-            Some(Attr::Graph(g)) => (**g).clone(),
+        let body = match &node.op {
+            NodeOp::Loop { body } => (**body).clone(),
             _ => anyhow::bail!("Loop: no body graph"),
         };
         let mut loop_layer = loop_op::Loop::new(node.inputs.clone(), node.outputs.clone(), body);
@@ -1145,60 +1268,68 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
     }
 
     if op == OpType::Split {
-        let axis = node.attrs.get_int("axis").unwrap_or(0);
-        let split_sizes = node.attrs.get_ints("split").unwrap_or_default();
-        let mut split_layer =
-            split::Split::new(node.inputs.clone(), node.outputs.clone(), axis, split_sizes);
+        let NodeOp::Split { axis } = &node.op else {
+            unreachable!()
+        };
+        let split_sizes: Vec<i64> = node
+            .inputs
+            .get(1)
+            .filter(|s| !s.is_empty())
+            .and_then(|name| values.get(name))
+            .and_then(|t| t.ints().ok().map(|s| s.to_vec()))
+            .unwrap_or_default();
+        let mut split_layer = split::Split::new(
+            node.inputs.clone(),
+            node.outputs.clone(),
+            *axis,
+            split_sizes,
+        );
         return split_layer.execute(values, &crate::Constants::empty());
     }
 
     if op == OpType::If {
-        let then_branch = match node.attrs.get("then_branch") {
-            Some(Attr::Graph(g)) => (**g).clone(),
-            _ => anyhow::bail!("If: no then_branch"),
-        };
-        let else_branch = match node.attrs.get("else_branch") {
-            Some(Attr::Graph(g)) => (**g).clone(),
-            _ => anyhow::bail!("If: no else_branch"),
+        let NodeOp::If {
+            then_branch,
+            else_branch,
+        } = &node.op
+        else {
+            anyhow::bail!("If: expected NodeOp::If");
         };
         let mut if_layer = if_op::If::new(
             node.inputs.clone(),
             node.outputs.clone(),
-            then_branch,
-            else_branch,
+            (**then_branch).clone(),
+            (**else_branch).clone(),
         );
         return if_layer.execute(values, &crate::Constants::empty());
     }
 
     if op == OpType::TopK {
-        let axis = node.attrs.get_int("axis").unwrap_or(-1);
-        let largest = node.attrs.get_int("largest").unwrap_or(1) != 0;
+        let NodeOp::TopK { axis, largest } = &node.op else {
+            unreachable!()
+        };
         let mut topk_layer =
-            topk::TopK::new(node.inputs.clone(), node.outputs.clone(), axis, largest);
+            topk::TopK::new(node.inputs.clone(), node.outputs.clone(), *axis, *largest);
         return topk_layer.execute(values, &crate::Constants::empty());
     }
 
     if op == OpType::Scan {
-        let body = match node.attrs.get("body") {
-            Some(Attr::Graph(g)) => (**g).clone(),
-            _ => anyhow::bail!("Scan: no body graph"),
-        };
-        let num_scan_inputs = node.attrs.get_int("num_scan_inputs").unwrap_or(0) as usize;
-        let scan_input_directions = node
-            .attrs
-            .get_ints("scan_input_directions")
-            .unwrap_or_default();
-        let scan_output_directions = node
-            .attrs
-            .get_ints("scan_output_directions")
-            .unwrap_or_default();
-        let mut scan_layer = scan::Scan::new(
-            node.inputs.clone(),
-            node.outputs.clone(),
+        let NodeOp::Scan {
             body,
             num_scan_inputs,
             scan_input_directions,
             scan_output_directions,
+        } = &node.op
+        else {
+            anyhow::bail!("Scan: expected NodeOp::Scan");
+        };
+        let mut scan_layer = scan::Scan::new(
+            node.inputs.clone(),
+            node.outputs.clone(),
+            (**body).clone(),
+            *num_scan_inputs as usize,
+            scan_input_directions.clone(),
+            scan_output_directions.clone(),
         );
         return scan_layer.execute(values, &crate::Constants::empty());
     }
@@ -1258,8 +1389,8 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
             // LayoutTranspose changes the data layout — propagate to the tensor
             // so downstream ops (e.g. Conv) see the correct layout in the shape map.
             if op == OpType::LayoutTranspose {
-                let perm = node.attrs.get_ints("perm").unwrap_or_default();
-                out.layout = match (input_layout, perm.as_slice()) {
+                let perm = node.op.perm().unwrap_or(&[]);
+                out.layout = match (input_layout, perm) {
                     (Layout::NCHW, [0, 2, 3, 1]) => Layout::NHWC,
                     (Layout::NHWC, [0, 3, 1, 2]) => Layout::NCHW,
                     _ => Layout::Unknown,
@@ -1286,7 +1417,6 @@ fn compile_xnnpack_subgraphs(
     node_meta: Vec<Option<(OpType, Vec<String>, Node)>>,
     shape_map: &mut HashMap<String, ShapeLayout>,
     type_map: &HashMap<String, DType>,
-    _opset_version: i64,
     graph_output_names: &[String],
 ) -> Result<Vec<PlanNode>> {
     use super::xnnpack_subgraph::CapturedOp;
@@ -1305,7 +1435,10 @@ fn compile_xnnpack_subgraphs(
             }
             // XNNPACK only supports bilinear resize, not nearest
             if *op == OpType::Resize {
-                let mode = node.attrs.get_string("mode").unwrap_or_default();
+                let mode = match &node.op {
+                    NodeOp::Resize { mode, .. } => mode.as_str(),
+                    _ => "",
+                };
                 if mode != "linear" {
                     return false;
                 }
@@ -1453,7 +1586,7 @@ fn infer_output_layout(
     layout_only: &HashMap<String, Layout>,
 ) -> Layout {
     if op == OpType::LayoutTranspose {
-        let perm = node.attrs.get_ints("perm").unwrap_or_default();
+        let perm = node.op.perm().unwrap_or(&[]);
         if perm == [0, 2, 3, 1] {
             return Layout::NHWC;
         } else if perm == [0, 3, 1, 2] {
