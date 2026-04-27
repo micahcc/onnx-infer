@@ -1372,30 +1372,29 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
         PlanNode::Single { output, layer } => {
             let mut out = values.remove(output.as_str()).unwrap_or_default();
             // Capture input layout before borrowing values for execute.
-            let input_layout = if op == OpType::LayoutTranspose {
-                node.inputs
-                    .first()
-                    .and_then(|name| values.get(name))
-                    .map(|t| t.layout)
-                    .unwrap_or(Layout::NCHW)
-            } else {
-                Layout::NCHW
-            };
+            let input_layout = node
+                .inputs
+                .first()
+                .and_then(|name| values.get(name))
+                .map(|t| t.layout)
+                .unwrap_or(Layout::NCHW);
             let vals = crate::Values {
                 intermediates: values,
                 constants: crate::Constants::empty(),
             };
             let result = layer.execute(&vals, &mut out);
-            // LayoutTranspose changes the data layout — propagate to the tensor
-            // so downstream ops (e.g. Conv) see the correct layout in the shape map.
-            if op == OpType::LayoutTranspose {
+            // Propagate layout through the op chain so downstream ops see the
+            // correct layout in the shape map built from values.
+            out.layout = if op == OpType::LayoutTranspose {
                 let perm = node.op.perm().unwrap_or(&[]);
-                out.layout = match (input_layout, perm) {
+                match (input_layout, perm) {
                     (Layout::NCHW, [0, 2, 3, 1]) => Layout::NHWC,
                     (Layout::NHWC, [0, 3, 1, 2]) => Layout::NCHW,
                     _ => Layout::Unknown,
-                };
-            }
+                }
+            } else {
+                infer_output_layout(op, node, &exec_shape_map, &HashMap::new())
+            };
             values.insert(output.clone(), out);
             result
         }

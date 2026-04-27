@@ -315,6 +315,8 @@ impl InferenceEngine {
             }
         }
 
+
+
         for name in output_names {
             let src = self.intermediates.get(name).or_else(|| constants.get(name));
             if let Some(src) = src {

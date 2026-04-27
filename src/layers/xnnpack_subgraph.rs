@@ -1296,6 +1296,18 @@ impl SubgraphBuilder {
         shape_map: &HashMap<String, Vec<usize>>,
         constants: &crate::Constants,
     ) -> Result<()> {
+        // XNNPACK static_slice doesn't support strides — bail if steps != 1.
+        if let Some(steps) = cap
+            .inputs
+            .get(4)
+            .and_then(|n| constants.get(n))
+            .and_then(|t| t.ints().ok())
+        {
+            if steps.iter().any(|&s| s != 1) {
+                anyhow::bail!("XNNPACK Slice: non-unit steps not supported");
+            }
+        }
+
         let in_shape = shape_map.get(&cap.inputs[0]).cloned().unwrap_or_default();
         let out_shape = shape_map.get(&cap.outputs[0]).cloned().unwrap_or_default();
         if in_shape.is_empty() || out_shape.is_empty() {
