@@ -163,7 +163,6 @@ pub enum NodeOp {
     Softsign,
     Sqrt,
     Squeeze,
-    Sub,
     Sum,
     Tan,
     Tanh,
@@ -181,6 +180,10 @@ pub enum NodeOp {
         axis: i64,
     },
     Mul {
+        legacy_broadcast: bool,
+        axis: i64,
+    },
+    Sub {
         legacy_broadcast: bool,
         axis: i64,
     },
@@ -463,7 +466,7 @@ impl NodeOp {
             Self::Split { .. } => OpType::Split,
             Self::Sqrt => OpType::Sqrt,
             Self::Squeeze => OpType::Squeeze,
-            Self::Sub => OpType::Sub,
+            Self::Sub { .. } => OpType::Sub,
             Self::Sum => OpType::Sum,
             Self::Tan => OpType::Tan,
             Self::Tanh => OpType::Tanh,
@@ -796,7 +799,6 @@ fn derive_node_op(op_type: OpType, a: &Attrs, opset: i64) -> NodeOp {
         OpType::Softsign => NodeOp::Softsign,
         OpType::Sqrt => NodeOp::Sqrt,
         OpType::Squeeze => NodeOp::Squeeze,
-        OpType::Sub => NodeOp::Sub,
         OpType::Sum => NodeOp::Sum,
         OpType::Tan => NodeOp::Tan,
         OpType::Tanh => NodeOp::Tanh,
@@ -814,6 +816,10 @@ fn derive_node_op(op_type: OpType, a: &Attrs, opset: i64) -> NodeOp {
             axis: a.get_int("axis").unwrap_or(0),
         },
         OpType::Mul => NodeOp::Mul {
+            legacy_broadcast: a.get_int("broadcast").unwrap_or(0) != 0,
+            axis: a.get_int("axis").unwrap_or(0),
+        },
+        OpType::Sub => NodeOp::Sub {
             legacy_broadcast: a.get_int("broadcast").unwrap_or(0) != 0,
             axis: a.get_int("axis").unwrap_or(0),
         },

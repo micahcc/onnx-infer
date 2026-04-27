@@ -137,6 +137,15 @@ pub fn is_xnnpack_compatible(op: OpType) -> bool {
             | OpType::ReduceMin
             | OpType::Softplus
             | OpType::BatchNormalization2d
+            // Quantized ops — these participate in XNNPACK subgraphs when
+            // quant pattern recognition has identified them as part of a
+            // DQ→Op→Q chain or QLinear fused op.
+            | OpType::DequantizeLinear
+            | OpType::QuantizeLinear
+            | OpType::QLinearConv
+            | OpType::QLinearMatMul
+            | OpType::QLinearAdd
+            | OpType::QLinearGlobalAveragePool
     )
 }
 
@@ -263,6 +272,121 @@ impl SubgraphBuilder {
         Ok(id_out)
     }
 
+    // -------------------------------------------------------------------
+    // Quantized tensor definitions
+    // -------------------------------------------------------------------
+
+    /// Define a quantized tensor value (per-tensor quantization).
+    fn define_quantized_tensor_value(
+        &mut self,
+        name: &str,
+        shape: &[usize],
+        data: Option<&[u8]>,
+        external_id: u32,
+        flags: u32,
+        datatype: u32,
+        zero_point: i32,
+        scale: f32,
+    ) -> Result<u32> {
+        let mut id_out = 0u32;
+        let data_ptr = data
+            .map(|d| d.as_ptr() as *const c_void)
+            .unwrap_or(std::ptr::null());
+        let status = unsafe {
+            xnn_define_quantized_tensor_value(
+                self.subgraph,
+                datatype,
+                zero_point,
+                scale,
+                shape.len(),
+                shape.as_ptr(),
+                data_ptr,
+                external_id,
+                flags,
+                &mut id_out,
+            )
+        };
+        if status != xnn_status_xnn_status_success {
+            anyhow::bail!(
+                "xnn_define_quantized_tensor_value ({name}) failed: {status:?}"
+            );
+        }
+        self.value_ids.insert(name.to_string(), id_out);
+        Ok(id_out)
+    }
+
+    /// Define a channelwise-quantized static tensor (e.g. conv weights).
+    fn define_channelwise_quantized_static(
+        &mut self,
+        name: &str,
+        shape: &[usize],
+        data: Vec<u8>,
+        datatype: u32,
+        scales: &[f32],
+        channel_dim: usize,
+    ) -> Result<u32> {
+        let mut id_out = 0u32;
+        self.static_data_bytes.push(data);
+        let data_ptr = self.static_data_bytes.last().unwrap().as_ptr() as *const c_void;
+        let status = unsafe {
+            xnn_define_channelwise_quantized_tensor_value(
+                self.subgraph,
+                datatype,
+                scales.as_ptr(),
+                shape.len(),
+                channel_dim,
+                shape.as_ptr(),
+                data_ptr,
+                XNN_INVALID_VALUE_ID,
+                0,
+                &mut id_out,
+            )
+        };
+        if status != xnn_status_xnn_status_success {
+            anyhow::bail!(
+                "xnn_define_channelwise_quantized_tensor_value ({name}) failed: {status:?}"
+            );
+        }
+        self.value_ids.insert(name.to_string(), id_out);
+        Ok(id_out)
+    }
+
+    /// Define a per-tensor quantized static tensor (e.g. per-tensor weights).
+    fn define_quantized_static(
+        &mut self,
+        name: &str,
+        shape: &[usize],
+        data: Vec<u8>,
+        datatype: u32,
+        zero_point: i32,
+        scale: f32,
+    ) -> Result<u32> {
+        let mut id_out = 0u32;
+        self.static_data_bytes.push(data);
+        let data_ptr = self.static_data_bytes.last().unwrap().as_ptr() as *const c_void;
+        let status = unsafe {
+            xnn_define_quantized_tensor_value(
+                self.subgraph,
+                datatype,
+                zero_point,
+                scale,
+                shape.len(),
+                shape.as_ptr(),
+                data_ptr,
+                XNN_INVALID_VALUE_ID,
+                0,
+                &mut id_out,
+            )
+        };
+        if status != xnn_status_xnn_status_success {
+            anyhow::bail!(
+                "xnn_define_quantized_tensor_value (static {name}) failed: {status:?}"
+            );
+        }
+        self.value_ids.insert(name.to_string(), id_out);
+        Ok(id_out)
+    }
+
     fn get_or_define_value(
         &mut self,
         name: &str,
@@ -342,6 +466,12 @@ impl SubgraphBuilder {
             OpType::ReduceMin => self.add_reduce_min(cap, shape_map, constants),
             OpType::Softplus => self.add_softplus(cap, shape_map),
             OpType::BatchNormalization2d => self.add_batchnorm(cap, shape_map, constants),
+            // Quantized ops: DQ and Q become convert ops in XNNPACK.
+            // QLinear* ops are handled via the quantized op path and should
+            // not reach here (they are rewritten to core ops by quant_patterns).
+            // If they do reach here, fall through to the unsupported bail.
+            OpType::DequantizeLinear => self.add_dequantize(cap, shape_map),
+            OpType::QuantizeLinear => self.add_quantize(cap, shape_map),
             _ => anyhow::bail!("XNNPACK: unsupported op {:?}", cap.op),
         }
     }
@@ -940,6 +1070,62 @@ impl SubgraphBuilder {
             anyhow::bail!("xnn_define_binary (BN/Add) failed: {status:?}");
         }
 
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Quantized ops — DQ/Q as convert ops within XNNPACK subgraph
+    // -----------------------------------------------------------------------
+
+    /// DequantizeLinear: define a convert from quantized input to fp32 output.
+    /// The quantized input tensor must already be defined (by the quant-aware
+    /// compilation path). This adds an xnn_unary_convert node.
+    fn add_dequantize(
+        &mut self,
+        cap: &CapturedOp,
+        shape_map: &HashMap<String, Vec<usize>>,
+    ) -> Result<()> {
+        let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
+        let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
+        let status = unsafe {
+            xnn_define_unary(
+                self.subgraph,
+                xnn_unary_operator_xnn_unary_convert,
+                std::ptr::null(),
+                input_id,
+                output_id,
+                0,
+            )
+        };
+        if status != xnn_status_xnn_status_success {
+            anyhow::bail!("xnn_define_unary (DequantizeLinear/convert) failed: {status:?}");
+        }
+        Ok(())
+    }
+
+    /// QuantizeLinear: define a convert from fp32 input to quantized output.
+    /// The quantized output tensor must already be defined (by the quant-aware
+    /// compilation path). This adds an xnn_unary_convert node.
+    fn add_quantize(
+        &mut self,
+        cap: &CapturedOp,
+        shape_map: &HashMap<String, Vec<usize>>,
+    ) -> Result<()> {
+        let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
+        let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
+        let status = unsafe {
+            xnn_define_unary(
+                self.subgraph,
+                xnn_unary_operator_xnn_unary_convert,
+                std::ptr::null(),
+                input_id,
+                output_id,
+                0,
+            )
+        };
+        if status != xnn_status_xnn_status_success {
+            anyhow::bail!("xnn_define_unary (QuantizeLinear/convert) failed: {status:?}");
+        }
         Ok(())
     }
 
@@ -1682,7 +1868,9 @@ fn infer_op_output_shapes(
         | OpType::Cast
         | OpType::Identity
         | OpType::Softplus
-        | OpType::BatchNormalization2d => {
+        | OpType::BatchNormalization2d
+        | OpType::DequantizeLinear
+        | OpType::QuantizeLinear => {
             if let Some(x) = get(0) {
                 result.push((op.outputs[0].clone(), x.clone()));
             }
@@ -2041,6 +2229,10 @@ struct CompiledSubgraph {
     output_shapes: Vec<Vec<usize>>,
     _static_data: Vec<Vec<f32>>,
     _static_data_bytes: Vec<Vec<u8>>,
+    /// Per-input: Some((scale, zp)) if the external input is quantized (u8).
+    input_quant: Vec<Option<(f32, i32)>>,
+    /// Per-output: Some((scale, zp)) if the external output is quantized (u8).
+    output_quant: Vec<Option<(f32, i32)>>,
     /// Whether xnn_reshape_runtime has been called.
     /// Only needs to be called once since shapes are static after compilation.
     is_setup: bool,
@@ -2071,6 +2263,9 @@ pub struct XnnpackSubgraph {
     pub ops: Vec<CapturedOp>,
     required_outputs: Vec<String>,
     shape_hints: HashMap<String, Vec<usize>>,
+    /// Quantization metadata from pattern recognition. When present, tensors
+    /// known to be quantized will be defined with XNNPACK quantized datatypes.
+    pub quant_map: Option<crate::quant_patterns::QuantMap>,
 }
 
 unsafe impl Send for XnnpackSubgraph {}
@@ -2087,6 +2282,27 @@ impl XnnpackSubgraph {
             ops,
             required_outputs,
             shape_hints,
+            quant_map: None,
+        }
+    }
+
+    pub fn with_quant_map(
+        ops: Vec<CapturedOp>,
+        required_outputs: Vec<String>,
+        shape_hints: HashMap<String, Vec<usize>>,
+        quant_map: crate::quant_patterns::QuantMap,
+    ) -> Self {
+        Self {
+            compiled: None,
+            compile_failed: false,
+            ops,
+            required_outputs,
+            shape_hints,
+            quant_map: if quant_map.quantized_ops.is_empty() {
+                None
+            } else {
+                Some(quant_map)
+            },
         }
     }
 
@@ -2113,7 +2329,9 @@ impl XnnpackSubgraph {
         let mut needs_recompile = false;
         for (i, name) in compiled.input_names.iter().enumerate() {
             if let Some(tensor) = constants.inputs.get(name).or_else(|| values.get(name)) {
-                if tensor.dtype() != crate::DType::Float {
+                // Allow non-float inputs if they are quantized (tracked in quant_map)
+                let is_quantized = compiled.input_quant[i].is_some();
+                if tensor.dtype() != crate::DType::Float && !is_quantized {
                     tracing::debug!("XNNPACK: dtype mismatch for '{name}'");
                     self.compiled = None;
                     self.compile_failed = true;
@@ -2186,32 +2404,66 @@ impl XnnpackSubgraph {
             }
         }
 
+        // Temporary u8 buffers for quantized external tensors.
+        // We keep them alive until after xnn_invoke_runtime returns.
+        let mut quant_input_bufs: Vec<Option<Vec<u8>>> = vec![None; compiled.input_names.len()];
+        let mut quant_output_bufs: Vec<Option<Vec<u8>>> = vec![None; compiled.output_names.len()];
+
         for (i, name) in compiled.input_names.iter().enumerate() {
             let tensor = values
                 .get_mut(name)
                 .ok_or_else(|| anyhow::anyhow!("XNNPACK: missing input {name}"))?;
             let numel: usize = compiled.input_shapes[i].iter().product();
-            // Ensure buffer has XNN_EXTRA_BYTES padding beyond the actual data
-            let buf = tensor.as_mut_f32(numel + xnn_pad);
-            // Zero the padding (XNNPACK may read it)
-            for v in &mut buf[numel..] {
-                *v = 0.0;
+            let xnn_extra = XNN_EXTRA_BYTES as usize;
+
+            if let Some(_qp) = &compiled.input_quant[i] {
+                // Quantized input: convert f32-stored-u8 values to actual u8 buffer
+                let f = tensor.floats().unwrap_or(&[]);
+                let mut buf = vec![0u8; numel + xnn_extra];
+                for j in 0..numel.min(f.len()) {
+                    buf[j] = f[j].round().clamp(0.0, 255.0) as u8;
+                }
+                quant_input_bufs[i] = Some(buf);
+                let buf_ref = quant_input_bufs[i].as_mut().unwrap();
+                external_values.push(xnn_external_value {
+                    id: i as u32,
+                    data: buf_ref.as_mut_ptr() as *mut c_void,
+                });
+            } else {
+                // Float input: use f32 buffer with XNN_EXTRA_BYTES padding
+                let buf = tensor.as_mut_f32(numel + xnn_pad);
+                for v in &mut buf[numel..] {
+                    *v = 0.0;
+                }
+                external_values.push(xnn_external_value {
+                    id: i as u32,
+                    data: buf.as_mut_ptr() as *mut c_void,
+                });
             }
-            external_values.push(xnn_external_value {
-                id: i as u32,
-                data: buf.as_mut_ptr() as *mut c_void,
-            });
         }
 
         for (i, name) in compiled.output_names.iter().enumerate() {
             let ext_id = (compiled.input_names.len() + i) as u32;
             let numel: usize = compiled.output_shapes[i].iter().product();
-            let tensor = values.entry(name.clone()).or_default();
-            let buf = tensor.as_mut_f32(numel + xnn_pad);
-            external_values.push(xnn_external_value {
-                id: ext_id,
-                data: buf.as_mut_ptr() as *mut c_void,
-            });
+            let xnn_extra = XNN_EXTRA_BYTES as usize;
+
+            if compiled.output_quant[i].is_some() {
+                // Quantized output: allocate u8 buffer
+                let buf = vec![0u8; numel + xnn_extra];
+                quant_output_bufs[i] = Some(buf);
+                let buf_ref = quant_output_bufs[i].as_mut().unwrap();
+                external_values.push(xnn_external_value {
+                    id: ext_id,
+                    data: buf_ref.as_mut_ptr() as *mut c_void,
+                });
+            } else {
+                let tensor = values.entry(name.clone()).or_default();
+                let buf = tensor.as_mut_f32(numel + xnn_pad);
+                external_values.push(xnn_external_value {
+                    id: ext_id,
+                    data: buf.as_mut_ptr() as *mut c_void,
+                });
+            }
         }
 
         if !compiled.is_setup {
@@ -2249,6 +2501,11 @@ impl XnnpackSubgraph {
 
         // Truncate padding from input tensors (restore original length)
         for (i, name) in compiled.input_names.iter().enumerate() {
+            if compiled.input_quant[i].is_some() {
+                // Quantized input: the original tensor was not modified (we used
+                // a temporary u8 buffer), so nothing to restore.
+                continue;
+            }
             let numel: usize = compiled.input_shapes[i].iter().product();
             if let Some(tensor) = values.get_mut(name) {
                 tensor.as_mut_f32(numel).truncate(numel);
@@ -2259,7 +2516,17 @@ impl XnnpackSubgraph {
         for (i, name) in compiled.output_names.iter().enumerate() {
             let shape = &compiled.output_shapes[i];
             let numel: usize = shape.iter().product();
-            if let Some(tensor) = values.get_mut(name) {
+            if compiled.output_quant[i].is_some() {
+                // Quantized output: convert u8 buffer back to f32-stored values
+                if let Some(ref buf) = quant_output_bufs[i] {
+                    let tensor = values.entry(name.clone()).or_default();
+                    let f = tensor.as_mut_f32(numel);
+                    for j in 0..numel {
+                        f[j] = buf[j] as f32;
+                    }
+                    tensor.set_dims(shape);
+                }
+            } else if let Some(tensor) = values.get_mut(name) {
                 tensor.as_mut_f32(numel).truncate(numel);
                 tensor.set_dims(shape);
             }
@@ -2315,8 +2582,9 @@ impl XnnpackSubgraph {
             }
         }
 
-        // Check for non-float external inputs
+        // Check for non-float external inputs (allow quantized tensors if quant_map knows them)
         {
+            let has_quant = self.quant_map.is_some();
             for op in &self.ops {
                 for inp in &op.inputs {
                     if !inp.is_empty()
@@ -2325,12 +2593,21 @@ impl XnnpackSubgraph {
                     {
                         if let Some(t) = constants.inputs.get(inp).or_else(|| values.get(inp)) {
                             if t.dtype() != crate::DType::Float {
-                                tracing::debug!(
-                                    "XNNPACK: non-float input '{inp}' dtype={:?}",
-                                    t.dtype()
-                                );
-                                self.compile_failed = true;
-                                return Ok(());
+                                // Allow if the quant_map tracks this tensor as quantized
+                                let is_known_quant = has_quant
+                                    && self
+                                        .quant_map
+                                        .as_ref()
+                                        .map(|qm| qm.tensor_quant.contains_key(inp))
+                                        .unwrap_or(false);
+                                if !is_known_quant {
+                                    tracing::debug!(
+                                        "XNNPACK: non-float input '{inp}' dtype={:?}",
+                                        t.dtype()
+                                    );
+                                    self.compile_failed = true;
+                                    return Ok(());
+                                }
                             }
                         }
                     }
@@ -2363,7 +2640,13 @@ impl XnnpackSubgraph {
             return Ok(());
         }
 
-        match compile_subgraph(&self.ops, &self.required_outputs, &shape_map, constants) {
+        match compile_subgraph(
+            &self.ops,
+            &self.required_outputs,
+            &shape_map,
+            constants,
+            self.quant_map.as_ref(),
+        ) {
             Ok(compiled) => {
                 tracing::debug!(
                     "XNNPACK: compiled subgraph: {} inputs, {} outputs, {} ops",
@@ -2419,6 +2702,7 @@ fn compile_subgraph(
     required_outputs: &[String],
     shape_map: &HashMap<String, Vec<usize>>,
     constants: &crate::Constants,
+    quant_map: Option<&crate::quant_patterns::QuantMap>,
 ) -> Result<CompiledSubgraph> {
     // Identify external inputs (consumed but not produced, not initializers)
     let mut produced: HashSet<String> = HashSet::new();
@@ -2442,8 +2726,9 @@ fn compile_subgraph(
 
     const MAX_BUF_ELEMS: usize = 256 * 1024 * 1024 / 4; // 256 MB cap
 
-    // Define external inputs
+    // Define external inputs (possibly quantized)
     let mut input_shapes = Vec::new();
+    let mut input_quant_info: Vec<Option<(f32, i32)>> = Vec::new();
     for (i, name) in external_inputs.iter().enumerate() {
         let shape = shape_map.get(name).cloned().unwrap_or_default();
         let numel: usize = shape
@@ -2455,12 +2740,31 @@ fn compile_subgraph(
                 "XNNPACK: input '{name}' has unreasonable shape {shape:?} (numel={numel})"
             );
         }
-        builder.define_external_input(name, i as u32, &shape)?;
+
+        // Check if this tensor is quantized
+        let tq = quant_map.and_then(|qm| qm.tensor_quant.get(name));
+        if let Some(crate::quant_patterns::TensorQuant::PerTensor(q)) = tq {
+            builder.define_quantized_tensor_value(
+                name,
+                &shape,
+                None,
+                i as u32,
+                XNN_VALUE_FLAG_EXTERNAL_INPUT,
+                xnn_datatype_xnn_datatype_quint8,
+                q.zero_point,
+                q.scale,
+            )?;
+            input_quant_info.push(Some((q.scale, q.zero_point)));
+        } else {
+            builder.define_external_input(name, i as u32, &shape)?;
+            input_quant_info.push(None);
+        }
         input_shapes.push(shape);
     }
 
-    // Define external outputs
+    // Define external outputs (possibly quantized)
     let mut output_shapes = Vec::new();
+    let mut output_quant_info: Vec<Option<(f32, i32)>> = Vec::new();
     for (i, name) in required_outputs.iter().enumerate() {
         let shape = shape_map.get(name).cloned().unwrap_or_default();
         let numel: usize = shape
@@ -2473,19 +2777,74 @@ fn compile_subgraph(
             );
         }
         let ext_id = (external_inputs.len() + i) as u32;
-        builder.define_external_output(name, ext_id, &shape)?;
+
+        let tq = quant_map.and_then(|qm| qm.tensor_quant.get(name));
+        if let Some(crate::quant_patterns::TensorQuant::PerTensor(q)) = tq {
+            builder.define_quantized_tensor_value(
+                name,
+                &shape,
+                None,
+                ext_id,
+                XNN_VALUE_FLAG_EXTERNAL_OUTPUT,
+                xnn_datatype_xnn_datatype_quint8,
+                q.zero_point,
+                q.scale,
+            )?;
+            output_quant_info.push(Some((q.scale, q.zero_point)));
+        } else {
+            builder.define_external_output(name, ext_id, &shape)?;
+            output_quant_info.push(None);
+        }
         output_shapes.push(shape);
     }
 
-    // Pre-define initializers as static values
+    // Pre-define initializers as static values (possibly quantized)
     for op in ops {
         for inp in &op.inputs {
             if !inp.is_empty() && !builder.value_ids.contains_key(inp) && !produced.contains(inp) {
                 if let Some(tensor) = constants.get_static(inp) {
-                    if tensor.dtype() == crate::DType::Float {
-                        let shape: Vec<usize> = tensor.dims.iter().copied().collect();
-                        let data = tensor.floats().context("XNNPACK initializer")?.to_vec();
-                        builder.define_static_value(inp, &shape, data)?;
+                    // Check if this initializer has quantization info
+                    let tq = quant_map.and_then(|qm| qm.tensor_quant.get(inp.as_str()));
+                    match tq {
+                        Some(crate::quant_patterns::TensorQuant::PerTensor(q)) => {
+                            // Static quantized tensor: convert f32-stored values to u8
+                            let shape: Vec<usize> = tensor.dims.iter().copied().collect();
+                            if let Ok(f) = tensor.floats() {
+                                let data: Vec<u8> =
+                                    f.iter().map(|v| v.round().clamp(0.0, 255.0) as u8).collect();
+                                builder.define_quantized_static(
+                                    inp,
+                                    &shape,
+                                    data,
+                                    xnn_datatype_xnn_datatype_quint8,
+                                    q.zero_point,
+                                    q.scale,
+                                )?;
+                            }
+                        }
+                        Some(crate::quant_patterns::TensorQuant::PerChannel(q)) => {
+                            let shape: Vec<usize> = tensor.dims.iter().copied().collect();
+                            if let Ok(f) = tensor.floats() {
+                                let data: Vec<u8> =
+                                    f.iter().map(|v| v.round().clamp(0.0, 255.0) as u8).collect();
+                                builder.define_channelwise_quantized_static(
+                                    inp,
+                                    &shape,
+                                    data,
+                                    xnn_datatype_xnn_datatype_qcint8,
+                                    &q.scales,
+                                    q.channel_dim,
+                                )?;
+                            }
+                        }
+                        None => {
+                            if tensor.dtype() == crate::DType::Float {
+                                let shape: Vec<usize> = tensor.dims.iter().copied().collect();
+                                let data =
+                                    tensor.floats().context("XNNPACK initializer")?.to_vec();
+                                builder.define_static_value(inp, &shape, data)?;
+                            }
+                        }
                     }
                 }
             }
@@ -2514,6 +2873,8 @@ fn compile_subgraph(
         output_shapes,
         _static_data: builder.static_data,
         _static_data_bytes: builder.static_data_bytes,
+        input_quant: input_quant_info,
+        output_quant: output_quant_info,
         is_setup: false,
     })
 }

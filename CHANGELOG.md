@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-04-27 — XNNPACK quantization support
+
+- **Quantization pattern recognition** (`quant_patterns.rs`): New module that
+  scans ONNX graphs during model loading to identify quantization subgraphs
+  eligible for XNNPACK acceleration:
+  - **QDQ chains**: `DequantizeLinear → Op → QuantizeLinear` patterns where the
+    inner op (Conv, MatMul, Gemm, Add, Relu, Clip, pooling, etc.) can run
+    natively on XNNPACK's quantized datapath.
+  - **QLinear fused ops**: `QLinearConv`, `QLinearMatMul`, `QLinearAdd`,
+    `QLinearGlobalAveragePool` are recognized and mapped to XNNPACK quantized
+    operators.
+- **XNNPACK quantized tensor definitions**: The subgraph builder now uses
+  `xnn_define_quantized_tensor_value` and
+  `xnn_define_channelwise_quantized_tensor_value` for tensors with known
+  quantization parameters (scale, zero_point).
+- **DQ/Q as XNNPACK convert ops**: `DequantizeLinear` and `QuantizeLinear`
+  nodes within XNNPACK subgraphs are compiled as `xnn_unary_convert` nodes,
+  letting XNNPACK handle the quantize/dequantize natively.
+- **Quantized external I/O**: The XNNPACK runtime correctly handles u8 buffers
+  for quantized external inputs/outputs, converting to/from the f32-stored
+  representation used by the rest of the engine.
+
 ## 2026-04-25 — Engine cleanup: lazy plan construction with caching
 
 - **Lazy plans**: Plans are no longer built at construction time; they are built

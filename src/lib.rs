@@ -75,6 +75,7 @@ pub mod onnx_ir;
 pub mod tensor_data;
 pub mod utils;
 pub mod values;
+pub mod quant_patterns;
 #[cfg(feature = "xnnpack")]
 pub mod xnnpack_ffi;
 pub use constants::Constants;

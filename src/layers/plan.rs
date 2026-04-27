@@ -142,12 +142,30 @@ impl Plan {
     }
 
     #[cfg(feature = "xnnpack")]
+    #[cfg(feature = "xnnpack")]
     pub fn build_with_xnnpack(
         graph: &Graph,
         input_sizes: &HashMap<String, Dims>,
         initializers: &HashMap<String, Tensor>,
     ) -> Result<Self> {
-        Self::build_full_inner(graph, input_sizes, &HashMap::new(), true, initializers)
+        Self::build_full_inner(graph, input_sizes, &HashMap::new(), true, initializers, None)
+    }
+
+    #[cfg(feature = "xnnpack")]
+    pub fn build_with_xnnpack_quant(
+        graph: &Graph,
+        input_sizes: &HashMap<String, Dims>,
+        initializers: &HashMap<String, Tensor>,
+        quant_map: crate::quant_patterns::QuantMap,
+    ) -> Result<Self> {
+        Self::build_full_inner(
+            graph,
+            input_sizes,
+            &HashMap::new(),
+            true,
+            initializers,
+            Some(quant_map),
+        )
     }
 
     pub fn build_full(
@@ -156,7 +174,15 @@ impl Plan {
         type_hints: &HashMap<String, DType>,
         initializers: &HashMap<String, Tensor>,
     ) -> Result<Self> {
-        Self::build_full_inner(graph, input_sizes, type_hints, false, initializers)
+        Self::build_full_inner(
+            graph,
+            input_sizes,
+            type_hints,
+            false,
+            initializers,
+            #[cfg(feature = "xnnpack")]
+            None,
+        )
     }
 
     fn build_full_inner(
@@ -165,6 +191,9 @@ impl Plan {
         type_hints: &HashMap<String, DType>,
         #[allow(unused)] enable_xnnpack: bool,
         initializers: &HashMap<String, Tensor>,
+        #[cfg(feature = "xnnpack")]
+        #[allow(unused)]
+        quant_map: Option<crate::quant_patterns::QuantMap>,
     ) -> Result<Self> {
         let output_names: Vec<String> = graph.outputs.iter().map(|o| o.name.clone()).collect();
 
@@ -419,6 +448,7 @@ impl Plan {
                 &mut shape_map,
                 &type_map,
                 &output_names,
+                quant_map,
             )?;
         }
 
@@ -795,7 +825,16 @@ pub fn build_node_with_initializers(
             };
             Box::new(add::Add::new(inputs, *legacy_broadcast, *axis as usize))
         }
-        OpType::Sub => Box::new(sub::Sub::new(inputs, false, 0)),
+        OpType::Sub => {
+            let NodeOp::Sub {
+                legacy_broadcast,
+                axis,
+            } = &node.op
+            else {
+                unreachable!()
+            };
+            Box::new(sub::Sub::new(inputs, *legacy_broadcast, *axis as usize))
+        }
         OpType::Mul => {
             let NodeOp::Mul {
                 legacy_broadcast,
@@ -1417,6 +1456,7 @@ fn compile_xnnpack_subgraphs(
     shape_map: &mut HashMap<String, ShapeLayout>,
     type_map: &HashMap<String, DType>,
     graph_output_names: &[String],
+    quant_map: Option<crate::quant_patterns::QuantMap>,
 ) -> Result<Vec<PlanNode>> {
     use super::xnnpack_subgraph::CapturedOp;
     use super::xnnpack_subgraph::is_xnnpack_compatible;
@@ -1425,6 +1465,8 @@ fn compile_xnnpack_subgraphs(
         tracing::info!("XNNPACK disabled via XNNPACK_DISABLE env var");
         return Ok(nodes);
     }
+
+    let has_quant = quant_map.is_some();
 
     // Identify which plan nodes are XNNPACK-compatible
     let is_eligible = |idx: usize| -> bool {
@@ -1442,12 +1484,33 @@ fn compile_xnnpack_subgraphs(
                     return false;
                 }
             }
-            // Only float outputs
+            // Allow quantized ops if we have a quant_map
+            let is_quant_op = matches!(
+                op,
+                OpType::DequantizeLinear
+                    | OpType::QuantizeLinear
+                    | OpType::QLinearConv
+                    | OpType::QLinearMatMul
+                    | OpType::QLinearAdd
+                    | OpType::QLinearGlobalAveragePool
+            );
+            if is_quant_op {
+                return has_quant;
+            }
+            // Only float outputs (for non-quantized ops)
             for out in &node.outputs {
                 if !out.is_empty() {
                     if let Some(&dt) = type_map.get(out) {
                         if dt != DType::Float {
-                            return false;
+                            // Allow if quant_map knows about this tensor
+                            let known_quant = has_quant
+                                && quant_map
+                                    .as_ref()
+                                    .map(|qm| qm.tensor_quant.contains_key(out))
+                                    .unwrap_or(false);
+                            if !known_quant {
+                                return false;
+                            }
                         }
                     }
                 }
@@ -1560,11 +1623,20 @@ fn compile_xnnpack_subgraphs(
         // Remove the CPU plan nodes that are now covered by the XNNPACK subgraph
         nodes.drain(run.clone());
 
-        let subgraph = super::xnnpack_subgraph::XnnpackSubgraph::new(
-            captured,
-            required_outputs,
-            shape_map_vec,
-        );
+        let subgraph = if let Some(ref qm) = quant_map {
+            super::xnnpack_subgraph::XnnpackSubgraph::with_quant_map(
+                captured,
+                required_outputs,
+                shape_map_vec,
+                qm.clone(),
+            )
+        } else {
+            super::xnnpack_subgraph::XnnpackSubgraph::new(
+                captured,
+                required_outputs,
+                shape_map_vec,
+            )
+        };
 
         nodes.insert(run.start, PlanNode::XnnpackSubgraph(Box::new(subgraph)));
     }

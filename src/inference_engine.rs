@@ -195,7 +195,19 @@ impl InferenceEngine {
 
         #[cfg(feature = "xnnpack")]
         let plan = if self.use_xnnpack {
-            Plan::build_with_xnnpack(&self.graph, &input_sizes, &self.initializers)?
+            // Recognize quantization patterns for XNNPACK acceleration
+            let quant_map =
+                crate::quant_patterns::recognize_quant_patterns(&self.graph, &self.initializers);
+            if quant_map.quantized_ops.is_empty() {
+                Plan::build_with_xnnpack(&self.graph, &input_sizes, &self.initializers)?
+            } else {
+                Plan::build_with_xnnpack_quant(
+                    &self.graph,
+                    &input_sizes,
+                    &self.initializers,
+                    quant_map,
+                )?
+            }
         } else {
             Plan::build_full(
                 &self.graph,
