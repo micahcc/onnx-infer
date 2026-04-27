@@ -315,11 +315,7 @@ fn insert_layout_transposes(
     let mut new_nodes = Vec::with_capacity(graph.nodes.len() * 2);
 
     for node in graph.nodes.drain(..) {
-        let input_ndim = node
-            .inputs
-            .first()
-            .and_then(|n| ndim_map.get(n))
-            .copied();
+        let input_ndim = node.inputs.first().and_then(|n| ndim_map.get(n)).copied();
         // Softmax only needs NHWC layout when operating on 4D spatial tensors.
         let dominated = if node.op_type() == OpType::Softmax {
             input_ndim == Some(4)
