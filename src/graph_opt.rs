@@ -46,6 +46,7 @@ fn requires_nhwc(op: OpType) -> bool {
             | OpType::GlobalAveragePool
             | OpType::Resize
             | OpType::Upsample
+            | OpType::Softmax
             | OpType::QLinearConv
             | OpType::QLinearGlobalAveragePool
     )
@@ -155,7 +156,7 @@ pub fn optimize(graph: &mut Graph) {
     fold_batchnorm_into_conv(graph);
     let ndim_map = infer_ndims(graph);
     promote_batchnorm_2d(graph, &ndim_map);
-    insert_layout_transposes(graph, &mut counter);
+    insert_layout_transposes(graph, &ndim_map, &mut counter);
 
     // Run transpose elimination passes iteratively until no more changes.
     for _ in 0..200 {
@@ -306,16 +307,41 @@ fn promote_batchnorm_2d(graph: &mut Graph, ndim_map: &HashMap<String, usize>) {
     }
 }
 
-fn insert_layout_transposes(graph: &mut Graph, counter: &mut usize) {
+fn insert_layout_transposes(
+    graph: &mut Graph,
+    ndim_map: &HashMap<String, usize>,
+    counter: &mut usize,
+) {
     let mut new_nodes = Vec::with_capacity(graph.nodes.len() * 2);
 
     for node in graph.nodes.drain(..) {
-        if !requires_nhwc(node.op_type()) {
+        let input_ndim = node
+            .inputs
+            .first()
+            .and_then(|n| ndim_map.get(n))
+            .copied();
+        // Softmax only needs NHWC layout when operating on 4D spatial tensors.
+        let dominated = if node.op_type() == OpType::Softmax {
+            input_ndim == Some(4)
+        } else {
+            requires_nhwc(node.op_type())
+        };
+        if !dominated {
             new_nodes.push(node);
             continue;
         }
 
         let mut modified = node;
+
+        // Remap Softmax axis from NCHW to NHWC (e.g. axis 1 → axis 3 for 4D).
+        if let NodeOp::Softmax { axis, coerce_2d } = &modified.op {
+            let nchw_axis = if *axis < 0 { *axis + 4 } else { *axis };
+            let nhwc_axis = NCHW_TO_NHWC[nchw_axis as usize];
+            modified.op = NodeOp::Softmax {
+                axis: nhwc_axis,
+                coerce_2d: *coerce_2d,
+            };
+        }
 
         // Transpose data input 0 NCHW→NHWC. Weights/params are handled by layers.
         if let Some(orig_input) = modified.inputs.first().filter(|s| !s.is_empty()) {
