@@ -97,6 +97,7 @@ fn is_layout_agnostic(op: OpType) -> bool {
             | OpType::Dropout
             | OpType::DequantizeLinear
             | OpType::QuantizeLinear
+            | OpType::Sum
     )
 }
 
@@ -268,6 +269,7 @@ fn infer_ndims(graph: &Graph) -> HashMap<String, usize> {
             | OpType::Transpose
             | OpType::LayoutTranspose
             | OpType::Concat
+            | OpType::Sum
             | OpType::MatMul => input0_ndim,
 
             OpType::Flatten | OpType::Gemm => Some(2),
