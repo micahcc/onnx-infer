@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
+use crate::layers::OpType;
 use crate::DType;
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
-use crate::layers::OpType;
 
 // ─── ElemType ──────────────────────────────────────────────────────────────
 
@@ -51,6 +51,7 @@ impl ElemType {
 
 // ─── Attr / Attrs (parsing helpers — NOT stored on Node long-term) ─────────
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 enum Attr {
     Int(i64),
