@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use crate::layers::OpType;
 use crate::DType;
 use crate::Dims;
 use crate::Result;
 use crate::Tensor;
+use crate::layers::OpType;
 
 // ─── ElemType ──────────────────────────────────────────────────────────────
 

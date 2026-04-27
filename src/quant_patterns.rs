@@ -16,11 +16,14 @@
 //! quantization parameters and identifies which graph nodes participate in
 //! quantized subgraphs eligible for XNNPACK compilation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::Tensor;
 use crate::layers::OpType;
-use crate::onnx_ir::{Graph, Node, NodeOp};
+use crate::onnx_ir::Graph;
+use crate::onnx_ir::Node;
+use crate::onnx_ir::NodeOp;
 
 // ---------------------------------------------------------------------------
 // Quantization parameter types
@@ -125,10 +128,7 @@ pub struct QuantMap {
 /// - Define quantized tensors (with scale/zero_point)
 /// - Skip DQ/Q wrapper nodes (absorbed into XNNPACK quantized ops)
 /// - Map QLinear fused ops to XNNPACK quantized operators
-pub fn recognize_quant_patterns(
-    graph: &Graph,
-    initializers: &HashMap<String, Tensor>,
-) -> QuantMap {
+pub fn recognize_quant_patterns(graph: &Graph, initializers: &HashMap<String, Tensor>) -> QuantMap {
     let mut qmap = QuantMap::default();
 
     // Build lookup maps
@@ -219,11 +219,7 @@ fn extract_quant_params(
 }
 
 /// Record quantization params from all DQ and Q nodes into the QuantMap.
-fn record_dq_q_params(
-    graph: &Graph,
-    initializers: &HashMap<String, Tensor>,
-    qmap: &mut QuantMap,
-) {
+fn record_dq_q_params(graph: &Graph, initializers: &HashMap<String, Tensor>, qmap: &mut QuantMap) {
     for node in &graph.nodes {
         match node.op_type() {
             OpType::DequantizeLinear => {
@@ -331,13 +327,8 @@ fn recognize_qdq_chains(
 
         // For ops with weights (Conv, MatMul, Gemm), check if the weight also
         // comes from a DequantizeLinear (weight quantization)
-        let (weight_quant, weight_dq_idx) = extract_weight_quant(
-            core_op,
-            core_node,
-            &graph.nodes,
-            initializers,
-            producer_map,
-        );
+        let (weight_quant, weight_dq_idx) =
+            extract_weight_quant(core_op, core_node, &graph.nodes, initializers, producer_map);
 
         // For Conv/Gemm, find the bias input
         let bias_name = extract_bias_name(core_op, core_node);
@@ -407,11 +398,7 @@ fn extract_weight_quant(
 /// Extract bias tensor name for Conv/Gemm ops.
 fn extract_bias_name(core_op: OpType, core_node: &Node) -> Option<String> {
     match core_op {
-        OpType::Conv | OpType::Gemm => core_node
-            .inputs
-            .get(2)
-            .filter(|s| !s.is_empty())
-            .cloned(),
+        OpType::Conv | OpType::Gemm => core_node.inputs.get(2).filter(|s| !s.is_empty()).cloned(),
         _ => None,
     }
 }
@@ -499,11 +486,7 @@ fn extract_per_tensor_quant(
     let zp = if zp_name.is_empty() {
         0
     } else {
-        initializers
-            .get(zp_name)?
-            .floats()
-            .ok()?[0]
-            .round() as i32
+        initializers.get(zp_name)?.floats().ok()?[0].round() as i32
     };
     Some(PerTensorQuant {
         scale,
@@ -524,11 +507,7 @@ fn extract_weight_quant_from_qlinear(
         let zp = if w_zp_name.is_empty() {
             0
         } else {
-            initializers
-                .get(w_zp_name)?
-                .floats()
-                .ok()?[0]
-                .round() as i32
+            initializers.get(w_zp_name)?.floats().ok()?[0].round() as i32
         };
         Some((
             w_name.to_string(),
@@ -578,11 +557,7 @@ fn recognize_qlinear_conv(
         initializers,
     )?;
     let y_quant = extract_per_tensor_quant(&node.inputs[6], &node.inputs[7], initializers)?;
-    let bias_name = node
-        .inputs
-        .get(8)
-        .filter(|s| !s.is_empty())
-        .cloned();
+    let bias_name = node.inputs.get(8).filter(|s| !s.is_empty()).cloned();
 
     // Build a synthetic Conv node from the QLinearConv attrs
     let conv_node = Node {

@@ -307,9 +307,7 @@ impl SubgraphBuilder {
             )
         };
         if status != xnn_status_xnn_status_success {
-            anyhow::bail!(
-                "xnn_define_quantized_tensor_value ({name}) failed: {status:?}"
-            );
+            anyhow::bail!("xnn_define_quantized_tensor_value ({name}) failed: {status:?}");
         }
         self.value_ids.insert(name.to_string(), id_out);
         Ok(id_out)
@@ -379,9 +377,7 @@ impl SubgraphBuilder {
             )
         };
         if status != xnn_status_xnn_status_success {
-            anyhow::bail!(
-                "xnn_define_quantized_tensor_value (static {name}) failed: {status:?}"
-            );
+            anyhow::bail!("xnn_define_quantized_tensor_value (static {name}) failed: {status:?}");
         }
         self.value_ids.insert(name.to_string(), id_out);
         Ok(id_out)
@@ -2810,8 +2806,10 @@ fn compile_subgraph(
                             // Static quantized tensor: convert f32-stored values to u8
                             let shape: Vec<usize> = tensor.dims.iter().copied().collect();
                             if let Ok(f) = tensor.floats() {
-                                let data: Vec<u8> =
-                                    f.iter().map(|v| v.round().clamp(0.0, 255.0) as u8).collect();
+                                let data: Vec<u8> = f
+                                    .iter()
+                                    .map(|v| v.round().clamp(0.0, 255.0) as u8)
+                                    .collect();
                                 builder.define_quantized_static(
                                     inp,
                                     &shape,
@@ -2825,8 +2823,10 @@ fn compile_subgraph(
                         Some(crate::quant_patterns::TensorQuant::PerChannel(q)) => {
                             let shape: Vec<usize> = tensor.dims.iter().copied().collect();
                             if let Ok(f) = tensor.floats() {
-                                let data: Vec<u8> =
-                                    f.iter().map(|v| v.round().clamp(0.0, 255.0) as u8).collect();
+                                let data: Vec<u8> = f
+                                    .iter()
+                                    .map(|v| v.round().clamp(0.0, 255.0) as u8)
+                                    .collect();
                                 builder.define_channelwise_quantized_static(
                                     inp,
                                     &shape,
@@ -2840,8 +2840,7 @@ fn compile_subgraph(
                         None => {
                             if tensor.dtype() == crate::DType::Float {
                                 let shape: Vec<usize> = tensor.dims.iter().copied().collect();
-                                let data =
-                                    tensor.floats().context("XNNPACK initializer")?.to_vec();
+                                let data = tensor.floats().context("XNNPACK initializer")?.to_vec();
                                 builder.define_static_value(inp, &shape, data)?;
                             }
                         }
