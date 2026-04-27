@@ -1228,37 +1228,81 @@ impl SubgraphBuilder {
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
         let in_shape = shape_map.get(&cap.inputs[0]).cloned().unwrap_or_default();
-        let ndim = in_shape.len() as i64;
+        let ndim = in_shape.len();
 
-        // Determine the softmax axis
-        let raw_axis = match &cap.node.op {
-            NodeOp::Softmax { axis, .. } => *axis,
-            _ => -1,
+        let (raw_axis, coerce_2d) = match &cap.node.op {
+            NodeOp::Softmax { axis, coerce_2d } => (*axis, *coerce_2d),
+            _ => (-1, false),
         };
         let axis = if raw_axis < 0 {
-            (raw_axis + ndim) as usize
+            (raw_axis + ndim as i64) as usize
         } else {
             raw_axis as usize
         };
 
+        // For opset < 13 (coerce_2d): flatten to 2D [outer, inner] at `axis`,
+        // softmax over last dim, then reshape back to original shape.
         // XNNPACK softmax always operates on the last dimension.
-        // If the target axis is not last, transpose it to last, softmax, transpose back.
-        if ndim > 0 && axis != (ndim as usize - 1) {
-            // Build permutation that moves `axis` to the last position
-            let mut perm_fwd: Vec<usize> = (0..ndim as usize).collect();
+        if coerce_2d && ndim > 2 {
+            let outer: usize = in_shape[..axis].iter().product::<usize>().max(1);
+            let inner: usize = in_shape[axis..].iter().product::<usize>().max(1);
+            let flat_shape = vec![outer, inner];
+
+            let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
+
+            // Reshape to 2D
+            let tmp1_name = format!("{}__softmax_flat", cap.outputs[0]);
+            let tmp1_id = self.define_internal_value(&tmp1_name, &flat_shape)?;
+            let status = unsafe {
+                xnn_define_static_reshape(
+                    self.subgraph,
+                    flat_shape.len(),
+                    flat_shape.as_ptr(),
+                    input_id,
+                    tmp1_id,
+                    0,
+                )
+            };
+            if status != xnn_status_xnn_status_success {
+                anyhow::bail!("xnn_define_static_reshape (softmax flatten) failed: {status:?}");
+            }
+
+            // Softmax on last dim of 2D
+            let tmp2_name = format!("{}__softmax_result", cap.outputs[0]);
+            let tmp2_id = self.define_internal_value(&tmp2_name, &flat_shape)?;
+            let status = unsafe { xnn_define_softmax(self.subgraph, tmp1_id, tmp2_id, 0) };
+            if status != xnn_status_xnn_status_success {
+                anyhow::bail!("xnn_define_softmax failed: {status:?}");
+            }
+
+            // Reshape back to original shape
+            let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
+            let status = unsafe {
+                xnn_define_static_reshape(
+                    self.subgraph,
+                    in_shape.len(),
+                    in_shape.as_ptr(),
+                    tmp2_id,
+                    output_id,
+                    0,
+                )
+            };
+            if status != xnn_status_xnn_status_success {
+                anyhow::bail!("xnn_define_static_reshape (softmax unflatten) failed: {status:?}");
+            }
+        } else if ndim > 0 && axis != ndim - 1 {
+            // Non-coerce_2d but axis is not last: transpose axis to last, softmax, transpose back
+            let mut perm_fwd: Vec<usize> = (0..ndim).collect();
             perm_fwd.remove(axis);
             perm_fwd.push(axis);
 
-            // Build inverse permutation
-            let mut perm_inv = vec![0usize; ndim as usize];
+            let mut perm_inv = vec![0usize; ndim];
             for (i, &p) in perm_fwd.iter().enumerate() {
                 perm_inv[p] = i;
             }
 
-            // Transposed shape
             let transposed_shape: Vec<usize> = perm_fwd.iter().map(|&i| in_shape[i]).collect();
 
-            // Transpose input → temp1
             let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
             let tmp1_name = format!("{}__softmax_pre", cap.outputs[0]);
             let tmp1_id = self.define_internal_value(&tmp1_name, &transposed_shape)?;
@@ -1276,7 +1320,6 @@ impl SubgraphBuilder {
                 anyhow::bail!("xnn_define_static_transpose (softmax pre) failed: {status:?}");
             }
 
-            // Softmax on last dim
             let tmp2_name = format!("{}__softmax_post", cap.outputs[0]);
             let tmp2_id = self.define_internal_value(&tmp2_name, &transposed_shape)?;
             let status = unsafe { xnn_define_softmax(self.subgraph, tmp1_id, tmp2_id, 0) };
@@ -1284,7 +1327,6 @@ impl SubgraphBuilder {
                 anyhow::bail!("xnn_define_softmax failed: {status:?}");
             }
 
-            // Transpose back
             let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
             let status = unsafe {
                 xnn_define_static_transpose(
@@ -1300,6 +1342,7 @@ impl SubgraphBuilder {
                 anyhow::bail!("xnn_define_static_transpose (softmax post) failed: {status:?}");
             }
         } else {
+            // axis == last dim (or 2D with coerce_2d): simple softmax
             let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
             let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
             let status = unsafe { xnn_define_softmax(self.subgraph, input_id, output_id, 0) };
