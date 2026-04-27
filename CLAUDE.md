@@ -34,11 +34,10 @@ build.rs                    - Protobuf codegen
 ## Build & Test
 
 ```bash
-RUST_LOG=debug cargo test -- --nocapture --test-threads=1 > /tmp/onnx-infer-tests.log 2>&1
+RUST_LOG=debug cargo test -- --nocapture > /tmp/onnx-infer-tests.log 2>&1
 cargo test test_mnist12_set_0     # Run a single test
 ```
 
-- Use `--test-threads=1` to avoid OOM on heavy models.
 - Always write output to a temp file so nothing gets lost in scrollback.
 - Slowest tests: resnet101_duc (~9min), fcn_resnet101 (~4min), ssd_12 (~3min).
 
