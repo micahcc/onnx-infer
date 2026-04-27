@@ -1176,11 +1176,7 @@ impl SubgraphBuilder {
     }
 
     /// Sum with N inputs, implemented as a chain of binary Add ops.
-    fn add_sum(
-        &mut self,
-        cap: &CapturedOp,
-        shape_map: &HashMap<String, Vec<usize>>,
-    ) -> Result<()> {
+    fn add_sum(&mut self, cap: &CapturedOp, shape_map: &HashMap<String, Vec<usize>>) -> Result<()> {
         if cap.inputs.len() < 2 {
             anyhow::bail!("Sum requires at least 2 inputs");
         }
@@ -1193,10 +1189,7 @@ impl SubgraphBuilder {
             } else {
                 // Intermediate: define an internal tensor
                 let tmp_name = format!("{}__sum_tmp_{i}", cap.outputs[0]);
-                let shape = shape_map
-                    .get(&cap.inputs[0])
-                    .cloned()
-                    .unwrap_or_default();
+                let shape = shape_map.get(&cap.inputs[0]).cloned().unwrap_or_default();
                 self.define_internal_value(&tmp_name, &shape)?
             };
             let status = unsafe {

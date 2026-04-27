@@ -1345,9 +1345,7 @@ fn compile_xnnpack_subgraphs(
             }
         } else {
             if let Some(Some((op, _, _node))) = node_meta.get(i) {
-                tracing::debug!(
-                    "XNNPACK: non-eligible op at index {i}: {op}"
-                );
+                tracing::debug!("XNNPACK: non-eligible op at index {i}: {op}");
             }
             i += 1;
         }
@@ -1358,7 +1356,12 @@ fn compile_xnnpack_subgraphs(
             .iter()
             .filter_map(|m| m.as_ref().map(|(op, _, _)| format!("{op}")))
             .collect();
-        tracing::debug!("XNNPACK: run {:?} ({} ops): {:?}", run, ops_in_run.len(), &ops_in_run);
+        tracing::debug!(
+            "XNNPACK: run {:?} ({} ops): {:?}",
+            run,
+            ops_in_run.len(),
+            &ops_in_run
+        );
     }
 
     // Build a list of tensor names consumed by each node index.
