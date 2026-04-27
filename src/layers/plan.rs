@@ -1344,8 +1344,21 @@ fn compile_xnnpack_subgraphs(
                 runs.push(start..i);
             }
         } else {
+            if let Some(Some((op, _, _node))) = node_meta.get(i) {
+                tracing::debug!(
+                    "XNNPACK: non-eligible op at index {i}: {op}"
+                );
+            }
             i += 1;
         }
+    }
+    tracing::debug!("XNNPACK: {} runs, {} total ops", runs.len(), n);
+    for run in &runs {
+        let ops_in_run: Vec<_> = node_meta[run.clone()]
+            .iter()
+            .filter_map(|m| m.as_ref().map(|(op, _, _)| format!("{op}")))
+            .collect();
+        tracing::debug!("XNNPACK: run {:?} ({} ops): {:?}", run, ops_in_run.len(), &ops_in_run);
     }
 
     // Build a list of tensor names consumed by each node index.

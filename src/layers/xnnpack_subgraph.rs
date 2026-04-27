@@ -111,6 +111,7 @@ pub fn is_xnnpack_compatible(op: OpType) -> bool {
             | OpType::Sin
             | OpType::Cos
             | OpType::Add
+            | OpType::Sum
             | OpType::Sub
             | OpType::Mul
             | OpType::Div
@@ -437,6 +438,7 @@ impl SubgraphBuilder {
             }
             OpType::LeakyRelu => self.add_leaky_relu(cap, shape_map),
             OpType::Add => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_add),
+            OpType::Sum => self.add_sum(cap, shape_map),
             OpType::Sub => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_subtract),
             OpType::Mul => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_multiply),
             OpType::Div => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_divide),
@@ -1173,6 +1175,49 @@ impl SubgraphBuilder {
         Ok(())
     }
 
+    /// Sum with N inputs, implemented as a chain of binary Add ops.
+    fn add_sum(
+        &mut self,
+        cap: &CapturedOp,
+        shape_map: &HashMap<String, Vec<usize>>,
+    ) -> Result<()> {
+        if cap.inputs.len() < 2 {
+            anyhow::bail!("Sum requires at least 2 inputs");
+        }
+        let mut acc_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
+        for i in 1..cap.inputs.len() {
+            let rhs_id = self.get_or_define_value(&cap.inputs[i], shape_map)?;
+            let out_id = if i == cap.inputs.len() - 1 {
+                // Last addition writes to the actual output
+                self.get_or_define_value(&cap.outputs[0], shape_map)?
+            } else {
+                // Intermediate: define an internal tensor
+                let tmp_name = format!("{}__sum_tmp_{i}", cap.outputs[0]);
+                let shape = shape_map
+                    .get(&cap.inputs[0])
+                    .cloned()
+                    .unwrap_or_default();
+                self.define_internal_value(&tmp_name, &shape)?
+            };
+            let status = unsafe {
+                xnn_define_binary(
+                    self.subgraph,
+                    xnn_binary_operator_xnn_binary_add,
+                    std::ptr::null(),
+                    acc_id,
+                    rhs_id,
+                    out_id,
+                    0,
+                )
+            };
+            if status != xnn_status_xnn_status_success {
+                anyhow::bail!("xnn_define_binary (Sum chain) failed: {status:?}");
+            }
+            acc_id = out_id;
+        }
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // FC / matmul ops
     // -----------------------------------------------------------------------
@@ -1182,11 +1227,85 @@ impl SubgraphBuilder {
         cap: &CapturedOp,
         shape_map: &HashMap<String, Vec<usize>>,
     ) -> Result<()> {
-        let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
-        let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
-        let status = unsafe { xnn_define_softmax(self.subgraph, input_id, output_id, 0) };
-        if status != xnn_status_xnn_status_success {
-            anyhow::bail!("xnn_define_softmax failed: {status:?}");
+        let in_shape = shape_map.get(&cap.inputs[0]).cloned().unwrap_or_default();
+        let ndim = in_shape.len() as i64;
+
+        // Determine the softmax axis
+        let raw_axis = match &cap.node.op {
+            NodeOp::Softmax { axis, .. } => *axis,
+            _ => -1,
+        };
+        let axis = if raw_axis < 0 {
+            (raw_axis + ndim) as usize
+        } else {
+            raw_axis as usize
+        };
+
+        // XNNPACK softmax always operates on the last dimension.
+        // If the target axis is not last, transpose it to last, softmax, transpose back.
+        if ndim > 0 && axis != (ndim as usize - 1) {
+            // Build permutation that moves `axis` to the last position
+            let mut perm_fwd: Vec<usize> = (0..ndim as usize).collect();
+            perm_fwd.remove(axis);
+            perm_fwd.push(axis);
+
+            // Build inverse permutation
+            let mut perm_inv = vec![0usize; ndim as usize];
+            for (i, &p) in perm_fwd.iter().enumerate() {
+                perm_inv[p] = i;
+            }
+
+            // Transposed shape
+            let transposed_shape: Vec<usize> = perm_fwd.iter().map(|&i| in_shape[i]).collect();
+
+            // Transpose input → temp1
+            let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
+            let tmp1_name = format!("{}__softmax_pre", cap.outputs[0]);
+            let tmp1_id = self.define_internal_value(&tmp1_name, &transposed_shape)?;
+            let status = unsafe {
+                xnn_define_static_transpose(
+                    self.subgraph,
+                    perm_fwd.len(),
+                    perm_fwd.as_ptr(),
+                    input_id,
+                    tmp1_id,
+                    0,
+                )
+            };
+            if status != xnn_status_xnn_status_success {
+                anyhow::bail!("xnn_define_static_transpose (softmax pre) failed: {status:?}");
+            }
+
+            // Softmax on last dim
+            let tmp2_name = format!("{}__softmax_post", cap.outputs[0]);
+            let tmp2_id = self.define_internal_value(&tmp2_name, &transposed_shape)?;
+            let status = unsafe { xnn_define_softmax(self.subgraph, tmp1_id, tmp2_id, 0) };
+            if status != xnn_status_xnn_status_success {
+                anyhow::bail!("xnn_define_softmax failed: {status:?}");
+            }
+
+            // Transpose back
+            let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
+            let status = unsafe {
+                xnn_define_static_transpose(
+                    self.subgraph,
+                    perm_inv.len(),
+                    perm_inv.as_ptr(),
+                    tmp2_id,
+                    output_id,
+                    0,
+                )
+            };
+            if status != xnn_status_xnn_status_success {
+                anyhow::bail!("xnn_define_static_transpose (softmax post) failed: {status:?}");
+            }
+        } else {
+            let input_id = self.get_or_define_value(&cap.inputs[0], shape_map)?;
+            let output_id = self.get_or_define_value(&cap.outputs[0], shape_map)?;
+            let status = unsafe { xnn_define_softmax(self.subgraph, input_id, output_id, 0) };
+            if status != xnn_status_xnn_status_success {
+                anyhow::bail!("xnn_define_softmax failed: {status:?}");
+            }
         }
         Ok(())
     }
@@ -1867,6 +1986,13 @@ fn infer_op_output_shapes(
         | OpType::BatchNormalization2d
         | OpType::DequantizeLinear
         | OpType::QuantizeLinear => {
+            if let Some(x) = get(0) {
+                result.push((op.outputs[0].clone(), x.clone()));
+            }
+        }
+
+        // Sum — same shape as first input (all inputs same shape in ONNX Sum)
+        OpType::Sum => {
             if let Some(x) = get(0) {
                 result.push((op.outputs[0].clone(), x.clone()));
             }

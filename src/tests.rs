@@ -6,6 +6,7 @@ use approx::assert_relative_eq;
 use prost::Message;
 use test_case::test_case;
 use tracing_chrome::ChromeLayerBuilder;
+use tracing_subscriber::Layer as _;
 use tracing_subscriber::prelude::*;
 
 use crate::DType;
@@ -34,7 +35,13 @@ fn setup_tracing(
         .file(trace_path)
         .include_args(true)
         .build();
-    let subscriber = tracing_subscriber::registry().with(chrome_layer);
+    let env_filter = tracing_subscriber::EnvFilter::from_default_env();
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_ansi(false);
+    let subscriber = tracing_subscriber::registry()
+        .with(chrome_layer)
+        .with(fmt_layer.with_filter(env_filter));
     let default_guard = tracing::subscriber::set_default(subscriber);
     (flush_guard, default_guard)
 }
