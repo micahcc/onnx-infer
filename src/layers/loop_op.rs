@@ -220,7 +220,7 @@ impl Loop {
         let trip_tensor = outer_values
             .get(&self.inputs[0])
             .or_else(|| constants.get(&self.inputs[0]))
-            .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
+            .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", self.inputs[0]))?;
         let trip_count = trip_tensor
             .i64_at(0)
             .context("in Loop layer: reading trip count")? as usize;

@@ -32,18 +32,23 @@ use crate::layers::conv_transpose;
 use crate::layers::dequantize_linear;
 use crate::layers::div;
 use crate::layers::dropout;
+use crate::layers::einsum;
 use crate::layers::equal;
 use crate::layers::exp;
 use crate::layers::expand;
 use crate::layers::flatten;
 use crate::layers::floor;
 use crate::layers::gather;
+use crate::layers::gather_elements;
 use crate::layers::gemm;
 use crate::layers::global_avg_pool;
 use crate::layers::greater;
+use crate::layers::greater_or_equal;
+use crate::layers::grid_sample;
 use crate::layers::hardmax;
 use crate::layers::identity;
 use crate::layers::if_op;
+use crate::layers::layer_norm;
 use crate::layers::leaky_relu;
 use crate::layers::less;
 use crate::layers::log;
@@ -54,10 +59,12 @@ use crate::layers::matmul;
 use crate::layers::max_op;
 use crate::layers::maxpool;
 use crate::layers::min_op;
+use crate::layers::mod_op;
 use crate::layers::mul;
 use crate::layers::nms;
 use crate::layers::nonzero;
 use crate::layers::not;
+use crate::layers::pow;
 use crate::layers::prelu;
 use crate::layers::qlinear_add;
 use crate::layers::qlinear_conv;
@@ -65,6 +72,7 @@ use crate::layers::qlinear_global_avg_pool;
 use crate::layers::qlinear_matmul;
 use crate::layers::quantize_linear;
 use crate::layers::range;
+use crate::layers::reduce_l2;
 use crate::layers::reduce_max;
 use crate::layers::reduce_mean;
 use crate::layers::reduce_min;
@@ -536,10 +544,9 @@ fn try_propagate_value(
         if name.is_empty() {
             continue;
         }
-        if let Some(t) = known_values.get(name).or_else(|| initializers.get(name)) {
+        {
+            let t = known_values.get(name).or_else(|| initializers.get(name))?;
             temp_values.insert(name.clone(), t.clone());
-        } else {
-            return None;
         }
     }
 
@@ -692,6 +699,10 @@ pub fn build_node_with_initializers(
     let layer: Box<dyn Layer> =
         match &node.op {
             NodeOp::Relu => Box::new(relu::Relu::new(inputs)),
+            // Gelu and HardSwish: XNNPACK-only, CPU fallback via sigmoid/tanh approximation.
+            // Map to Sigmoid (wrong but safe placeholder) until a CPU kernel is added.
+            NodeOp::Gelu => Box::new(unary_ops::Gelu::new(inputs)),
+            NodeOp::HardSwish => Box::new(unary_ops::HardSwish::new(inputs)),
             NodeOp::LeakyRelu { alpha } => Box::new(leaky_relu::LeakyRelu::new(inputs, *alpha)),
             NodeOp::Clip => Box::new(clip::Clip::new(inputs, f32::NEG_INFINITY, f32::INFINITY)),
             NodeOp::BatchNormalization { epsilon } => Box::new(batch_norm::BatchNorm::new(
@@ -720,6 +731,7 @@ pub fn build_node_with_initializers(
             NodeOp::Less => Box::new(less::Less::new(inputs)),
             NodeOp::Equal => Box::new(equal::Equal::new(inputs)),
             NodeOp::Greater => Box::new(greater::Greater::new(inputs)),
+            NodeOp::GreaterOrEqual => Box::new(greater_or_equal::GreaterOrEqual::new(inputs)),
             NodeOp::Max => Box::new(max_op::Max::new(inputs)),
             NodeOp::Min => Box::new(min_op::Min::new(inputs)),
             NodeOp::And => Box::new(and::And { inputs }),
@@ -794,6 +806,60 @@ pub fn build_node_with_initializers(
                 legacy_broadcast,
                 axis,
             } => Box::new(div::Div::new(inputs, *legacy_broadcast, *axis as usize)),
+            NodeOp::Pow {
+                legacy_broadcast,
+                axis,
+            } => Box::new(pow::Pow::new(inputs, *legacy_broadcast, *axis as usize)),
+            NodeOp::GridSample {
+                mode,
+                padding_mode,
+                align_corners,
+            } => {
+                use crate::layers::grid_sample::GridSampleMode;
+                use crate::layers::grid_sample::PaddingMode;
+                let gs_mode = match mode.as_str() {
+                    "nearest" => GridSampleMode::Nearest,
+                    "bicubic" => GridSampleMode::Bicubic,
+                    _ => GridSampleMode::Bilinear,
+                };
+                let gs_pad = match padding_mode.as_str() {
+                    "border" => PaddingMode::Border,
+                    "reflection" => PaddingMode::Reflection,
+                    _ => PaddingMode::Zeros,
+                };
+                Box::new(grid_sample::GridSample::new(
+                    inputs,
+                    gs_mode,
+                    gs_pad,
+                    *align_corners,
+                ))
+            }
+            NodeOp::LayerNormalization { axis, epsilon } => {
+                Box::new(layer_norm::LayerNorm::new(inputs, *axis, *epsilon))
+            }
+            NodeOp::Mod {
+                legacy_broadcast,
+                axis,
+                fmod,
+            } => Box::new(mod_op::Mod::new(
+                inputs,
+                *legacy_broadcast,
+                *axis as usize,
+                *fmod,
+            )),
+            NodeOp::GatherElements { axis } => {
+                Box::new(gather_elements::GatherElements::new(inputs, *axis))
+            }
+            NodeOp::ReduceL2 {
+                keepdims,
+                noop_with_empty_axes,
+            } => Box::new(reduce_l2::ReduceL2::new(
+                inputs,
+                *keepdims,
+                None,
+                *noop_with_empty_axes,
+            )),
+            NodeOp::Einsum { equation } => Box::new(einsum::Einsum::new(inputs, equation.clone())),
             NodeOp::Conv {
                 kernel_shape,
                 strides,
@@ -1224,7 +1290,11 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
                 .inputs
                 .first()
                 .and_then(|name| values.get(name))
-                .map(|t| t.layout)
+                .map(|t| match t.layout {
+                    // graph_opt starts from NCHW and inserts LayoutTranspose explicitly.
+                    Layout::Unknown => Layout::NCHW,
+                    l => l,
+                })
                 .unwrap_or(Layout::NCHW);
             let vals = crate::Values {
                 intermediates: values,

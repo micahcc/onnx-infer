@@ -41,7 +41,7 @@ impl If {
         let cond = values
             .get(&self.inputs[0])
             .or_else(|| constants.get(&self.inputs[0]))
-            .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
+            .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", self.inputs[0]))?;
         let is_true = match cond.dtype() {
             DType::Float => {
                 cond.floats()

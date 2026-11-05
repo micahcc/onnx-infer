@@ -98,6 +98,11 @@ fn is_layout_agnostic(op: OpType) -> bool {
             | OpType::DequantizeLinear
             | OpType::QuantizeLinear
             | OpType::Sum
+            // A channel permutation commutes with any scalar function, so these
+            // pointwise ops are safe to push transposes through.
+            | OpType::Pow
+            | OpType::Mod
+            | OpType::GreaterOrEqual
     )
 }
 
@@ -270,7 +275,15 @@ fn infer_ndims(graph: &Graph) -> HashMap<String, usize> {
             | OpType::LayoutTranspose
             | OpType::Concat
             | OpType::Sum
-            | OpType::MatMul => input0_ndim,
+            | OpType::MatMul
+            // New ops: output has the same rank as the primary input.
+            | OpType::Pow
+            | OpType::Mod
+            | OpType::GreaterOrEqual
+            | OpType::GridSample
+            | OpType::LayerNormalization
+            | OpType::GatherElements
+            | OpType::ReduceL2 => input0_ndim,
 
             OpType::Flatten | OpType::Gemm => Some(2),
 

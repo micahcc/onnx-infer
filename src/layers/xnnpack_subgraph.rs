@@ -107,9 +107,15 @@ pub fn is_xnnpack_compatible(op: OpType) -> bool {
             | OpType::Ceil
             | OpType::Log
             | OpType::LeakyRelu
+            | OpType::Elu
+            | OpType::Gelu
+            | OpType::HardSwish
             | OpType::Neg
             | OpType::Sin
             | OpType::Cos
+            | OpType::Sign
+            | OpType::Pow
+            | OpType::Mod
             | OpType::Add
             | OpType::Sum
             | OpType::Sub
@@ -437,6 +443,12 @@ impl SubgraphBuilder {
                 self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_cosine, None)
             }
             OpType::LeakyRelu => self.add_leaky_relu(cap, shape_map),
+            OpType::Elu => self.add_elu(cap, shape_map),
+            OpType::Gelu => self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_gelu, None),
+            OpType::HardSwish => {
+                self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_hardswish, None)
+            }
+            OpType::Sign => self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_sign, None),
             OpType::Add => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_add),
             OpType::Sum => self.add_sum(cap, shape_map),
             OpType::Sub => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_subtract),
@@ -444,6 +456,8 @@ impl SubgraphBuilder {
             OpType::Div => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_divide),
             OpType::Max => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_maximum),
             OpType::Min => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_minimum),
+            OpType::Pow => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_pow),
+            OpType::Mod => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_modulus),
             OpType::MaxPool => self.add_maxpool(cap, shape_map),
             OpType::AveragePool => self.add_average_pool(cap, shape_map),
             OpType::GlobalAveragePool => self.add_global_avg_pool(cap, shape_map),
@@ -911,6 +925,22 @@ impl SubgraphBuilder {
             cap,
             shape_map,
             xnn_unary_operator_xnn_unary_leaky_relu,
+            Some(params),
+        )
+    }
+
+    fn add_elu(&mut self, cap: &CapturedOp, shape_map: &HashMap<String, Vec<usize>>) -> Result<()> {
+        let alpha = match &cap.node.op {
+            NodeOp::Elu { alpha } => *alpha,
+            _ => 1.0,
+        };
+        let params = xnn_unary_params {
+            elu: xnn_unary_params__bindgen_ty_2 { alpha },
+        };
+        self.add_unary(
+            cap,
+            shape_map,
+            xnn_unary_operator_xnn_unary_elu,
             Some(params),
         )
     }
@@ -2015,6 +2045,10 @@ fn infer_op_output_shapes(
         | OpType::Sin
         | OpType::Cos
         | OpType::LeakyRelu
+        | OpType::Elu
+        | OpType::Gelu
+        | OpType::HardSwish
+        | OpType::Sign
         | OpType::Round
         | OpType::Cast
         | OpType::Identity
@@ -2035,7 +2069,14 @@ fn infer_op_output_shapes(
         }
 
         // Binary — broadcast shapes
-        OpType::Add | OpType::Sub | OpType::Mul | OpType::Div | OpType::Max | OpType::Min => {
+        OpType::Add
+        | OpType::Sub
+        | OpType::Mul
+        | OpType::Div
+        | OpType::Max
+        | OpType::Min
+        | OpType::Pow
+        | OpType::Mod => {
             if let (Some(a), Some(b)) = (get(0), get(1)) {
                 if let Some(out) = broadcast_shapes(a, b) {
                     result.push((op.outputs[0].clone(), out));
@@ -2507,6 +2548,7 @@ impl XnnpackSubgraph {
                 }
             }
         }
+
         if needs_recompile {
             // Drop old runtime and recompile with current shapes
             self.compiled = None;
@@ -2690,6 +2732,52 @@ impl XnnpackSubgraph {
             }
         }
 
+        // Propagate tensor layout through the subgraph ops so that if another
+        // subgraph falls back to CPU, the Conv inside it can determine nhwc from
+        // its input tensor's layout rather than defaulting to NCHW.
+        // Only LayoutTranspose changes the layout; all other ops propagate it.
+        {
+            let mut layout_map: HashMap<String, crate::Layout> = HashMap::new();
+            // Seed with external inputs.
+            for name in &compiled.input_names {
+                if let Some(t) = values.get(name) {
+                    let layout = match t.layout {
+                        // graph_opt starts from NCHW and inserts LayoutTranspose explicitly.
+                        crate::Layout::Unknown => crate::Layout::NCHW,
+                        l => l,
+                    };
+                    layout_map.insert(name.clone(), layout);
+                }
+            }
+            for op in &self.ops {
+                let in_layout = op
+                    .inputs
+                    .first()
+                    .and_then(|n| layout_map.get(n))
+                    .copied()
+                    .unwrap_or(crate::Layout::NCHW);
+                let out_layout = match op.op {
+                    OpType::LayoutTranspose => {
+                        let perm = op.node.op.perm().unwrap_or(&[]);
+                        match (in_layout, perm) {
+                            (crate::Layout::NCHW, [0, 2, 3, 1]) => crate::Layout::NHWC,
+                            (crate::Layout::NHWC, [0, 3, 1, 2]) => crate::Layout::NCHW,
+                            _ => crate::Layout::Unknown,
+                        }
+                    }
+                    _ => in_layout,
+                };
+                for out in &op.outputs {
+                    if !out.is_empty() {
+                        layout_map.insert(out.clone(), out_layout);
+                        if let Some(tensor) = values.get_mut(out) {
+                            tensor.layout = out_layout;
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -2836,8 +2924,9 @@ impl XnnpackSubgraph {
         for (k, v) in constants.initializers.iter() {
             values.entry(k.clone()).or_insert_with(|| v.clone());
         }
+        // Always prefer fresh user inputs over stale intermediates from previous runs.
         for (k, v) in constants.inputs {
-            values.entry(k.clone()).or_insert_with(|| v.clone());
+            values.insert(k.clone(), v.clone());
         }
         for op in &self.ops {
             super::execute_node(&op.node, values).with_context(|| {

@@ -34,6 +34,9 @@ pkgs.mkShell {
     pkgs.lldb
     python
   ];
+  buildInputs = [
+    pkgs.openblas
+  ];
   inputsFrom = [ package ];
   XNNPACK = "${xnnpack}";
   LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";

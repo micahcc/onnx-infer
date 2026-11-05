@@ -41,22 +41,29 @@ pub enum OpType {
     Div,
     Dropout,
     Elu,
+    Einsum,
     Equal,
     Erf,
+    Gelu,
     Expand,
     Exp,
     Flatten,
     Floor,
     Gather,
+    GatherElements,
     Gemm,
     GlobalAveragePool,
     Greater,
+    GreaterOrEqual,
+    GridSample,
     HardSigmoid,
+    HardSwish,
     Hardmax,
     Identity,
     If,
     IsInf,
     IsNaN,
+    LayerNormalization,
     Lstm,
     LeakyRelu,
     LayoutTranspose,
@@ -72,7 +79,9 @@ pub enum OpType {
     Neg,
     NonMaxSuppression,
     NonZero,
+    Mod,
     Not,
+    Pow,
     PRelu,
     QLinearAdd,
     QLinearConv,
@@ -81,6 +90,7 @@ pub enum OpType {
     QuantizeLinear,
     Range,
     Reciprocal,
+    ReduceL2,
     ReduceMax,
     ReduceMean,
     ReduceMin,
@@ -150,6 +160,7 @@ impl OpType {
             "Div" => Ok(Self::Div),
             "Dropout" => Ok(Self::Dropout),
             "Elu" => Ok(Self::Elu),
+            "Einsum" => Ok(Self::Einsum),
             "Equal" => Ok(Self::Equal),
             "Erf" => Ok(Self::Erf),
             "Expand" => Ok(Self::Expand),
@@ -157,15 +168,21 @@ impl OpType {
             "Flatten" => Ok(Self::Flatten),
             "Floor" => Ok(Self::Floor),
             "Gather" => Ok(Self::Gather),
+            "GatherElements" => Ok(Self::GatherElements),
             "Gemm" => Ok(Self::Gemm),
             "GlobalAveragePool" => Ok(Self::GlobalAveragePool),
+            "Gelu" => Ok(Self::Gelu),
             "Greater" => Ok(Self::Greater),
+            "GreaterOrEqual" => Ok(Self::GreaterOrEqual),
+            "GridSample" => Ok(Self::GridSample),
+            "HardSwish" => Ok(Self::HardSwish),
             "HardSigmoid" => Ok(Self::HardSigmoid),
             "Hardmax" => Ok(Self::Hardmax),
             "Identity" => Ok(Self::Identity),
             "If" => Ok(Self::If),
             "IsInf" => Ok(Self::IsInf),
             "IsNaN" => Ok(Self::IsNaN),
+            "LayerNormalization" => Ok(Self::LayerNormalization),
             "LSTM" => Ok(Self::Lstm),
             "LeakyRelu" => Ok(Self::LeakyRelu),
             "Less" => Ok(Self::Less),
@@ -180,7 +197,9 @@ impl OpType {
             "Neg" => Ok(Self::Neg),
             "NonMaxSuppression" => Ok(Self::NonMaxSuppression),
             "NonZero" => Ok(Self::NonZero),
+            "Mod" => Ok(Self::Mod),
             "Not" => Ok(Self::Not),
+            "Pow" => Ok(Self::Pow),
             "PRelu" => Ok(Self::PRelu),
             "QLinearAdd" => Ok(Self::QLinearAdd),
             "QLinearConv" => Ok(Self::QLinearConv),
@@ -189,6 +208,7 @@ impl OpType {
             "QuantizeLinear" => Ok(Self::QuantizeLinear),
             "Range" => Ok(Self::Range),
             "Reciprocal" => Ok(Self::Reciprocal),
+            "ReduceL2" => Ok(Self::ReduceL2),
             "ReduceMax" => Ok(Self::ReduceMax),
             "ReduceMean" => Ok(Self::ReduceMean),
             "ReduceMin" => Ok(Self::ReduceMin),
@@ -232,7 +252,19 @@ impl OpType {
         const F: Option<DType> = Some(DType::Float);
 
         match self {
-            Self::Add | Self::Sub | Self::Mul | Self::Div => &[F, F],
+            Self::Add
+            | Self::Sub
+            | Self::Mul
+            | Self::Div
+            | Self::Pow
+            | Self::GridSample
+            | Self::Mod
+            | Self::GatherElements
+            | Self::GreaterOrEqual
+            | Self::Einsum => &[F, F],
+            Self::LayerNormalization => &[F, F], // X, Scale (Bias is optional)
+            Self::Gelu | Self::HardSwish => &[F],
+            Self::ReduceL2 => &[F],
             Self::Relu
             | Self::LeakyRelu
             | Self::Clip
@@ -318,7 +350,9 @@ impl OpType {
             | Self::Slice
             | Self::Tile
             | Self::Gather
+            | Self::GatherElements
             | Self::Concat
+            | Self::ReduceL2
             | Self::ReduceMin
             | Self::ReduceMax
             | Self::ReduceMean
@@ -411,20 +445,29 @@ impl OpType {
             | Self::IsNaN
             | Self::IsInf
             | Self::Lrn
+            | Self::LayerNormalization
+            | Self::Gelu
+            | Self::HardSwish
             | Self::Not => get_shape(0).cloned(),
 
             Self::Add
             | Self::Sub
             | Self::Mul
             | Self::Div
+            | Self::Pow
+            | Self::Mod
             | Self::Less
             | Self::Equal
             | Self::Greater
+            | Self::GreaterOrEqual
             | Self::PRelu => {
                 let a = get_shape(0)?;
                 let b = get_shape(1)?;
                 Some(broadcast_shape(a, b))
             }
+
+            // GatherElements output has same shape as indices (input 1).
+            Self::GatherElements => get_shape(1).cloned(),
 
             Self::Expand => {
                 let x = get_shape(0)?;
@@ -751,14 +794,13 @@ impl OpType {
                 let x = get_shape(0)?;
                 let total: usize = x.iter().product();
 
-                let shape_vals: Vec<i64> = if let Some(t) = get_value(1) {
+                let shape_vals: Vec<i64> = {
+                    let t = get_value(1)?;
                     match t.dtype() {
                         DType::Int64 => t.ints().ok()?.to_vec(),
                         DType::Float => t.floats().ok()?.iter().map(|&v| v as i64).collect(),
                         DType::String => return None,
                     }
-                } else {
-                    return None;
                 };
 
                 let mut dims: Dims = Dims::new();
@@ -995,6 +1037,46 @@ impl OpType {
                 None
             }
 
+            Self::GridSample => {
+                // Output: (N, C, H_out, W_out) — grid shape is (N, H_out, W_out, 2)
+                let input = get_shape(0)?;
+                let grid = get_shape(1)?;
+                if input.len() == 4 && grid.len() == 4 {
+                    Some(dims![input[0], input[1], grid[1], grid[2]])
+                } else {
+                    None
+                }
+            }
+
+            Self::Einsum => {
+                // Parse equation to derive output shape from input shapes.
+                let a_shape = get_shape(0)?;
+                let b_shape = get_shape(1)?;
+                let eq = match &node.op {
+                    crate::onnx_ir::NodeOp::Einsum { equation } => equation.as_str(),
+                    _ => return None,
+                };
+                let (lhs_str, rhs) = eq.split_once("->")?;
+                let lhss: Vec<&str> = lhs_str.split(',').collect();
+                if lhss.len() != 2 {
+                    return None;
+                }
+                let a_labels: Vec<char> = lhss[0].chars().collect();
+                let b_labels: Vec<char> = lhss[1].chars().collect();
+                let mut dim_map = std::collections::HashMap::new();
+                for (&c, &s) in a_labels.iter().zip(a_shape.iter()) {
+                    dim_map.insert(c, s);
+                }
+                for (&c, &s) in b_labels.iter().zip(b_shape.iter()) {
+                    dim_map.insert(c, s);
+                }
+                let out: Vec<usize> = rhs
+                    .chars()
+                    .filter_map(|c| dim_map.get(&c).copied())
+                    .collect();
+                Some(Dims::from_slice(&out))
+            }
+
             Self::Upsample => {
                 let x = get_shape(0)?;
                 let scales = get_value(1)?;
@@ -1091,9 +1173,10 @@ impl OpType {
                 Some(broadcast_shape(x, y))
             }
 
-            Self::ReduceMax | Self::ReduceMean | Self::ReduceSum => {
+            Self::ReduceL2 | Self::ReduceMax | Self::ReduceMean | Self::ReduceSum => {
                 let x = get_shape(0)?;
                 let keepdims = match &node.op {
+                    crate::onnx_ir::NodeOp::ReduceL2 { keepdims, .. } => *keepdims,
                     crate::onnx_ir::NodeOp::ReduceMax { keepdims } => *keepdims,
                     crate::onnx_ir::NodeOp::ReduceMean { keepdims, .. } => *keepdims,
                     crate::onnx_ir::NodeOp::ReduceSum { keepdims, .. } => *keepdims,

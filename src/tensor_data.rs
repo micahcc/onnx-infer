@@ -271,18 +271,17 @@ fn extract_float_data(tensor: &TensorProto) -> Result<Vec<f32>> {
             ONNX_INT8 => Ok(tensor.raw_data.iter().map(|&b| (b as i8) as f32).collect()),
             ONNX_DOUBLE => Ok(tensor
                 .raw_data
-                .chunks_exact(8)
-                .map(|chunk| {
-                    f64::from_le_bytes([
-                        chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
-                        chunk[7],
-                    ]) as f32
-                })
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|&chunk| f64::from_le_bytes(chunk) as f32)
                 .collect()),
             _ => Ok(tensor
                 .raw_data
-                .chunks_exact(4)
-                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&chunk| f32::from_le_bytes(chunk))
                 .collect()),
         };
     }
@@ -303,18 +302,17 @@ fn extract_int_data(tensor: &TensorProto) -> Result<Vec<i64>> {
         return match tensor.data_type {
             ONNX_INT32 => Ok(tensor
                 .raw_data
-                .chunks_exact(4)
-                .map(|chunk| i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as i64)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&chunk| i32::from_le_bytes(chunk) as i64)
                 .collect()),
             ONNX_INT64 => Ok(tensor
                 .raw_data
-                .chunks_exact(8)
-                .map(|chunk| {
-                    i64::from_le_bytes([
-                        chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6],
-                        chunk[7],
-                    ])
-                })
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|&chunk| i64::from_le_bytes(chunk))
                 .collect()),
             _ => unreachable!(),
         };

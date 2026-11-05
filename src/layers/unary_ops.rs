@@ -66,6 +66,14 @@ unary_op!(Erf, |v| {
 });
 unary_op!(Sign, |v| v.signum());
 unary_op!(Neg, |v| -v);
+// GELU: x * Φ(x) using the tanh approximation (matches PyTorch default).
+unary_op!(Gelu, |v| {
+    let c = 0.044715f32;
+    let inner = (2.0f32 / std::f32::consts::PI).sqrt() * (v + c * v.powi(3));
+    0.5 * v * (1.0 + inner.tanh())
+});
+// HardSwish: x * ReLU6(x + 3) / 6
+unary_op!(HardSwish, |v| v * (v + 3.0).clamp(0.0, 6.0) / 6.0);
 unary_op!(Reciprocal, |v| 1.0 / v);
 unary_op!(Softsign, |v| v / (1.0 + v.abs()));
 unary_op!(IsNaN, |v| if v.is_nan() { 1.0 } else { 0.0 });

@@ -1,5 +1,3 @@
-use anyhow::Context;
-
 use crate::Result;
 use crate::Tensor;
 use crate::Values;
@@ -20,10 +18,19 @@ impl Not {
 impl Layer for Not {
     fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
-        let data = input.ints().context("in Not layer")?;
-        let buf = output.as_mut_i64(data.len());
-        for (o, &v) in buf.iter_mut().zip(data.iter()) {
-            *o = if v == 0 { 1 } else { 0 };
+        // Accept both int and float boolean representations (IsNaN/IsInf output floats).
+        let numel = input.dims.iter().product::<usize>();
+        let buf = output.as_mut_i64(numel);
+        if let Ok(data) = input.ints() {
+            for (o, &v) in buf.iter_mut().zip(data.iter()) {
+                *o = if v == 0 { 1 } else { 0 };
+            }
+        } else if let Ok(data) = input.floats() {
+            for (o, &v) in buf.iter_mut().zip(data.iter()) {
+                *o = if v == 0.0 { 1 } else { 0 };
+            }
+        } else {
+            anyhow::bail!("Not: unsupported input type");
         }
         output.set_dims(&input.dims);
         Ok(())

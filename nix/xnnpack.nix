@@ -8,38 +8,38 @@ let
   cpuinfo_src = fetchFromGitHub {
     owner = "pytorch";
     repo = "cpuinfo";
-    rev = "8a9210069b5a37dd89ed118a783945502a30a4ae";
-    sha256 = "sha256-zEhgihmzfuTJkbIqtHuYv/d7F7j6QRJqU9ZHdIwW7bI=";
+    rev = "731932997e55e84900e6f95aefb6edd167b0edcc";
+    sha256 = "sha256-BfndQo6FTnCHDhrV5qW6rmej9/ImEpIqrWNUXCDXSao=";
   };
   fxdiv_src = fetchFromGitHub {
     owner = "Maratyszcza";
     repo = "FXdiv";
-    rev = "b408327ac2a15ec3e43352421954f5b1967701d1";
-    sha256 = "sha256-BEjscsejYVhRxDAmah5DT3+bglp8G5wUTTYL7+HjWds=";
+    rev = "63058eff77e11aa15bf531df5dd34395ec3017c8";
+    sha256 = "sha256-LjX5kivfHbqCIA5pF9qUvswG1gjOFo3CMpX0VR+Cn38=";
   };
   pthreadpool_src = fetchFromGitHub {
     owner = "google";
     repo = "pthreadpool";
-    rev = "0e6ca13779b57d397a5ba6bfdcaa8a275bc8ea2e";
-    sha256 = "sha256-FPUKjWARY4TdUq7ni48tnszEdmVYxPXIgtddPBHn/U0=";
+    rev = "15a6644ba1c45f1acc16ac1e883efc3e56c6bed2";
+    sha256 = "sha256-YJD9n8cxoqTrTQJHKuZFW2qnlNcNmh5rQlBpnlF46to=";
   };
   kleidiai_src = fetchFromGitHub {
     owner = "ARM-software";
     repo = "kleidiai";
-    rev = "63205aa90afa6803d8f58bc3081b69288e9f1906";
-    sha256 = "sha256-//o0/geqeGum6blRpMwDIcCRsYnm2/2illT0+FKxkZ0=";
+    rev = "1ae1e7c5882e1dbcb3992890c1af0538629641df";
+    sha256 = "sha256-4beu5OaN5//r5Hkq+6Yu37S3BjEftOA+tTpuMRphIk0=";
   };
   gbenchmark_src = fetchFromGitHub {
     owner = "google";
     repo = "benchmark";
-    rev = "8d4fdd6e6e003867045e0bb3473b5b423818e4b7";
-    sha256 = "sha256-SdPmiHrpEQy8J0F7QOVb1dglhqG7O0RoLW//9UTaE0Q=";
+    rev = "42786a7876120b03e2ecff269695729337d243d9";
+    sha256 = "sha256-Oa3UX207eeWhLzrBZSzyyehVmso6e8ned9XPo0pExCU=";
   };
   gtest_src = fetchFromGitHub {
     owner = "google";
     repo = "googletest";
-    rev = "35d0c365609296fa4730d62057c487e3cfa030ff";
-    sha256 = "sha256-ulmZZ2qQePWMnPdYYcYqZSBsKdhKwr5cStTHGhSYK6M=";
+    rev = "a8380b01a25ebdb130097b607b3afed2a58d04ba";
+    sha256 = "sha256-ftKnwcFvnMvLquNJGVRRgb2mbWokl82qQ08E9PpgNXM=";
   };
 in
 
@@ -48,8 +48,8 @@ clangStdenv.mkDerivation {
   src = fetchFromGitHub {
     owner = "google";
     repo = "XNNPACK";
-    rev = "3f83cc608b7a3ef63e59660c08970e3904ae50ae";
-    sha256 = "sha256-8q6sWpZyDCHEAqEoY3yDz9GKTUZnfAz5xoQ9A/JSwck=";
+    rev = "aa4235ff811a5ad7907fb060593ec88dc6d2428d";
+    sha256 = "sha256-hbL7U3IWn5J7CHWyKY8+1LHSAXabRYYDk3of3KDbe9E=";
   };
   nativeBuildInputs = [
     cmake
