@@ -14,7 +14,12 @@ pub struct Mod {
 
 impl Mod {
     pub fn new(inputs: Vec<String>, legacy_broadcast: bool, axis: usize, fmod: bool) -> Self {
-        Self { inputs, legacy_broadcast, axis, fmod }
+        Self {
+            inputs,
+            legacy_broadcast,
+            axis,
+            fmod,
+        }
     }
 }
 
@@ -36,18 +41,22 @@ impl Layer for Mod {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::Constants;
+    use crate::Tensor;
     use crate::Values;
     use crate::dims;
-    use crate::Tensor;
-    use std::collections::HashMap;
 
     fn run(a: Vec<f32>, b: Vec<f32>, fmod: bool) -> Vec<f32> {
         let mut m: HashMap<String, Tensor> = HashMap::new();
         m.insert("a".into(), Tensor::new(dims![3], a));
         m.insert("b".into(), Tensor::new(dims![3], b));
-        let vals = Values { intermediates: &m, constants: Constants::empty() };
+        let vals = Values {
+            intermediates: &m,
+            constants: Constants::empty(),
+        };
         let mut out = Tensor::new(dims![3], vec![0.0f32; 3]);
         let mut op = Mod::new(vec!["a".into(), "b".into()], false, 0, fmod);
         op.execute(&vals, &mut out).unwrap();

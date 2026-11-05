@@ -71,19 +71,29 @@ impl Layer for GreaterOrEqual {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::Constants;
+    use crate::Tensor;
     use crate::Values;
     use crate::dims;
-    use crate::Tensor;
-    use std::collections::HashMap;
 
     #[test]
     fn basic() {
         let mut m: HashMap<String, Tensor> = HashMap::new();
-        m.insert("a".into(), Tensor::new(dims![4], vec![1.0f32, 2.0, 3.0, 4.0]));
-        m.insert("b".into(), Tensor::new(dims![4], vec![2.0f32, 2.0, 2.0, 2.0]));
-        let vals = Values { intermediates: &m, constants: Constants::empty() };
+        m.insert(
+            "a".into(),
+            Tensor::new(dims![4], vec![1.0f32, 2.0, 3.0, 4.0]),
+        );
+        m.insert(
+            "b".into(),
+            Tensor::new(dims![4], vec![2.0f32, 2.0, 2.0, 2.0]),
+        );
+        let vals = Values {
+            intermediates: &m,
+            constants: Constants::empty(),
+        };
         let mut out = Tensor::new(dims![4], vec![0.0f32; 4]);
         let mut op = GreaterOrEqual::new(vec!["a".into(), "b".into()]);
         op.execute(&vals, &mut out).unwrap();

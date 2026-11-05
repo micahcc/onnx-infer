@@ -22,7 +22,12 @@ impl ReduceL2 {
         axes_attr: Option<Vec<i64>>,
         noop_with_empty_axes: bool,
     ) -> Self {
-        Self { inputs, keepdims, axes_attr, noop_with_empty_axes }
+        Self {
+            inputs,
+            keepdims,
+            axes_attr,
+            noop_with_empty_axes,
+        }
     }
 }
 
@@ -49,16 +54,24 @@ impl Layer for ReduceL2 {
                 return Ok(());
             }
             Some(axes) if axes.is_empty() => {
-                for m in axes_mask.iter_mut().take(in_rank) { *m = true; }
+                for m in axes_mask.iter_mut().take(in_rank) {
+                    *m = true;
+                }
             }
             Some(axes) => {
                 for &a in axes {
-                    let idx = if a < 0 { (rank_i64 + a) as usize } else { a as usize };
+                    let idx = if a < 0 {
+                        (rank_i64 + a) as usize
+                    } else {
+                        a as usize
+                    };
                     axes_mask[idx] = true;
                 }
             }
             None => {
-                for m in axes_mask.iter_mut().take(in_rank) { *m = true; }
+                for m in axes_mask.iter_mut().take(in_rank) {
+                    *m = true;
+                }
             }
         }
 
@@ -66,12 +79,19 @@ impl Layer for ReduceL2 {
         let mut out_rank = 0;
         for (i, &d) in input.dims.iter().enumerate() {
             if axes_mask[i] {
-                if self.keepdims { out_dims[out_rank] = 1; out_rank += 1; }
+                if self.keepdims {
+                    out_dims[out_rank] = 1;
+                    out_rank += 1;
+                }
             } else {
-                out_dims[out_rank] = d; out_rank += 1;
+                out_dims[out_rank] = d;
+                out_rank += 1;
             }
         }
-        if out_rank == 0 { out_dims[0] = 1; out_rank = 1; }
+        if out_rank == 0 {
+            out_dims[0] = 1;
+            out_rank = 1;
+        }
 
         let out_numel: usize = out_dims[..out_rank].iter().product();
 
@@ -120,19 +140,26 @@ impl Layer for ReduceL2 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::Constants;
+    use crate::Tensor;
     use crate::Values;
     use crate::dims;
-    use crate::Tensor;
-    use std::collections::HashMap;
 
     #[test]
     fn reduce_all() {
         // sqrt(1+4+9+16) = sqrt(30)
         let mut m: HashMap<String, Tensor> = HashMap::new();
-        m.insert("x".into(), Tensor::new(dims![4], vec![1.0f32, 2.0, 3.0, 4.0]));
-        let vals = Values { intermediates: &m, constants: Constants::empty() };
+        m.insert(
+            "x".into(),
+            Tensor::new(dims![4], vec![1.0f32, 2.0, 3.0, 4.0]),
+        );
+        let vals = Values {
+            intermediates: &m,
+            constants: Constants::empty(),
+        };
         let mut out = Tensor::new(dims![1], vec![0.0f32]);
         let mut op = ReduceL2::new(vec!["x".into()], false, Some(vec![]), false);
         op.execute(&vals, &mut out).unwrap();
@@ -146,7 +173,10 @@ mod tests {
         let data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
         let mut m: HashMap<String, Tensor> = HashMap::new();
         m.insert("x".into(), Tensor::new(dims![2, 3], data));
-        let vals = Values { intermediates: &m, constants: Constants::empty() };
+        let vals = Values {
+            intermediates: &m,
+            constants: Constants::empty(),
+        };
         let mut out = Tensor::new(dims![1, 3], vec![0.0f32; 3]);
         let mut op = ReduceL2::new(vec!["x".into()], true, Some(vec![0]), false);
         op.execute(&vals, &mut out).unwrap();

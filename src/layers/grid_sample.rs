@@ -43,7 +43,12 @@ impl GridSample {
         padding_mode: PaddingMode,
         align_corners: bool,
     ) -> Self {
-        Self { inputs, mode, padding_mode, align_corners }
+        Self {
+            inputs,
+            mode,
+            padding_mode,
+            align_corners,
+        }
     }
 }
 
@@ -62,14 +67,20 @@ fn apply_padding(x: f32, size: usize, mode: PaddingMode) -> Option<f32> {
     let n = size as f32;
     match mode {
         PaddingMode::Zeros => {
-            if x < -0.5 || x > n - 0.5 { None } else { Some(x) }
+            if x < -0.5 || x > n - 0.5 {
+                None
+            } else {
+                Some(x)
+            }
         }
         PaddingMode::Border => Some(x.clamp(0.0, n - 1.0)),
         PaddingMode::Reflection => {
             // Reflect about 0 and (n-1).
             let period = if size > 1 { 2.0 * (n - 1.0) } else { 1.0 };
             let mut v = x.abs() % period;
-            if v > n - 1.0 { v = period - v; }
+            if v > n - 1.0 {
+                v = period - v;
+            }
             Some(v.clamp(0.0, n - 1.0))
         }
     }
@@ -78,9 +89,12 @@ fn apply_padding(x: f32, size: usize, mode: PaddingMode) -> Option<f32> {
 #[allow(dead_code)]
 fn fetch(
     data: &[f32],
-    n: usize, ch: usize,
-    h_in: usize, w_in: usize,
-    yi: i64, xi: i64,
+    n: usize,
+    ch: usize,
+    h_in: usize,
+    w_in: usize,
+    yi: i64,
+    xi: i64,
     padding_mode: PaddingMode,
 ) -> f32 {
     let xf = apply_padding(xi as f32, w_in, padding_mode);
@@ -112,12 +126,16 @@ fn cubic_weights(t: f32) -> [f32; 4] {
 impl Layer for GridSample {
     fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let input = get_tensor(values, &self.inputs[0])?;
-        let grid  = get_tensor(values, &self.inputs[1])?;
+        let grid = get_tensor(values, &self.inputs[1])?;
 
         let is = &input.dims;
         let gs = &grid.dims;
-        if is.len() != 4 { bail!("GridSample: input must be 4D (N,C,H,W), got {}D", is.len()); }
-        if gs.len() != 4 { bail!("GridSample: grid must be 4D (N,H,W,2), got {}D", gs.len()); }
+        if is.len() != 4 {
+            bail!("GridSample: input must be 4D (N,C,H,W), got {}D", is.len());
+        }
+        if gs.len() != 4 {
+            bail!("GridSample: grid must be 4D (N,H,W,2), got {}D", gs.len());
+        }
 
         let (n_batch, c, h_in, w_in) = (is[0], is[1], is[2], is[3]);
         let (_, h_out, w_out, _) = (gs[0], gs[1], gs[2], gs[3]);
@@ -128,7 +146,7 @@ impl Layer for GridSample {
         let out_data = output.as_mut_f32(numel);
 
         let align = self.align_corners;
-        let pad   = self.padding_mode;
+        let pad = self.padding_mode;
 
         for n in 0..n_batch {
             for ch in 0..c {
@@ -155,17 +173,15 @@ impl Layer for GridSample {
                         };
 
                         let val = match self.mode {
-                            GridSampleMode::Nearest => {
-                                fetch_px(y.round() as i64, x.round() as i64)
-                            }
+                            GridSampleMode::Nearest => fetch_px(y.round() as i64, x.round() as i64),
                             GridSampleMode::Bilinear => {
                                 let x0 = x.floor() as i64;
                                 let y0 = y.floor() as i64;
                                 let dx = x - x0 as f32;
                                 let dy = y - y0 as f32;
-                                fetch_px(y0,     x0    ) * (1.0 - dx) * (1.0 - dy)
-                                    + fetch_px(y0,     x0 + 1) * dx * (1.0 - dy)
-                                    + fetch_px(y0 + 1, x0    ) * (1.0 - dx) * dy
+                                fetch_px(y0, x0) * (1.0 - dx) * (1.0 - dy)
+                                    + fetch_px(y0, x0 + 1) * dx * (1.0 - dy)
+                                    + fetch_px(y0 + 1, x0) * (1.0 - dx) * dy
                                     + fetch_px(y0 + 1, x0 + 1) * dx * dy
                             }
                             GridSampleMode::Bicubic => {
@@ -185,7 +201,8 @@ impl Layer for GridSample {
                             }
                         };
 
-                        out_data[n * c * h_out * w_out + ch * h_out * w_out + ho * w_out + wo] = val;
+                        out_data[n * c * h_out * w_out + ch * h_out * w_out + ho * w_out + wo] =
+                            val;
                     }
                 }
             }
@@ -197,32 +214,32 @@ impl Layer for GridSample {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::Constants;
-    use crate::Values;
-    use crate::dims;
-    use crate::Tensor;
     use std::collections::HashMap;
 
-    fn make_vals<'a>(
-        map: &'a HashMap<String, Tensor>,
-    ) -> Values<'a> {
-        Values { intermediates: map, constants: Constants::empty() }
+    use super::*;
+    use crate::Constants;
+    use crate::Tensor;
+    use crate::Values;
+    use crate::dims;
+
+    fn make_vals<'a>(map: &'a HashMap<String, Tensor>) -> Values<'a> {
+        Values {
+            intermediates: map,
+            constants: Constants::empty(),
+        }
     }
 
     /// 2×2 input with identity grid (every output pixel maps to itself).
     #[test]
     fn identity_grid_bilinear() {
         let mut map: HashMap<String, Tensor> = HashMap::new();
-        map.insert("x".into(), Tensor::new(dims![1, 1, 2, 2], vec![1.0f32, 2.0, 3.0, 4.0]));
+        map.insert(
+            "x".into(),
+            Tensor::new(dims![1, 1, 2, 2], vec![1.0f32, 2.0, 3.0, 4.0]),
+        );
         // Grid shape: (N=1, H_out=2, W_out=2, 2)
         // With align_corners=true: (-1,-1)→(0,0), (1,-1)→(1,0), (-1,1)→(0,1), (1,1)→(1,1)
-        let grid = vec![
-            -1.0f32, -1.0,
-             1.0,    -1.0,
-            -1.0,     1.0,
-             1.0,     1.0,
-        ];
+        let grid = vec![-1.0f32, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0];
         map.insert("g".into(), Tensor::new(dims![1, 2, 2, 2], grid));
 
         let mut out = Tensor::new(dims![1, 1, 2, 2], vec![0.0f32; 4]);
@@ -249,8 +266,14 @@ mod tests {
     #[test]
     fn out_of_bounds_zeros_padding() {
         let mut map: HashMap<String, Tensor> = HashMap::new();
-        map.insert("x".into(), Tensor::new(dims![1, 1, 2, 2], vec![1.0f32, 2.0, 3.0, 4.0]));
-        map.insert("g".into(), Tensor::new(dims![1, 1, 1, 2], vec![3.0f32, 3.0]));
+        map.insert(
+            "x".into(),
+            Tensor::new(dims![1, 1, 2, 2], vec![1.0f32, 2.0, 3.0, 4.0]),
+        );
+        map.insert(
+            "g".into(),
+            Tensor::new(dims![1, 1, 1, 2], vec![3.0f32, 3.0]),
+        );
 
         let mut out = Tensor::new(dims![1, 1, 1, 1], vec![0.0f32]);
         let mut op = GridSample::new(
@@ -267,10 +290,18 @@ mod tests {
     #[test]
     fn nearest_mode() {
         let mut map: HashMap<String, Tensor> = HashMap::new();
-        map.insert("x".into(), Tensor::new(dims![1, 1, 3, 3],
-            vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]));
+        map.insert(
+            "x".into(),
+            Tensor::new(
+                dims![1, 1, 3, 3],
+                vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+            ),
+        );
         // (0,0) in normalised coords with align_corners=true → centre pixel (1,1) → value 5
-        map.insert("g".into(), Tensor::new(dims![1, 1, 1, 2], vec![0.0f32, 0.0]));
+        map.insert(
+            "g".into(),
+            Tensor::new(dims![1, 1, 1, 2], vec![0.0f32, 0.0]),
+        );
 
         let mut out = Tensor::new(dims![1, 1, 1, 1], vec![0.0f32]);
         let mut op = GridSample::new(

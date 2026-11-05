@@ -113,12 +113,13 @@ impl Layer for GatherElements {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::Constants;
+    use crate::Tensor;
     use crate::Values;
     use crate::dims;
-    use crate::Tensor;
-    use std::collections::HashMap;
 
     #[test]
     fn gather_along_axis0() {
@@ -127,9 +128,18 @@ mod tests {
         // output[0,0]=data[0,0]=1, output[0,1]=data[1,1]=4
         // output[1,0]=data[2,0]=5, output[1,1]=data[0,1]=2
         let mut m: HashMap<String, Tensor> = HashMap::new();
-        m.insert("data".into(), Tensor::new(dims![3, 2], vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]));
-        m.insert("idx".into(), Tensor::new_i64(dims![2, 2], vec![0i64, 1, 2, 0]));
-        let vals = Values { intermediates: &m, constants: Constants::empty() };
+        m.insert(
+            "data".into(),
+            Tensor::new(dims![3, 2], vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        );
+        m.insert(
+            "idx".into(),
+            Tensor::new_i64(dims![2, 2], vec![0i64, 1, 2, 0]),
+        );
+        let vals = Values {
+            intermediates: &m,
+            constants: Constants::empty(),
+        };
         let mut out = Tensor::new(dims![2, 2], vec![0.0f32; 4]);
         let mut op = GatherElements::new(vec!["data".into(), "idx".into()], 0);
         op.execute(&vals, &mut out).unwrap();
@@ -145,9 +155,18 @@ mod tests {
         // data = [[1,2,3],[4,5,6]], indices = [[2,0],[1,2]], axis=1
         // output[i,j] = data[i, indices[i,j]]
         let mut m: HashMap<String, Tensor> = HashMap::new();
-        m.insert("data".into(), Tensor::new(dims![2, 3], vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]));
-        m.insert("idx".into(), Tensor::new_i64(dims![2, 2], vec![2i64, 0, 1, 2]));
-        let vals = Values { intermediates: &m, constants: Constants::empty() };
+        m.insert(
+            "data".into(),
+            Tensor::new(dims![2, 3], vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        );
+        m.insert(
+            "idx".into(),
+            Tensor::new_i64(dims![2, 2], vec![2i64, 0, 1, 2]),
+        );
+        let vals = Values {
+            intermediates: &m,
+            constants: Constants::empty(),
+        };
         let mut out = Tensor::new(dims![2, 2], vec![0.0f32; 4]);
         let mut op = GatherElements::new(vec!["data".into(), "idx".into()], 1);
         op.execute(&vals, &mut out).unwrap();

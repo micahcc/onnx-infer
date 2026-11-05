@@ -32,11 +32,11 @@ use crate::layers::conv_transpose;
 use crate::layers::dequantize_linear;
 use crate::layers::div;
 use crate::layers::dropout;
+use crate::layers::einsum;
 use crate::layers::equal;
 use crate::layers::exp;
 use crate::layers::expand;
 use crate::layers::flatten;
-use crate::layers::einsum;
 use crate::layers::floor;
 use crate::layers::gather;
 use crate::layers::gather_elements;
@@ -46,9 +46,9 @@ use crate::layers::greater;
 use crate::layers::greater_or_equal;
 use crate::layers::grid_sample;
 use crate::layers::hardmax;
-use crate::layers::layer_norm;
 use crate::layers::identity;
 use crate::layers::if_op;
+use crate::layers::layer_norm;
 use crate::layers::leaky_relu;
 use crate::layers::less;
 use crate::layers::log;
@@ -816,7 +816,8 @@ pub fn build_node_with_initializers(
                 padding_mode,
                 align_corners,
             } => {
-                use crate::layers::grid_sample::{GridSampleMode, PaddingMode};
+                use crate::layers::grid_sample::GridSampleMode;
+                use crate::layers::grid_sample::PaddingMode;
                 let gs_mode = match mode.as_str() {
                     "nearest" => GridSampleMode::Nearest,
                     "bicubic" => GridSampleMode::Bicubic,
@@ -827,18 +828,39 @@ pub fn build_node_with_initializers(
                     "reflection" => PaddingMode::Reflection,
                     _ => PaddingMode::Zeros,
                 };
-                Box::new(grid_sample::GridSample::new(inputs, gs_mode, gs_pad, *align_corners))
+                Box::new(grid_sample::GridSample::new(
+                    inputs,
+                    gs_mode,
+                    gs_pad,
+                    *align_corners,
+                ))
             }
-            NodeOp::LayerNormalization { axis, epsilon } =>
-                Box::new(layer_norm::LayerNorm::new(inputs, *axis, *epsilon)),
-            NodeOp::Mod { legacy_broadcast, axis, fmod } =>
-                Box::new(mod_op::Mod::new(inputs, *legacy_broadcast, *axis as usize, *fmod)),
-            NodeOp::GatherElements { axis } =>
-                Box::new(gather_elements::GatherElements::new(inputs, *axis)),
-            NodeOp::ReduceL2 { keepdims, noop_with_empty_axes } =>
-                Box::new(reduce_l2::ReduceL2::new(inputs, *keepdims, None, *noop_with_empty_axes)),
-            NodeOp::Einsum { equation } =>
-                Box::new(einsum::Einsum::new(inputs, equation.clone())),
+            NodeOp::LayerNormalization { axis, epsilon } => {
+                Box::new(layer_norm::LayerNorm::new(inputs, *axis, *epsilon))
+            }
+            NodeOp::Mod {
+                legacy_broadcast,
+                axis,
+                fmod,
+            } => Box::new(mod_op::Mod::new(
+                inputs,
+                *legacy_broadcast,
+                *axis as usize,
+                *fmod,
+            )),
+            NodeOp::GatherElements { axis } => {
+                Box::new(gather_elements::GatherElements::new(inputs, *axis))
+            }
+            NodeOp::ReduceL2 {
+                keepdims,
+                noop_with_empty_axes,
+            } => Box::new(reduce_l2::ReduceL2::new(
+                inputs,
+                *keepdims,
+                None,
+                *noop_with_empty_axes,
+            )),
+            NodeOp::Einsum { equation } => Box::new(einsum::Einsum::new(inputs, equation.clone())),
             NodeOp::Conv {
                 kernel_shape,
                 strides,

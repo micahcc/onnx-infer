@@ -25,7 +25,11 @@ pub struct LayerNorm {
 
 impl LayerNorm {
     pub fn new(inputs: Vec<String>, axis: i64, epsilon: f32) -> Self {
-        Self { inputs, axis, epsilon }
+        Self {
+            inputs,
+            axis,
+            epsilon,
+        }
     }
 }
 
@@ -33,7 +37,10 @@ impl Layer for LayerNorm {
     fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let x = get_tensor(values, &self.inputs[0])?;
         let scale = get_tensor(values, &self.inputs[1])?;
-        let bias = self.inputs.get(2).filter(|s| !s.is_empty())
+        let bias = self
+            .inputs
+            .get(2)
+            .filter(|s| !s.is_empty())
             .and_then(|name| values.get(name));
 
         let rank = x.dims.len();
@@ -63,8 +70,7 @@ impl Layer for LayerNorm {
             let mean: f32 = slice.iter().sum::<f32>() / norm_size as f32;
 
             // Variance.
-            let var: f32 = slice.iter().map(|v| (v - mean).powi(2)).sum::<f32>()
-                / norm_size as f32;
+            let var: f32 = slice.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / norm_size as f32;
 
             let inv_std = (var + eps).sqrt().recip();
 
@@ -85,12 +91,13 @@ impl Layer for LayerNorm {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::Constants;
+    use crate::Tensor;
     use crate::Values;
     use crate::dims;
-    use crate::Tensor;
-    use std::collections::HashMap;
 
     fn run(x: Tensor, scale: Tensor, bias: Option<Tensor>, axis: i64) -> Vec<f32> {
         let mut intermediates = HashMap::new();
@@ -101,7 +108,10 @@ mod tests {
             intermediates.insert("bias".into(), b);
             inputs.push("bias".into());
         }
-        let values = Values { intermediates: &intermediates, constants: Constants::empty() };
+        let values = Values {
+            intermediates: &intermediates,
+            constants: Constants::empty(),
+        };
         let mut out = Tensor::default();
         let mut op = LayerNorm::new(inputs, axis, 1e-5);
         op.execute(&values, &mut out).unwrap();

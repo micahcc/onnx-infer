@@ -35,7 +35,10 @@ fn parse_equation(eq: &str) -> anyhow::Result<(Vec<char>, Vec<char>, Vec<char>)>
     };
     let operands: Vec<&str> = lhs.split(',').collect();
     if operands.len() != 2 {
-        bail!("Einsum: only two-input equations are supported, got {}", operands.len());
+        bail!(
+            "Einsum: only two-input equations are supported, got {}",
+            operands.len()
+        );
     }
     Ok((
         operands[0].chars().collect(),
@@ -101,9 +104,14 @@ impl Layer for Einsum {
         let total_contract: usize = contract_sizes.iter().product::<usize>().max(1);
 
         // Helper: flat index for a tensor given a coord mapping char→usize.
-        let flat_idx = |labels: &[char], strides: &[usize], coord: &dyn Fn(char) -> usize| -> usize {
-            labels.iter().zip(strides.iter()).map(|(&c, &s)| coord(c) * s).sum()
-        };
+        let flat_idx =
+            |labels: &[char], strides: &[usize], coord: &dyn Fn(char) -> usize| -> usize {
+                labels
+                    .iter()
+                    .zip(strides.iter())
+                    .map(|(&c, &s)| coord(c) * s)
+                    .sum()
+            };
 
         loop {
             // Build out coord map: char → size
@@ -113,7 +121,11 @@ impl Layer for Einsum {
                 .zip(out_coords.iter().copied())
                 .collect();
 
-            let out_flat: usize = out_coords.iter().zip(o_strides.iter()).map(|(&c, &s)| c * s).sum();
+            let out_flat: usize = out_coords
+                .iter()
+                .zip(o_strides.iter())
+                .map(|(&c, &s)| c * s)
+                .sum();
 
             // Iterate over contraction dimensions.
             let mut c_coords = vec![0usize; contract_labels.len()];
@@ -124,9 +136,8 @@ impl Layer for Einsum {
                     .zip(c_coords.iter().copied())
                     .collect();
 
-                let coord = |c: char| -> usize {
-                    *out_map.get(&c).or_else(|| c_map.get(&c)).unwrap_or(&0)
-                };
+                let coord =
+                    |c: char| -> usize { *out_map.get(&c).or_else(|| c_map.get(&c)).unwrap_or(&0) };
 
                 let ai = flat_idx(&a_idx, &a_strides, &coord);
                 let bi = flat_idx(&b_idx, &b_strides, &coord);
@@ -136,21 +147,30 @@ impl Layer for Einsum {
                 if !c_coords.is_empty() {
                     for d in (0..c_coords.len()).rev() {
                         c_coords[d] += 1;
-                        if c_coords[d] < contract_sizes[d] { break; }
+                        if c_coords[d] < contract_sizes[d] {
+                            break;
+                        }
                         c_coords[d] = 0;
                     }
                 }
             }
 
             // Advance output coords.
-            if out_rank == 0 { break; }
+            if out_rank == 0 {
+                break;
+            }
             let mut advanced = false;
             for d in (0..out_rank).rev() {
                 out_coords[d] += 1;
-                if out_coords[d] < out_shape[d] { advanced = true; break; }
+                if out_coords[d] < out_shape[d] {
+                    advanced = true;
+                    break;
+                }
                 out_coords[d] = 0;
             }
-            if !advanced { break; }
+            if !advanced {
+                break;
+            }
         }
 
         output.set_dims(&out_shape);
@@ -160,12 +180,13 @@ impl Layer for Einsum {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::Constants;
+    use crate::Tensor;
     use crate::Values;
     use crate::dims;
-    use crate::Tensor;
-    use std::collections::HashMap;
 
     #[test]
     fn matrix_multiply_ij_jk_ik() {
@@ -175,7 +196,10 @@ mod tests {
         let mut m: HashMap<String, Tensor> = HashMap::new();
         m.insert("a".into(), Tensor::new(dims![2, 3], a));
         m.insert("b".into(), Tensor::new(dims![3, 2], b));
-        let vals = Values { intermediates: &m, constants: Constants::empty() };
+        let vals = Values {
+            intermediates: &m,
+            constants: Constants::empty(),
+        };
         let mut out = Tensor::new(dims![2, 2], vec![0.0f32; 4]);
         let mut op = Einsum::new(vec!["a".into(), "b".into()], "ij,jk->ik".into());
         op.execute(&vals, &mut out).unwrap();
@@ -198,7 +222,10 @@ mod tests {
         let mut m: HashMap<String, Tensor> = HashMap::new();
         m.insert("a".into(), Tensor::new(dims![1, 2, 3], a));
         m.insert("b".into(), Tensor::new(dims![1, 3, 2, 2], b));
-        let vals = Values { intermediates: &m, constants: Constants::empty() };
+        let vals = Values {
+            intermediates: &m,
+            constants: Constants::empty(),
+        };
         let mut out = Tensor::new(dims![1, 2, 2, 2], vec![0.0f32; 8]);
         let mut op = Einsum::new(vec!["a".into(), "b".into()], "bmc,bchw->bmhw".into());
         op.execute(&vals, &mut out).unwrap();

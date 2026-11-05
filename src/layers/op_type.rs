@@ -252,8 +252,16 @@ impl OpType {
         const F: Option<DType> = Some(DType::Float);
 
         match self {
-            Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Pow | Self::GridSample
-            | Self::Mod | Self::GatherElements | Self::GreaterOrEqual | Self::Einsum => &[F, F],
+            Self::Add
+            | Self::Sub
+            | Self::Mul
+            | Self::Div
+            | Self::Pow
+            | Self::GridSample
+            | Self::Mod
+            | Self::GatherElements
+            | Self::GreaterOrEqual
+            | Self::Einsum => &[F, F],
             Self::LayerNormalization => &[F, F], // X, Scale (Bias is optional)
             Self::Gelu | Self::HardSwish => &[F],
             Self::ReduceL2 => &[F],
@@ -441,7 +449,6 @@ impl OpType {
             | Self::Gelu
             | Self::HardSwish
             | Self::Not => get_shape(0).cloned(),
-
 
             Self::Add
             | Self::Sub
@@ -1052,13 +1059,22 @@ impl OpType {
                 };
                 let (lhs_str, rhs) = eq.split_once("->")?;
                 let lhss: Vec<&str> = lhs_str.split(',').collect();
-                if lhss.len() != 2 { return None; }
+                if lhss.len() != 2 {
+                    return None;
+                }
                 let a_labels: Vec<char> = lhss[0].chars().collect();
                 let b_labels: Vec<char> = lhss[1].chars().collect();
                 let mut dim_map = std::collections::HashMap::new();
-                for (&c, &s) in a_labels.iter().zip(a_shape.iter()) { dim_map.insert(c, s); }
-                for (&c, &s) in b_labels.iter().zip(b_shape.iter()) { dim_map.insert(c, s); }
-                let out: Vec<usize> = rhs.chars().filter_map(|c| dim_map.get(&c).copied()).collect();
+                for (&c, &s) in a_labels.iter().zip(a_shape.iter()) {
+                    dim_map.insert(c, s);
+                }
+                for (&c, &s) in b_labels.iter().zip(b_shape.iter()) {
+                    dim_map.insert(c, s);
+                }
+                let out: Vec<usize> = rhs
+                    .chars()
+                    .filter_map(|c| dim_map.get(&c).copied())
+                    .collect();
                 Some(Dims::from_slice(&out))
             }
 

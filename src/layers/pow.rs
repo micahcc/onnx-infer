@@ -13,7 +13,11 @@ pub struct Pow {
 
 impl Pow {
     pub fn new(inputs: Vec<String>, legacy_broadcast: bool, axis: usize) -> Self {
-        Self { inputs, legacy_broadcast, axis }
+        Self {
+            inputs,
+            legacy_broadcast,
+            axis,
+        }
     }
 }
 
@@ -21,18 +25,21 @@ impl Layer for Pow {
     fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
         let a = get_tensor(values, &self.inputs[0])?;
         let b = get_tensor(values, &self.inputs[1])?;
-        crate::layers::binary_op(a, b, output, self.legacy_broadcast, self.axis, |a, b| a.powf(b))
+        crate::layers::binary_op(a, b, output, self.legacy_broadcast, self.axis, |a, b| {
+            a.powf(b)
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::Constants;
     use crate::Tensor;
     use crate::Values;
     use crate::dims;
-    use std::collections::HashMap;
 
     fn make_values(pairs: Vec<(&str, Tensor)>) -> HashMap<String, Tensor> {
         pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
@@ -40,7 +47,10 @@ mod tests {
 
     fn run_pow(a: Tensor, b: Tensor) -> Vec<f32> {
         let intermediates = make_values(vec![("a", a), ("b", b)]);
-        let vals = Values { intermediates: &intermediates, constants: Constants::empty() };
+        let vals = Values {
+            intermediates: &intermediates,
+            constants: Constants::empty(),
+        };
         let mut layer = Pow::new(vec!["a".to_string(), "b".to_string()], false, 0);
         let mut out = Tensor::new(dims![1], vec![0.0f32]);
         layer.execute(&vals, &mut out).unwrap();

@@ -872,7 +872,9 @@ fn derive_node_op(op_type: OpType, a: &Attrs, opset: i64) -> NodeOp {
         OpType::HardSwish => NodeOp::HardSwish,
         OpType::GridSample => NodeOp::GridSample {
             mode: a.get_string("mode").unwrap_or_else(|| "bilinear".into()),
-            padding_mode: a.get_string("padding_mode").unwrap_or_else(|| "zeros".into()),
+            padding_mode: a
+                .get_string("padding_mode")
+                .unwrap_or_else(|| "zeros".into()),
             align_corners: a.get_int("align_corners").unwrap_or(0) != 0,
         },
         OpType::LayerNormalization => NodeOp::LayerNormalization {
