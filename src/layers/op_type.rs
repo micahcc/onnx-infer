@@ -44,6 +44,7 @@ pub enum OpType {
     Einsum,
     Equal,
     Erf,
+    Gelu,
     Expand,
     Exp,
     Flatten,
@@ -56,6 +57,7 @@ pub enum OpType {
     GreaterOrEqual,
     GridSample,
     HardSigmoid,
+    HardSwish,
     Hardmax,
     Identity,
     If,
@@ -169,9 +171,11 @@ impl OpType {
             "GatherElements" => Ok(Self::GatherElements),
             "Gemm" => Ok(Self::Gemm),
             "GlobalAveragePool" => Ok(Self::GlobalAveragePool),
+            "Gelu" => Ok(Self::Gelu),
             "Greater" => Ok(Self::Greater),
             "GreaterOrEqual" => Ok(Self::GreaterOrEqual),
             "GridSample" => Ok(Self::GridSample),
+            "HardSwish" => Ok(Self::HardSwish),
             "HardSigmoid" => Ok(Self::HardSigmoid),
             "Hardmax" => Ok(Self::Hardmax),
             "Identity" => Ok(Self::Identity),
@@ -251,6 +255,7 @@ impl OpType {
             Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Pow | Self::GridSample
             | Self::Mod | Self::GatherElements | Self::GreaterOrEqual | Self::Einsum => &[F, F],
             Self::LayerNormalization => &[F, F], // X, Scale (Bias is optional)
+            Self::Gelu | Self::HardSwish => &[F],
             Self::ReduceL2 => &[F],
             Self::Relu
             | Self::LeakyRelu
@@ -433,7 +438,10 @@ impl OpType {
             | Self::IsInf
             | Self::Lrn
             | Self::LayerNormalization
+            | Self::Gelu
+            | Self::HardSwish
             | Self::Not => get_shape(0).cloned(),
+
 
             Self::Add
             | Self::Sub

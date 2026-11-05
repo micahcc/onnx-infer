@@ -200,6 +200,8 @@ pub enum NodeOp {
         axis: i64,
         epsilon: f32,
     },
+    Gelu,
+    HardSwish,
     Mod {
         legacy_broadcast: bool,
         axis: i64,
@@ -441,6 +443,8 @@ impl NodeOp {
             Self::Gemm { .. } => OpType::Gemm,
             Self::GlobalAveragePool => OpType::GlobalAveragePool,
             Self::Greater => OpType::Greater,
+            Self::Gelu => OpType::Gelu,
+            Self::HardSwish => OpType::HardSwish,
             Self::GridSample { .. } => OpType::GridSample,
             Self::LayerNormalization { .. } => OpType::LayerNormalization,
             Self::Mod { .. } => OpType::Mod,
@@ -864,6 +868,8 @@ fn derive_node_op(op_type: OpType, a: &Attrs, opset: i64) -> NodeOp {
             legacy_broadcast: a.get_int("broadcast").unwrap_or(0) != 0,
             axis: a.get_int("axis").unwrap_or(0),
         },
+        OpType::Gelu => NodeOp::Gelu,
+        OpType::HardSwish => NodeOp::HardSwish,
         OpType::GridSample => NodeOp::GridSample {
             mode: a.get_string("mode").unwrap_or_else(|| "bilinear".into()),
             padding_mode: a.get_string("padding_mode").unwrap_or_else(|| "zeros".into()),

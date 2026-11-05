@@ -107,9 +107,15 @@ pub fn is_xnnpack_compatible(op: OpType) -> bool {
             | OpType::Ceil
             | OpType::Log
             | OpType::LeakyRelu
+            | OpType::Elu
+            | OpType::Gelu
+            | OpType::HardSwish
             | OpType::Neg
             | OpType::Sin
             | OpType::Cos
+            | OpType::Sign
+            | OpType::Pow
+            | OpType::Mod
             | OpType::Add
             | OpType::Sum
             | OpType::Sub
@@ -437,6 +443,16 @@ impl SubgraphBuilder {
                 self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_cosine, None)
             }
             OpType::LeakyRelu => self.add_leaky_relu(cap, shape_map),
+            OpType::Elu => self.add_elu(cap, shape_map),
+            OpType::Gelu => {
+                self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_gelu, None)
+            }
+            OpType::HardSwish => {
+                self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_hardswish, None)
+            }
+            OpType::Sign => {
+                self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_sign, None)
+            }
             OpType::Add => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_add),
             OpType::Sum => self.add_sum(cap, shape_map),
             OpType::Sub => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_subtract),
@@ -444,6 +460,8 @@ impl SubgraphBuilder {
             OpType::Div => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_divide),
             OpType::Max => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_maximum),
             OpType::Min => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_minimum),
+            OpType::Pow => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_pow),
+            OpType::Mod => self.add_binary(cap, shape_map, xnn_binary_operator_xnn_binary_modulus),
             OpType::MaxPool => self.add_maxpool(cap, shape_map),
             OpType::AveragePool => self.add_average_pool(cap, shape_map),
             OpType::GlobalAveragePool => self.add_global_avg_pool(cap, shape_map),
@@ -913,6 +931,21 @@ impl SubgraphBuilder {
             xnn_unary_operator_xnn_unary_leaky_relu,
             Some(params),
         )
+    }
+
+    fn add_elu(
+        &mut self,
+        cap: &CapturedOp,
+        shape_map: &HashMap<String, Vec<usize>>,
+    ) -> Result<()> {
+        let alpha = match &cap.node.op {
+            NodeOp::Elu { alpha } => *alpha,
+            _ => 1.0,
+        };
+        let params = xnn_unary_params {
+            elu: xnn_unary_params__bindgen_ty_2 { alpha },
+        };
+        self.add_unary(cap, shape_map, xnn_unary_operator_xnn_unary_elu, Some(params))
     }
 
     /// Decompose Softplus(x) = Log(1 + Exp(x)) into three XNNPACK ops.
@@ -2015,6 +2048,10 @@ fn infer_op_output_shapes(
         | OpType::Sin
         | OpType::Cos
         | OpType::LeakyRelu
+        | OpType::Elu
+        | OpType::Gelu
+        | OpType::HardSwish
+        | OpType::Sign
         | OpType::Round
         | OpType::Cast
         | OpType::Identity
@@ -2035,7 +2072,8 @@ fn infer_op_output_shapes(
         }
 
         // Binary — broadcast shapes
-        OpType::Add | OpType::Sub | OpType::Mul | OpType::Div | OpType::Max | OpType::Min => {
+        OpType::Add | OpType::Sub | OpType::Mul | OpType::Div | OpType::Max | OpType::Min
+        | OpType::Pow | OpType::Mod => {
             if let (Some(a), Some(b)) = (get(0), get(1)) {
                 if let Some(out) = broadcast_shapes(a, b) {
                     result.push((op.outputs[0].clone(), out));

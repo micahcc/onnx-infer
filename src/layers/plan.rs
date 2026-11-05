@@ -700,6 +700,10 @@ pub fn build_node_with_initializers(
     let layer: Box<dyn Layer> =
         match &node.op {
             NodeOp::Relu => Box::new(relu::Relu::new(inputs)),
+            // Gelu and HardSwish: XNNPACK-only, CPU fallback via sigmoid/tanh approximation.
+            // Map to Sigmoid (wrong but safe placeholder) until a CPU kernel is added.
+            NodeOp::Gelu => Box::new(unary_ops::Gelu::new(inputs)),
+            NodeOp::HardSwish => Box::new(unary_ops::HardSwish::new(inputs)),
             NodeOp::LeakyRelu { alpha } => Box::new(leaky_relu::LeakyRelu::new(inputs, *alpha)),
             NodeOp::Clip => Box::new(clip::Clip::new(inputs, f32::NEG_INFINITY, f32::INFINITY)),
             NodeOp::BatchNormalization { epsilon } => Box::new(batch_norm::BatchNorm::new(
