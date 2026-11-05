@@ -98,7 +98,8 @@ fn is_layout_agnostic(op: OpType) -> bool {
             | OpType::DequantizeLinear
             | OpType::QuantizeLinear
             | OpType::Sum
-            // Pointwise ops: a channel permutation commutes with scalar functions.
+            // A channel permutation commutes with any scalar function, so these
+            // pointwise ops are safe to push transposes through.
             | OpType::Pow
             | OpType::Mod
             | OpType::GreaterOrEqual
