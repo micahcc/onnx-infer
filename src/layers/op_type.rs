@@ -51,6 +51,7 @@ pub enum OpType {
     Gemm,
     GlobalAveragePool,
     Greater,
+    GridSample,
     HardSigmoid,
     Hardmax,
     Identity,
@@ -73,6 +74,7 @@ pub enum OpType {
     NonMaxSuppression,
     NonZero,
     Not,
+    Pow,
     PRelu,
     QLinearAdd,
     QLinearConv,
@@ -160,6 +162,7 @@ impl OpType {
             "Gemm" => Ok(Self::Gemm),
             "GlobalAveragePool" => Ok(Self::GlobalAveragePool),
             "Greater" => Ok(Self::Greater),
+            "GridSample" => Ok(Self::GridSample),
             "HardSigmoid" => Ok(Self::HardSigmoid),
             "Hardmax" => Ok(Self::Hardmax),
             "Identity" => Ok(Self::Identity),
@@ -181,6 +184,7 @@ impl OpType {
             "NonMaxSuppression" => Ok(Self::NonMaxSuppression),
             "NonZero" => Ok(Self::NonZero),
             "Not" => Ok(Self::Not),
+            "Pow" => Ok(Self::Pow),
             "PRelu" => Ok(Self::PRelu),
             "QLinearAdd" => Ok(Self::QLinearAdd),
             "QLinearConv" => Ok(Self::QLinearConv),
@@ -232,7 +236,7 @@ impl OpType {
         const F: Option<DType> = Some(DType::Float);
 
         match self {
-            Self::Add | Self::Sub | Self::Mul | Self::Div => &[F, F],
+            Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Pow | Self::GridSample => &[F, F],
             Self::Relu
             | Self::LeakyRelu
             | Self::Clip
@@ -417,6 +421,7 @@ impl OpType {
             | Self::Sub
             | Self::Mul
             | Self::Div
+            | Self::Pow
             | Self::Less
             | Self::Equal
             | Self::Greater
@@ -993,6 +998,17 @@ impl OpType {
                     }
                 }
                 None
+            }
+
+            Self::GridSample => {
+                // Output: (N, C, H_out, W_out) — grid shape is (N, H_out, W_out, 2)
+                let input = get_shape(0)?;
+                let grid = get_shape(1)?;
+                if input.len() == 4 && grid.len() == 4 {
+                    Some(dims![input[0], input[1], grid[1], grid[2]])
+                } else {
+                    None
+                }
             }
 
             Self::Upsample => {

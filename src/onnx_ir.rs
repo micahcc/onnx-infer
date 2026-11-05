@@ -187,6 +187,15 @@ pub enum NodeOp {
         legacy_broadcast: bool,
         axis: i64,
     },
+    Pow {
+        legacy_broadcast: bool,
+        axis: i64,
+    },
+    GridSample {
+        mode: String,
+        padding_mode: String,
+        align_corners: bool,
+    },
 
     // Parameterized
     ArgMax {
@@ -412,6 +421,7 @@ impl NodeOp {
             Self::Gemm { .. } => OpType::Gemm,
             Self::GlobalAveragePool => OpType::GlobalAveragePool,
             Self::Greater => OpType::Greater,
+            Self::GridSample { .. } => OpType::GridSample,
             Self::HardSigmoid { .. } => OpType::HardSigmoid,
             Self::Hardmax { .. } => OpType::Hardmax,
             Self::Identity => OpType::Identity,
@@ -434,6 +444,7 @@ impl NodeOp {
             Self::NonMaxSuppression => OpType::NonMaxSuppression,
             Self::NonZero => OpType::NonZero,
             Self::Not => OpType::Not,
+            Self::Pow { .. } => OpType::Pow,
             Self::PRelu => OpType::PRelu,
             Self::QLinearAdd => OpType::QLinearAdd,
             Self::QLinearConv { .. } => OpType::QLinearConv,
@@ -822,6 +833,15 @@ fn derive_node_op(op_type: OpType, a: &Attrs, opset: i64) -> NodeOp {
         OpType::Sub => NodeOp::Sub {
             legacy_broadcast: a.get_int("broadcast").unwrap_or(0) != 0,
             axis: a.get_int("axis").unwrap_or(0),
+        },
+        OpType::Pow => NodeOp::Pow {
+            legacy_broadcast: a.get_int("broadcast").unwrap_or(0) != 0,
+            axis: a.get_int("axis").unwrap_or(0),
+        },
+        OpType::GridSample => NodeOp::GridSample {
+            mode: a.get_string("mode").unwrap_or_else(|| "bilinear".into()),
+            padding_mode: a.get_string("padding_mode").unwrap_or_else(|| "zeros".into()),
+            align_corners: a.get_int("align_corners").unwrap_or(0) != 0,
         },
 
         // Parameterized ops

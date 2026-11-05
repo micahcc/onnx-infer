@@ -41,6 +41,7 @@ use crate::layers::gather;
 use crate::layers::gemm;
 use crate::layers::global_avg_pool;
 use crate::layers::greater;
+use crate::layers::grid_sample;
 use crate::layers::hardmax;
 use crate::layers::identity;
 use crate::layers::if_op;
@@ -58,6 +59,7 @@ use crate::layers::mul;
 use crate::layers::nms;
 use crate::layers::nonzero;
 use crate::layers::not;
+use crate::layers::pow;
 use crate::layers::prelu;
 use crate::layers::qlinear_add;
 use crate::layers::qlinear_conv;
@@ -794,6 +796,28 @@ pub fn build_node_with_initializers(
                 legacy_broadcast,
                 axis,
             } => Box::new(div::Div::new(inputs, *legacy_broadcast, *axis as usize)),
+            NodeOp::Pow {
+                legacy_broadcast,
+                axis,
+            } => Box::new(pow::Pow::new(inputs, *legacy_broadcast, *axis as usize)),
+            NodeOp::GridSample {
+                mode,
+                padding_mode,
+                align_corners,
+            } => {
+                use crate::layers::grid_sample::{GridSampleMode, PaddingMode};
+                let gs_mode = match mode.as_str() {
+                    "nearest" => GridSampleMode::Nearest,
+                    "bicubic" => GridSampleMode::Bicubic,
+                    _ => GridSampleMode::Bilinear,
+                };
+                let gs_pad = match padding_mode.as_str() {
+                    "border" => PaddingMode::Border,
+                    "reflection" => PaddingMode::Reflection,
+                    _ => PaddingMode::Zeros,
+                };
+                Box::new(grid_sample::GridSample::new(inputs, gs_mode, gs_pad, *align_corners))
+            }
             NodeOp::Conv {
                 kernel_shape,
                 strides,
