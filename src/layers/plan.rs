@@ -1265,9 +1265,6 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
         PlanNode::Single { output, layer } => {
             let mut out = values.remove(output.as_str()).unwrap_or_default();
             // Capture input layout before borrowing values for execute.
-            // Unknown is treated as NCHW: the graph optimizer inserts LayoutTranspose
-            // around ops that need a different layout, so any tensor that hasn't been
-            // explicitly tagged is in the original NCHW format.
             let input_layout = node
                 .inputs
                 .first()

@@ -2738,8 +2738,6 @@ impl XnnpackSubgraph {
             // Seed with external inputs.
             for name in &compiled.input_names {
                 if let Some(t) = values.get(name) {
-                    // Treat Unknown as NCHW: any un-annotated tensor is in the graph's
-                    // default layout, which graph_opt assumes to be NCHW.
                     let layout = match t.layout {
                         crate::Layout::Unknown => crate::Layout::NCHW,
                         l => l,
