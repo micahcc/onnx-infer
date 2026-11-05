@@ -544,10 +544,9 @@ fn try_propagate_value(
         if name.is_empty() {
             continue;
         }
-        if let Some(t) = known_values.get(name).or_else(|| initializers.get(name)) {
+        {
+            let t = known_values.get(name).or_else(|| initializers.get(name))?;
             temp_values.insert(name.clone(), t.clone());
-        } else {
-            return None;
         }
     }
 

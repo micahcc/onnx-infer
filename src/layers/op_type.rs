@@ -794,14 +794,13 @@ impl OpType {
                 let x = get_shape(0)?;
                 let total: usize = x.iter().product();
 
-                let shape_vals: Vec<i64> = if let Some(t) = get_value(1) {
+                let shape_vals: Vec<i64> = {
+                    let t = get_value(1)?;
                     match t.dtype() {
                         DType::Int64 => t.ints().ok()?.to_vec(),
                         DType::Float => t.floats().ok()?.iter().map(|&v| v as i64).collect(),
                         DType::String => return None,
                     }
-                } else {
-                    return None;
                 };
 
                 let mut dims: Dims = Dims::new();

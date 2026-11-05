@@ -43,7 +43,7 @@ impl Split {
         let input = values
             .get(&self.inputs[0])
             .or_else(|| constants.get(&self.inputs[0]))
-            .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", &self.inputs[0]))?;
+            .ok_or_else(|| anyhow::anyhow!("Tensor '{}' not found", self.inputs[0]))?;
         let rank = input.dims.len() as i64;
         let axis = if self.axis < 0 {
             (rank + self.axis) as usize
