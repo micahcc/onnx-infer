@@ -98,20 +98,10 @@ fn is_layout_agnostic(op: OpType) -> bool {
             | OpType::DequantizeLinear
             | OpType::QuantizeLinear
             | OpType::Sum
-            // New element-wise ops: a transpose passes through without changing semantics.
+            // Pointwise ops: a channel permutation commutes with scalar functions.
             | OpType::Pow
             | OpType::Mod
             | OpType::GreaterOrEqual
-            // GridSample operates on 4D input but its output is also 4D — the spatial
-            // content changes but the rank and channel position do not, so transposes
-            // pass through it safely.
-            | OpType::GridSample
-            // Post-Conv ops in transformer models: applied to non-4D tensors (after reshape),
-            // so the NCHW↔NHWC assumption does not apply and transposes pass through safely.
-            | OpType::LayerNormalization
-            | OpType::ReduceL2
-            | OpType::GatherElements
-            | OpType::Einsum
     )
 }
 

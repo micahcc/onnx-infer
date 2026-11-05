@@ -2545,6 +2545,7 @@ impl XnnpackSubgraph {
                 }
             }
         }
+
         if needs_recompile {
             // Drop old runtime and recompile with current shapes
             self.compiled = None;
@@ -2728,6 +2729,45 @@ impl XnnpackSubgraph {
             }
         }
 
+        // Propagate tensor layout through the subgraph ops so that if another
+        // subgraph falls back to CPU, the Conv inside it can determine nhwc from
+        // its input tensor's layout rather than defaulting to NCHW.
+        // Only LayoutTranspose changes the layout; all other ops propagate it.
+        {
+            let mut layout_map: HashMap<String, crate::Layout> = HashMap::new();
+            // Seed with external inputs.
+            for name in &compiled.input_names {
+                if let Some(t) = values.get(name) {
+                    layout_map.insert(name.clone(), t.layout);
+                }
+            }
+            for op in &self.ops {
+                let in_layout = op.inputs.first()
+                    .and_then(|n| layout_map.get(n))
+                    .copied()
+                    .unwrap_or(crate::Layout::NCHW);
+                let out_layout = match op.op {
+                    OpType::LayoutTranspose => {
+                        let perm = op.node.op.perm().unwrap_or(&[]);
+                        match (in_layout, perm) {
+                            (crate::Layout::NCHW | crate::Layout::Unknown, [0, 2, 3, 1]) => crate::Layout::NHWC,
+                            (crate::Layout::NHWC | crate::Layout::Unknown, [0, 3, 1, 2]) => crate::Layout::NCHW,
+                            _ => crate::Layout::Unknown,
+                        }
+                    }
+                    _ => in_layout,
+                };
+                for out in &op.outputs {
+                    if !out.is_empty() {
+                        layout_map.insert(out.clone(), out_layout);
+                        if let Some(tensor) = values.get_mut(out) {
+                            tensor.layout = out_layout;
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -2874,8 +2914,9 @@ impl XnnpackSubgraph {
         for (k, v) in constants.initializers.iter() {
             values.entry(k.clone()).or_insert_with(|| v.clone());
         }
+        // Always prefer fresh user inputs over stale intermediates from previous runs.
         for (k, v) in constants.inputs {
-            values.entry(k.clone()).or_insert_with(|| v.clone());
+            values.insert(k.clone(), v.clone());
         }
         for op in &self.ops {
             super::execute_node(&op.node, values).with_context(|| {

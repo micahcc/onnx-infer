@@ -835,8 +835,6 @@ pub fn build_node_with_initializers(
                 Box::new(mod_op::Mod::new(inputs, *legacy_broadcast, *axis as usize, *fmod)),
             NodeOp::GatherElements { axis } =>
                 Box::new(gather_elements::GatherElements::new(inputs, *axis)),
-            NodeOp::GreaterOrEqual =>
-                Box::new(greater_or_equal::GreaterOrEqual::new(inputs)),
             NodeOp::ReduceL2 { keepdims, noop_with_empty_axes } =>
                 Box::new(reduce_l2::ReduceL2::new(inputs, *keepdims, None, *noop_with_empty_axes)),
             NodeOp::Einsum { equation } =>
@@ -1282,9 +1280,13 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
             // correct layout in the shape map built from values.
             out.layout = if op == OpType::LayoutTranspose {
                 let perm = node.op.perm().unwrap_or(&[]);
+                // Unknown input layout is treated as NCHW or NHWC depending on the perm
+                // direction: graph_opt always inserts LayoutTranspose correctly, so if
+                // layout tracking lost the tag (e.g. after a cross-subgraph boundary),
+                // the perm tells us the intended conversion.
                 match (input_layout, perm) {
-                    (Layout::NCHW, [0, 2, 3, 1]) => Layout::NHWC,
-                    (Layout::NHWC, [0, 3, 1, 2]) => Layout::NCHW,
+                    (Layout::NCHW | Layout::Unknown, [0, 2, 3, 1]) => Layout::NHWC,
+                    (Layout::NHWC | Layout::Unknown, [0, 3, 1, 2]) => Layout::NCHW,
                     _ => Layout::Unknown,
                 }
             } else {
