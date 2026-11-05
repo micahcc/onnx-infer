@@ -2738,7 +2738,13 @@ impl XnnpackSubgraph {
             // Seed with external inputs.
             for name in &compiled.input_names {
                 if let Some(t) = values.get(name) {
-                    layout_map.insert(name.clone(), t.layout);
+                    // Treat Unknown as NCHW: any un-annotated tensor is in the graph's
+                    // default layout, which graph_opt assumes to be NCHW.
+                    let layout = match t.layout {
+                        crate::Layout::Unknown => crate::Layout::NCHW,
+                        l => l,
+                    };
+                    layout_map.insert(name.clone(), layout);
                 }
             }
             for op in &self.ops {
@@ -2750,8 +2756,8 @@ impl XnnpackSubgraph {
                     OpType::LayoutTranspose => {
                         let perm = op.node.op.perm().unwrap_or(&[]);
                         match (in_layout, perm) {
-                            (crate::Layout::NCHW | crate::Layout::Unknown, [0, 2, 3, 1]) => crate::Layout::NHWC,
-                            (crate::Layout::NHWC | crate::Layout::Unknown, [0, 3, 1, 2]) => crate::Layout::NCHW,
+                            (crate::Layout::NCHW, [0, 2, 3, 1]) => crate::Layout::NHWC,
+                            (crate::Layout::NHWC, [0, 3, 1, 2]) => crate::Layout::NCHW,
                             _ => crate::Layout::Unknown,
                         }
                     }

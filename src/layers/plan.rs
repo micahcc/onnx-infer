@@ -1265,11 +1265,17 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
         PlanNode::Single { output, layer } => {
             let mut out = values.remove(output.as_str()).unwrap_or_default();
             // Capture input layout before borrowing values for execute.
+            // Unknown is treated as NCHW: the graph optimizer inserts LayoutTranspose
+            // around ops that need a different layout, so any tensor that hasn't been
+            // explicitly tagged is in the original NCHW format.
             let input_layout = node
                 .inputs
                 .first()
                 .and_then(|name| values.get(name))
-                .map(|t| t.layout)
+                .map(|t| match t.layout {
+                    Layout::Unknown => Layout::NCHW,
+                    l => l,
+                })
                 .unwrap_or(Layout::NCHW);
             let vals = crate::Values {
                 intermediates: values,
@@ -1280,13 +1286,9 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
             // correct layout in the shape map built from values.
             out.layout = if op == OpType::LayoutTranspose {
                 let perm = node.op.perm().unwrap_or(&[]);
-                // Unknown input layout is treated as NCHW or NHWC depending on the perm
-                // direction: graph_opt always inserts LayoutTranspose correctly, so if
-                // layout tracking lost the tag (e.g. after a cross-subgraph boundary),
-                // the perm tells us the intended conversion.
                 match (input_layout, perm) {
-                    (Layout::NCHW | Layout::Unknown, [0, 2, 3, 1]) => Layout::NHWC,
-                    (Layout::NHWC | Layout::Unknown, [0, 3, 1, 2]) => Layout::NCHW,
+                    (Layout::NCHW, [0, 2, 3, 1]) => Layout::NHWC,
+                    (Layout::NHWC, [0, 3, 1, 2]) => Layout::NCHW,
                     _ => Layout::Unknown,
                 }
             } else {
