@@ -318,6 +318,12 @@ impl Conv {
 
 impl Layer for Conv {
     fn execute(&mut self, values: &Values, output: &mut Tensor) -> Result<()> {
+        // CPU fallback inside an XNNPACK subgraph may encounter a Conv that was
+        // built for NCHW (nhwc=false) because NHWC propagation stopped before it.
+        // Route to the NCHW naive path rather than panicking.
+        if !self.nhwc {
+            return self.execute_naive(values, output);
+        }
         let input = get_tensor(values, &self.inputs[0])?;
         let weight = get_tensor(values, &self.inputs[1])?;
 
@@ -368,7 +374,7 @@ impl Layer for Conv {
         let gemm_k = p.c_in_per_group * kh * kw;
         let gemm_n = spatial_out;
 
-        assert!(self.nhwc, "Conv::execute requires NHWC input layout");
+        debug_assert!(self.nhwc, "Conv::execute NHWC path reached with nhwc=false");
 
         // NHWC path: im2col from NHWC input, GEMM to temp buffer, scatter to NHWC output
         let group_gemm_size = p.c_out_per_group * spatial_out;

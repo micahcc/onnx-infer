@@ -31,7 +31,17 @@ impl Layer for GatherElements {
             self.axis as usize
         };
 
-        let idx_data = indices.ints().context("GatherElements: indices must be int64")?;
+        // Accept float indices (e.g. from ArgMax or Cast output in float form) by
+        // converting to i64 via truncation.
+        let idx_data_owned: Vec<i64>;
+        let idx_data: &[i64] = if let Ok(v) = indices.ints() {
+            v
+        } else if let Ok(v) = indices.floats() {
+            idx_data_owned = v.iter().map(|&x| x as i64).collect();
+            &idx_data_owned
+        } else {
+            anyhow::bail!("GatherElements: indices must be int64 or float");
+        };
         let numel = indices.numel();
 
         // Strides for indexing into data using indices' shape
