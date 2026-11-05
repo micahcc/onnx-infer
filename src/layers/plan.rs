@@ -1270,6 +1270,7 @@ pub fn execute_node(node: &Node, values: &mut HashMap<String, Tensor>) -> Result
                 .first()
                 .and_then(|name| values.get(name))
                 .map(|t| match t.layout {
+                    // graph_opt starts from NCHW and inserts LayoutTranspose explicitly.
                     Layout::Unknown => Layout::NCHW,
                     l => l,
                 })

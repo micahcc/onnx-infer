@@ -2739,6 +2739,7 @@ impl XnnpackSubgraph {
             for name in &compiled.input_names {
                 if let Some(t) = values.get(name) {
                     let layout = match t.layout {
+                        // graph_opt starts from NCHW and inserts LayoutTranspose explicitly.
                         crate::Layout::Unknown => crate::Layout::NCHW,
                         l => l,
                     };
