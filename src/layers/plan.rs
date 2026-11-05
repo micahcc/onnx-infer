@@ -36,11 +36,14 @@ use crate::layers::equal;
 use crate::layers::exp;
 use crate::layers::expand;
 use crate::layers::flatten;
+use crate::layers::einsum;
 use crate::layers::floor;
 use crate::layers::gather;
+use crate::layers::gather_elements;
 use crate::layers::gemm;
 use crate::layers::global_avg_pool;
 use crate::layers::greater;
+use crate::layers::greater_or_equal;
 use crate::layers::grid_sample;
 use crate::layers::hardmax;
 use crate::layers::layer_norm;
@@ -56,6 +59,7 @@ use crate::layers::matmul;
 use crate::layers::max_op;
 use crate::layers::maxpool;
 use crate::layers::min_op;
+use crate::layers::mod_op;
 use crate::layers::mul;
 use crate::layers::nms;
 use crate::layers::nonzero;
@@ -68,6 +72,7 @@ use crate::layers::qlinear_global_avg_pool;
 use crate::layers::qlinear_matmul;
 use crate::layers::quantize_linear;
 use crate::layers::range;
+use crate::layers::reduce_l2;
 use crate::layers::reduce_max;
 use crate::layers::reduce_mean;
 use crate::layers::reduce_min;
@@ -723,6 +728,7 @@ pub fn build_node_with_initializers(
             NodeOp::Less => Box::new(less::Less::new(inputs)),
             NodeOp::Equal => Box::new(equal::Equal::new(inputs)),
             NodeOp::Greater => Box::new(greater::Greater::new(inputs)),
+            NodeOp::GreaterOrEqual => Box::new(greater_or_equal::GreaterOrEqual::new(inputs)),
             NodeOp::Max => Box::new(max_op::Max::new(inputs)),
             NodeOp::Min => Box::new(min_op::Min::new(inputs)),
             NodeOp::And => Box::new(and::And { inputs }),
@@ -821,6 +827,16 @@ pub fn build_node_with_initializers(
             }
             NodeOp::LayerNormalization { axis, epsilon } =>
                 Box::new(layer_norm::LayerNorm::new(inputs, *axis, *epsilon)),
+            NodeOp::Mod { legacy_broadcast, axis, fmod } =>
+                Box::new(mod_op::Mod::new(inputs, *legacy_broadcast, *axis as usize, *fmod)),
+            NodeOp::GatherElements { axis } =>
+                Box::new(gather_elements::GatherElements::new(inputs, *axis)),
+            NodeOp::GreaterOrEqual =>
+                Box::new(greater_or_equal::GreaterOrEqual::new(inputs)),
+            NodeOp::ReduceL2 { keepdims, noop_with_empty_axes } =>
+                Box::new(reduce_l2::ReduceL2::new(inputs, *keepdims, None, *noop_with_empty_axes)),
+            NodeOp::Einsum { equation } =>
+                Box::new(einsum::Einsum::new(inputs, equation.clone())),
             NodeOp::Conv {
                 kernel_shape,
                 strides,

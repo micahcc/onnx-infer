@@ -200,6 +200,22 @@ pub enum NodeOp {
         axis: i64,
         epsilon: f32,
     },
+    Mod {
+        legacy_broadcast: bool,
+        axis: i64,
+        fmod: bool,
+    },
+    GatherElements {
+        axis: i64,
+    },
+    GreaterOrEqual,
+    ReduceL2 {
+        keepdims: bool,
+        noop_with_empty_axes: bool,
+    },
+    Einsum {
+        equation: String,
+    },
 
     // Parameterized
     ArgMax {
@@ -427,6 +443,11 @@ impl NodeOp {
             Self::Greater => OpType::Greater,
             Self::GridSample { .. } => OpType::GridSample,
             Self::LayerNormalization { .. } => OpType::LayerNormalization,
+            Self::Mod { .. } => OpType::Mod,
+            Self::GatherElements { .. } => OpType::GatherElements,
+            Self::GreaterOrEqual => OpType::GreaterOrEqual,
+            Self::ReduceL2 { .. } => OpType::ReduceL2,
+            Self::Einsum { .. } => OpType::Einsum,
             Self::HardSigmoid { .. } => OpType::HardSigmoid,
             Self::Hardmax { .. } => OpType::Hardmax,
             Self::Identity => OpType::Identity,
@@ -851,6 +872,22 @@ fn derive_node_op(op_type: OpType, a: &Attrs, opset: i64) -> NodeOp {
         OpType::LayerNormalization => NodeOp::LayerNormalization {
             axis: a.get_int("axis").unwrap_or(-1),
             epsilon: a.get_float("epsilon").unwrap_or(1e-5),
+        },
+        OpType::Mod => NodeOp::Mod {
+            legacy_broadcast: a.get_int("broadcast").unwrap_or(0) != 0,
+            axis: a.get_int("axis").unwrap_or(0),
+            fmod: a.get_int("fmod").unwrap_or(0) != 0,
+        },
+        OpType::GatherElements => NodeOp::GatherElements {
+            axis: a.get_int("axis").unwrap_or(0),
+        },
+        OpType::GreaterOrEqual => NodeOp::GreaterOrEqual,
+        OpType::ReduceL2 => NodeOp::ReduceL2 {
+            keepdims: a.get_int("keepdims").unwrap_or(1) != 0,
+            noop_with_empty_axes: a.get_int("noop_with_empty_axes").unwrap_or(0) != 0,
+        },
+        OpType::Einsum => NodeOp::Einsum {
+            equation: a.get_string("equation").unwrap_or_default(),
         },
 
         // Parameterized ops
