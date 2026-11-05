@@ -196,6 +196,10 @@ pub enum NodeOp {
         padding_mode: String,
         align_corners: bool,
     },
+    LayerNormalization {
+        axis: i64,
+        epsilon: f32,
+    },
 
     // Parameterized
     ArgMax {
@@ -422,6 +426,7 @@ impl NodeOp {
             Self::GlobalAveragePool => OpType::GlobalAveragePool,
             Self::Greater => OpType::Greater,
             Self::GridSample { .. } => OpType::GridSample,
+            Self::LayerNormalization { .. } => OpType::LayerNormalization,
             Self::HardSigmoid { .. } => OpType::HardSigmoid,
             Self::Hardmax { .. } => OpType::Hardmax,
             Self::Identity => OpType::Identity,
@@ -842,6 +847,10 @@ fn derive_node_op(op_type: OpType, a: &Attrs, opset: i64) -> NodeOp {
             mode: a.get_string("mode").unwrap_or_else(|| "bilinear".into()),
             padding_mode: a.get_string("padding_mode").unwrap_or_else(|| "zeros".into()),
             align_corners: a.get_int("align_corners").unwrap_or(0) != 0,
+        },
+        OpType::LayerNormalization => NodeOp::LayerNormalization {
+            axis: a.get_int("axis").unwrap_or(-1),
+            epsilon: a.get_float("epsilon").unwrap_or(1e-5),
         },
 
         // Parameterized ops

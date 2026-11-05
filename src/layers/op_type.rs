@@ -58,6 +58,7 @@ pub enum OpType {
     If,
     IsInf,
     IsNaN,
+    LayerNormalization,
     Lstm,
     LeakyRelu,
     LayoutTranspose,
@@ -169,6 +170,7 @@ impl OpType {
             "If" => Ok(Self::If),
             "IsInf" => Ok(Self::IsInf),
             "IsNaN" => Ok(Self::IsNaN),
+            "LayerNormalization" => Ok(Self::LayerNormalization),
             "LSTM" => Ok(Self::Lstm),
             "LeakyRelu" => Ok(Self::LeakyRelu),
             "Less" => Ok(Self::Less),
@@ -237,6 +239,7 @@ impl OpType {
 
         match self {
             Self::Add | Self::Sub | Self::Mul | Self::Div | Self::Pow | Self::GridSample => &[F, F],
+            Self::LayerNormalization => &[F, F], // X, Scale (Bias is optional)
             Self::Relu
             | Self::LeakyRelu
             | Self::Clip
@@ -415,6 +418,7 @@ impl OpType {
             | Self::IsNaN
             | Self::IsInf
             | Self::Lrn
+            | Self::LayerNormalization
             | Self::Not => get_shape(0).cloned(),
 
             Self::Add

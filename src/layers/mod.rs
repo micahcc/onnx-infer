@@ -35,6 +35,7 @@ pub mod if_op;
 pub mod leaky_relu;
 pub mod less;
 pub mod log;
+pub mod layer_norm;
 pub mod loop_op;
 pub mod lrn;
 pub mod lstm;

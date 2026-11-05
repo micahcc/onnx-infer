@@ -43,6 +43,7 @@ use crate::layers::global_avg_pool;
 use crate::layers::greater;
 use crate::layers::grid_sample;
 use crate::layers::hardmax;
+use crate::layers::layer_norm;
 use crate::layers::identity;
 use crate::layers::if_op;
 use crate::layers::leaky_relu;
@@ -818,6 +819,8 @@ pub fn build_node_with_initializers(
                 };
                 Box::new(grid_sample::GridSample::new(inputs, gs_mode, gs_pad, *align_corners))
             }
+            NodeOp::LayerNormalization { axis, epsilon } =>
+                Box::new(layer_norm::LayerNorm::new(inputs, *axis, *epsilon)),
             NodeOp::Conv {
                 kernel_shape,
                 strides,
