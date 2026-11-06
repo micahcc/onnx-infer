@@ -2235,7 +2235,7 @@ fn infer_op_output_shapes(
                             e = dim;
                         }
                         let len = (e - s).unsigned_abs() as usize;
-                        out[axis] = (len + step - 1) / step;
+                        out[axis] = len.div_ceil(step);
                     }
                     result.push((op.outputs[0].clone(), out));
                 }

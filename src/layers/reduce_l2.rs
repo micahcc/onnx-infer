@@ -195,7 +195,7 @@ mod tests {
         // data[0,c,h,w] = c+1 for c in 0..2, repeated at each spatial position
         let data = vec![
             1.0f32, 1.0, 1.0, 1.0, // c=0, all 4 spatial
-            2.0, 2.0, 2.0, 2.0,     // c=1, all 4 spatial
+            2.0, 2.0, 2.0, 2.0, // c=1, all 4 spatial
         ];
         let mut m: HashMap<String, Tensor> = HashMap::new();
         m.insert("x".into(), Tensor::new(dims![1, 2, 2, 2], data));
