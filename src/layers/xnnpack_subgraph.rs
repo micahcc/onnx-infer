@@ -2165,8 +2165,8 @@ fn infer_op_output_shapes(
                         if total > 0 && shape_total > 0 && shape_total != total {
                             // Find the dimension that differs from the input and infer it
                             let known: usize = dims[1..].iter().product();
-                            if known > 0 {
-                                dims[0] = total / known;
+                            if let Some(d) = total.checked_div(known) {
+                                dims[0] = d;
                             }
                         }
                         result.push((op.outputs[0].clone(), dims));
