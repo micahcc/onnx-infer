@@ -853,10 +853,11 @@ pub fn build_node_with_initializers(
             NodeOp::ReduceL2 {
                 keepdims,
                 noop_with_empty_axes,
+                axes,
             } => Box::new(reduce_l2::ReduceL2::new(
                 inputs,
                 *keepdims,
-                None,
+                axes.clone(),
                 *noop_with_empty_axes,
             )),
             NodeOp::Einsum { equation } => Box::new(einsum::Einsum::new(inputs, equation.clone())),
