@@ -214,6 +214,7 @@ pub enum NodeOp {
     ReduceL2 {
         keepdims: bool,
         noop_with_empty_axes: bool,
+        axes: Option<Vec<i64>>,
     },
     Einsum {
         equation: String,
@@ -893,6 +894,7 @@ fn derive_node_op(op_type: OpType, a: &Attrs, opset: i64) -> NodeOp {
         OpType::ReduceL2 => NodeOp::ReduceL2 {
             keepdims: a.get_int("keepdims").unwrap_or(1) != 0,
             noop_with_empty_axes: a.get_int("noop_with_empty_axes").unwrap_or(0) != 0,
+            axes: a.get_ints("axes"),
         },
         OpType::Einsum => NodeOp::Einsum {
             equation: a.get_string("equation").unwrap_or_default(),

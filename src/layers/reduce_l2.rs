@@ -186,4 +186,32 @@ mod tests {
         assert!((r[1] - 29.0f32.sqrt()).abs() < 1e-5);
         assert!((r[2] - 45.0f32.sqrt()).abs() < 1e-5);
     }
+
+    #[test]
+    fn reduce_axis1_4d_keepdims() {
+        // shape [1,2,2,2], reduce axis=1 keepdims=true → shape [1,1,2,2]
+        // This is the normalization pattern used in the locate model's L2-norm head:
+        // normalize 128 channels per spatial location.
+        // data[0,c,h,w] = c+1 for c in 0..2, repeated at each spatial position
+        let data = vec![
+            1.0f32, 1.0, 1.0, 1.0, // c=0, all 4 spatial
+            2.0, 2.0, 2.0, 2.0, // c=1, all 4 spatial
+        ];
+        let mut m: HashMap<String, Tensor> = HashMap::new();
+        m.insert("x".into(), Tensor::new(dims![1, 2, 2, 2], data));
+        let vals = Values {
+            intermediates: &m,
+            constants: Constants::empty(),
+        };
+        let mut out = Tensor::new(dims![1, 1, 2, 2], vec![0.0f32; 4]);
+        let mut op = ReduceL2::new(vec!["x".into()], true, Some(vec![1]), false);
+        op.execute(&vals, &mut out).unwrap();
+        assert_eq!(out.dims.as_slice(), &[1usize, 1, 2, 2]);
+        let r = out.floats().unwrap();
+        // Each spatial location has channels [1, 2], L2 norm = sqrt(1+4) = sqrt(5)
+        let expected = 5.0f32.sqrt();
+        for &v in r {
+            assert!((v - expected).abs() < 1e-5, "got {v}, expected {expected}");
+        }
+    }
 }
